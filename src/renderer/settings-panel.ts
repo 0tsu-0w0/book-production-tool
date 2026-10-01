@@ -302,6 +302,7 @@ function sections(): Section[] {
         { kind: "select", path: "toc.levels", label: "目次に載せる見出し", numeric: true, options: [["1", "大見出し（＃）だけ"], ["2", "中見出し（＃＃）まで"]] },
         { kind: "select", path: "toc.numerals", label: "目次のページ番号", options: [["arabic", "算用数字（2〜3桁は縦中横）"], ["kanji", "漢数字"]] },
         { kind: "select", path: "toc.leader", label: "目次のリーダー", options: TOC_LEADERS },
+        { kind: "select", path: "notes.placement", label: "注（［＃注：…］）を置く場所", options: [["chapter", "章ごと（次の大見出しの前。番号も章ごと）"], ["end", "本の終わり（通し番号）"]] },
         {
           kind: "select",
           path: "pages.padTo",

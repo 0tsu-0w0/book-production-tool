@@ -466,7 +466,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         newPage();
       }
       roles[roles.length - 1] = "image";
-      images[images.length - 1].push({ block, slot: 0 });
+      // 全面の画像にはキャプションを付けない（置く余白がない）。
+      const captionLines = block.mode === "block" ? captionOf(block, spec.charsPerLine) : undefined;
+      images[images.length - 1].push({ block, slot: 0, captionLines });
       return;
     }
     const n = Math.min(block.lines, spec.linesPerPage);
@@ -475,8 +477,13 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const inBand = snap(used % spec.linesPerPage);
     if (inBand > 0 && inBand + n > spec.linesPerPage + EPS) fillBand();
     if (used + n > capacity + EPS && used > 0) newPage();
-    const geo = imageGeometry(block, spec);
-    images[images.length - 1].push({ block, slot: used });
+    // キャプションは画像の高さに収め、取った行の最後の1〜2行に置く。
+    let captionLines = block.caption && n >= 2 ? captionOf(block, Math.floor(imageGeometry(block, spec, 1).height / spec.fontSizePt)) : undefined;
+    if (captionLines && captionLines.length > 1) {
+      captionLines = captionOf(block, Math.floor(imageGeometry(block, spec, Math.min(2, n - 1)).height / spec.fontSizePt))?.slice(0, Math.min(2, n - 1));
+    }
+    const geo = imageGeometry(block, spec, captionLines?.length ?? 0);
+    images[images.length - 1].push({ block, slot: used, captionLines });
     if (block.wrap && geo.wrapChars > 0) {
       wrap = { page: pages.length - 1, from: used, to: used + n, chars: geo.wrapChars, top: block.position === "top" };
     } else {
@@ -485,6 +492,18 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         used++;
       }
     }
+  }
+
+  /** キャプションを行に分ける（長さは perLine 字分。行は3行まで）。 */
+  function captionOf(block: ImageBlock, perLine: number): Line[] | undefined {
+    if (!block.caption || block.caption.atoms.length === 0) return undefined;
+    const lines = breakLines(block.caption.atoms, Math.max(4, perLine), 0, { ...opts, justify: false }).slice(0, 3);
+    lines.forEach((l, i) => {
+      l.start = i === 0;
+      l.end = i === lines.length - 1;
+      l.srcLine = srcLine;
+    });
+    return lines;
   }
 
   /** 今の段に残っている行数（次に新しいページや段になるなら、1段まるごと）。 */
@@ -557,6 +576,8 @@ interface ImagePlacement {
   block: ImageBlock;
   /** 行の中に置くとき、最初の行の位置（ページの頭からの行数）。 */
   slot: number;
+  /** キャプションの行。 */
+  captionLines?: Line[];
 }
 
 /** 画像の縦横比が分からないとき（画像が見つからないとき）の比。 */
@@ -566,18 +587,23 @@ const FALLBACK_IMAGE = { width: 4, height: 3 };
  * 行の中に置く画像の大きさ（pt）と、回り込ませる字数。幅は取った行の幅に合わせ、高さは縦横比から。
  * 段の高さを超えるなら、高さに合わせて小さくする。回り込みは画像の高さ＋1字分。
  */
-export function imageGeometry(block: ImageBlock, spec: LayoutSpec): { width: number; height: number; wrapChars: number } {
+export function imageGeometry(block: ImageBlock, spec: LayoutSpec, captionLines = 0): { width: number; height: number; wrapChars: number } {
   const size = spec.fontSizePt;
   const pitch = size * spec.lineGap;
-  const info = spec.images?.[block.name] ?? FALLBACK_IMAGE;
+  const info = croppedSize(spec.images?.[block.name] ?? FALLBACK_IMAGE, block.crop);
   const ratio = info.height / info.width;
   const columnHeight = spec.charsPerLine * size;
-  const n = Math.min(block.lines, spec.linesPerPage);
+  // キャプションの行の分だけ、画像に使う行を減らす。
+  const n = Math.max(1, Math.min(block.lines, spec.linesPerPage) - captionLines);
   let width = (n - 1) * pitch + size;
-  let height = width * ratio;
+  let height = block.fill ? columnHeight : width * ratio;
   if (height > columnHeight) {
     height = columnHeight;
     width = height / ratio;
+  }
+  if (block.scale) {
+    width *= block.scale;
+    height *= block.scale;
   }
   const wrapChars = Math.ceil(height / size - EPS) + Math.round(spec.wrapGapChars ?? 1);
   // 回り込ませても数字しか残らないような短い行になるなら、回り込ませない。
@@ -645,6 +671,14 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     slot = snap(slot + span);
   }
 
+  // 画像と、そのキャプション。
+  const imageShapes: Shape[] = [];
+  for (const p of pageImages) {
+    const placed = imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height);
+    imageShapes.push(placed.shape);
+    if (p.captionLines) placeCaption(glyphs, lineShapes, p.captionLines, placed.visible, spec);
+  }
+
   let lineTexts: PageLayout["lines"] | undefined;
   const page: PageLayout = {
     index,
@@ -659,7 +693,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
       return (lineTexts ??= lines.flatMap((l) => (typeof l !== "object" ? [] : [{ text: lineText(l), start: !!l.start, end: !!l.end }])));
     },
     glyphs,
-    shapes: [...pageImages.map((p) => imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height)), ...lineShapes],
+    shapes: [...imageShapes, ...lineShapes],
     paper: "#ffffff",
   };
   return spec.horizontal ? toHorizontal(page) : page;
@@ -800,36 +834,99 @@ function placeLine(
 }
 
 /** 画像を置く場所。全面は塗り足し（3mm）まで覆って切り、版面は版面に収め、行の中は取った行に置く。 */
-function imageShape(p: ImagePlacement, spec: LayoutSpec, block: Rect, pageWidth: number, pageHeight: number): Shape {
+/** 切り抜いたあとの画像の大きさ。 */
+function croppedSize(info: { width: number; height: number }, crop: ImageBlock["crop"]): { width: number; height: number } {
+  if (!crop) return info;
+  return { width: info.width * (1 - crop.left - crop.right), height: info.height * (1 - crop.top - crop.bottom) };
+}
+
+type Frame = { x: number; y: number; w: number; h: number };
+
+/**
+ * 枠に画像を置く。cover なら枠いっぱいに広げてはみ出た分を、切り抜きがあれば切った分を、枠（clip）で隠す。
+ * 返すのは画像の図形と、見えている範囲。
+ */
+function frameImage(name: string, info: { width: number; height: number }, box: Frame, cover: boolean, block: ImageBlock): { shape: Shape; visible: Frame } {
+  const crop = block.crop ?? { top: 0, right: 0, bottom: 0, left: 0 };
+  const c = croppedSize(info, block.crop);
+  const s = (cover ? Math.max(box.w / c.width, box.h / c.height) : Math.min(box.w / c.width, box.h / c.height)) * (cover ? 1 : (block.scale ?? 1));
+  const vw = c.width * s;
+  const vh = c.height * s;
+  const vx = box.x + (box.w - vw) / 2;
+  const vy = box.y + (box.h - vh) / 2;
+  const visible = cover ? { ...box } : { x: vx, y: vy, w: vw, h: vh };
+  const shape: Shape = {
+    kind: "image",
+    name,
+    x: vx - crop.left * info.width * s,
+    y: vy - crop.top * info.height * s,
+    w: info.width * s,
+    h: info.height * s,
+    ...(cover || block.crop ? { clip: visible } : {}),
+  };
+  return { shape, visible };
+}
+
+/** 位置の微調整（仕上がりのページで右・下が正、mm）を、組むときの座標（横組みでは転置した座標）でずらす。 */
+function shiftImage(placed: { shape: Shape; visible: Frame }, block: ImageBlock, horizontal: boolean) {
+  if (!block.shift || placed.shape.kind !== "image") return;
+  const dx = (horizontal ? -block.shift.y : block.shift.x) * MM;
+  const dy = (horizontal ? block.shift.x : block.shift.y) * MM;
+  const s = placed.shape;
+  s.x += dx;
+  s.y += dy;
+  if (s.clip) s.clip = { ...s.clip, x: s.clip.x + dx, y: s.clip.y + dy };
+  placed.visible = { ...placed.visible, x: placed.visible.x + dx, y: placed.visible.y + dy };
+}
+
+/** キャプションの行の間隔と、画像との間（本文の文字の大きさに対する割合）。 */
+const CAPTION_PITCH = 1.3;
+const CAPTION_GAP = 0.5;
+
+function imageShape(p: ImagePlacement, spec: LayoutSpec, block: Rect, pageWidth: number, pageHeight: number): { shape: Shape; visible: Frame } {
   const info = spec.images?.[p.block.name] ?? FALLBACK_IMAGE;
   const name = p.block.name;
+  const size = spec.fontSizePt;
+  let placed: { shape: Shape; visible: Frame };
   if (p.block.mode === "full") {
     const bleed = (spec.bleedMm ?? 3) * MM;
-    const box = { x: -bleed, y: -bleed, w: pageWidth + bleed * 2, h: pageHeight + bleed * 2 };
-    const scale = Math.max(box.w / info.width, box.h / info.height);
-    const w = info.width * scale;
-    const h = info.height * scale;
-    return { kind: "image", name, x: box.x + (box.w - w) / 2, y: box.y + (box.h - h) / 2, w, h, clip: box };
+    placed = frameImage(name, info, { x: -bleed, y: -bleed, w: pageWidth + bleed * 2, h: pageHeight + bleed * 2 }, true, p.block);
+  } else if (p.block.mode === "block") {
+    // キャプションの分だけ、版面の左（横組みでは下）を空ける。
+    const reserve = p.captionLines?.length ? size * (CAPTION_GAP + CAPTION_PITCH * p.captionLines.length) : 0;
+    const box = { x: block.left + reserve, y: block.top, w: block.width - reserve, h: block.height };
+    if (p.block.fill && p.block.scale) {
+      const k = p.block.scale;
+      Object.assign(box, { x: box.x + (box.w * (1 - k)) / 2, y: box.y + (box.h * (1 - k)) / 2, w: box.w * k, h: box.h * k });
+    }
+    placed = frameImage(name, info, box, !!p.block.fill, p.block);
+  } else {
+    const pitch = size * spec.lineGap;
+    const columnHeight = spec.charsPerLine * size;
+    const k = p.captionLines?.length ?? 0;
+    const n = Math.max(1, Math.min(p.block.lines, spec.linesPerPage) - k);
+    const g = imageGeometry(p.block, spec, k);
+    const band = Math.floor(p.slot / spec.linesPerPage);
+    const col = p.slot % spec.linesPerPage;
+    // 取った行の右端（最初の行の字の右端）から、n 行分の字の幅。その中央に置く。
+    const regionRight = block.left + block.width - col * pitch;
+    const regionWidth = (n - 1) * pitch + size;
+    const bandTop = block.top + band * (columnHeight + spec.columnGapPt);
+    const y = p.block.position === "top" ? bandTop : p.block.position === "bottom" ? bandTop + columnHeight - g.height : bandTop + (columnHeight - g.height) / 2;
+    const box = { x: regionRight - regionWidth / 2 - g.width / 2, y, w: g.width, h: g.height };
+    placed = frameImage(name, info, box, !!p.block.fill, { ...p.block, scale: 1 });
   }
-  if (p.block.mode === "block") {
-    const scale = Math.min(block.width / info.width, block.height / info.height);
-    const w = info.width * scale;
-    const h = info.height * scale;
-    return { kind: "image", name, x: block.left + (block.width - w) / 2, y: block.top + (block.height - h) / 2, w, h };
-  }
+  shiftImage(placed, p.block, !!spec.horizontal);
+  return placed;
+}
+
+/** キャプションを画像の左（横組みでは下）に、画像の上端（横組みでは左端）から置く。 */
+function placeCaption(glyphs: PlacedGlyph[], shapes: Shape[], lines: Line[], visible: Frame, spec: LayoutSpec) {
   const size = spec.fontSizePt;
-  const pitch = size * spec.lineGap;
-  const columnHeight = spec.charsPerLine * size;
-  const n = Math.min(p.block.lines, spec.linesPerPage);
-  const g = imageGeometry(p.block, spec);
-  const band = Math.floor(p.slot / spec.linesPerPage);
-  const col = p.slot % spec.linesPerPage;
-  // 取った行の右端（最初の行の字の右端）から、n 行分の字の幅。その中央に置く。
-  const regionRight = block.left + block.width - col * pitch;
-  const regionWidth = (n - 1) * pitch + size;
-  const bandTop = block.top + band * (columnHeight + spec.columnGapPt);
-  const y = p.block.position === "top" ? bandTop : p.block.position === "bottom" ? bandTop + columnHeight - g.height : bandTop + (columnHeight - g.height) / 2;
-  return { kind: "image", name, x: regionRight - regionWidth / 2 - g.width / 2, y, w: g.width, h: g.height };
+  lines.forEach((line, i) => {
+    const x = visible.x - size * CAPTION_GAP - size / 2 - i * size * CAPTION_PITCH;
+    placeLine(glyphs, line, x, visible.y, size, size * spec.rubyScale, Math.floor(visible.h / size) || spec.charsPerLine, shapes, !!spec.horizontal);
+  });
 }
 
 interface SideRun {

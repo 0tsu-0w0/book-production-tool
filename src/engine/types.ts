@@ -49,6 +49,8 @@ export interface Atom {
   style?: string;
   /** リーダー（目次の点線）：行の残りを埋めるまで、この字を繰り返す。 */
   leader?: boolean;
+  /** 注（［＃注：…］）の中身。cells は本文に入れる小さな注番号（「注」と番号。番号は組むたびに入れる）。 */
+  note?: Atom[];
 }
 
 export type SideLine = "single" | "double" | "wave" | "dotted" | "dashed";
@@ -107,6 +109,16 @@ export interface ImageBlock {
   position: "top" | "center" | "bottom";
   /** 全面・版面の画像を置くページ：偶数ページか奇数ページか（扉絵を章扉と向かい合わせるときなど）。 */
   parity?: "even" | "odd";
+  /** キャプション（段落スタイル「キャプション」で組む）。縦組みでは画像の左、横組みでは画像の下に置く。 */
+  caption?: { kind: "para"; atoms: Atom[]; style?: string; format?: ParaFormat };
+  /** 切り抜き：元の画像の上下左右を、それぞれの割合（0〜1）だけ切り落とす。 */
+  crop?: { top: number; right: number; bottom: number; left: number };
+  /** 枠いっぱいに広げ、はみ出た分を切り落とす（版面・行の中）。 */
+  fill?: boolean;
+  /** 大きさ（枠に収めた大きさに対する割合。0.1〜1）。 */
+  scale?: number;
+  /** 位置の微調整（mm。仕上がりのページで右・下が正）。 */
+  shift?: { x: number; y: number };
 }
 
 /** 画像の大きさ（ピクセル）。縦横の比を決めるのに使う。 */

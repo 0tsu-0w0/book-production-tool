@@ -36,6 +36,8 @@ export function splitChars(s: string): string[] {
 
 const WARICHU = /^［＃割注］(.+?)［＃／割注］/;
 const INLINE_MATH = /^［＃数式］(.+?)［＃／数式］/;
+/** 注：［＃注：中身］（中身は章末・巻末にまとめる）。 */
+const NOTE = /^［＃注[：:]([^［］]*)］/u;
 const DISPLAY_MATH = /^\s*［＃別行数式］(.+)［＃／別行数式］\s*$/;
 /** 別行数式に当てる段落スタイル。 */
 export const DISPLAY_MATH_STYLE = "別行数式";
@@ -160,6 +162,12 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
       i += m[0].length;
       continue;
     }
+    if ((m = NOTE.exec(rest))) {
+      const at = base + i + m[0].indexOf(m[1]);
+      atoms.push({ cells: [{ text: "注" }, { text: "0", tcy: true }], note: parseInline(m[1], opts, at) });
+      i += m[0].length;
+      continue;
+    }
     if ((m = WARICHU.exec(rest))) {
       atoms.push(warichuAtom(toFullWidth(m[1])));
       i += m[0].length;
@@ -260,7 +268,22 @@ const COMMAND = /^\s*［＃(／?)(改ページ|改丁|白ページ|扉|目次)�
 /** 画像：［＃画像：名前］。名前のあとに全角か半角の空白で区切って、置き方を書ける。 */
 const IMAGE = /^\s*［＃画像[：:]\s*([^［］\s]+)((?:\s+[^［］\s]+)*)\s*］\s*$/u;
 
-/** 画像の置き方を読む：全面・版面・N行（本文の中）、回り込み、天・中央・地。 */
+/** キャプションの段落スタイルの名前。 */
+export const CAPTION_STYLE = "キャプション";
+
+/** 「上10下5」のような、方向と数の組を読む。 */
+function sides(s: string): Partial<Record<"上" | "下" | "左" | "右", number>> {
+  const out: Partial<Record<"上" | "下" | "左" | "右", number>> = {};
+  for (const m of toHalfWidthDigits(s).replace(/[．]/g, ".").replace(/[－−]/g, "-").matchAll(/([上下左右])\s*(-?[0-9]+(?:\.[0-9]+)?)/gu)) {
+    out[m[1] as "上"] = Number(m[2]);
+  }
+  return out;
+}
+
+/**
+ * 画像の置き方を読む：全面・版面・N行（本文の中）、回り込み、天・中央・地、偶数・奇数。
+ * 切り抜き（枠いっぱい）・切り抜き：上10下10（元の画像を％で切る）・大きさ：80%・ずらす：右2下3（mm）。
+ */
 export function parseImageOptions(name: string, options: string[]): ImageBlock {
   const lines = options.map((o) => /^([0-9０-９]+)行$/.exec(o)).find((m) => m);
   const n = lines ? Number(toHalfWidthDigits(lines[1])) : 0;
@@ -268,7 +291,26 @@ export function parseImageOptions(name: string, options: string[]): ImageBlock {
   const position = options.includes("天") ? "top" : options.includes("地") ? "bottom" : wrap ? "bottom" : "center";
   const mode = n > 0 ? "lines" : options.includes("全面") ? "full" : "block";
   const parity = options.includes("偶数") ? "even" : options.includes("奇数") ? "odd" : undefined;
-  return { kind: "image", name, mode, lines: Math.max(1, n), wrap: mode === "lines" && wrap, position, ...(parity && mode !== "lines" ? { parity } : {}) };
+  const block: ImageBlock = { kind: "image", name, mode, lines: Math.max(1, n), wrap: mode === "lines" && wrap, position, ...(parity && mode !== "lines" ? { parity } : {}) };
+  const value = (key: string) => options.find((o) => o.startsWith(`${key}：`) || o.startsWith(`${key}:`))?.slice(key.length + 1);
+  if (options.includes("切り抜き") && mode !== "full") block.fill = true;
+  const crop = value("切り抜き");
+  if (crop) {
+    const c = sides(crop);
+    const f = (v = 0) => Math.min(0.45, Math.max(0, v / 100));
+    block.crop = { top: f(c.上), right: f(c.右), bottom: f(c.下), left: f(c.左) };
+  }
+  const size = value("大きさ");
+  if (size && mode !== "full") {
+    const v = Number(toHalfWidthDigits(size).replace(/[%％]/g, ""));
+    if (v > 0) block.scale = Math.min(1, Math.max(0.1, v / 100));
+  }
+  const shift = value("ずらす");
+  if (shift) {
+    const s = sides(shift);
+    block.shift = { x: (s.右 ?? 0) - (s.左 ?? 0), y: (s.下 ?? 0) - (s.上 ?? 0) };
+  }
+  return block;
 }
 
 const toHalfWidthDigits = (s: string) => s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
@@ -290,7 +332,17 @@ function parseLine(line: string, opts: ParseOptions): Block | Marker {
   const ms = MASTER.exec(line);
   if (ms) return { kind: "master", name: ms[1] === "標準" ? "" : ms[1] };
   const img = IMAGE.exec(line);
-  if (img) return parseImageOptions(img[1], img[2].trim().split(/\s+/u).filter(Boolean));
+  if (img) {
+    // キャプション：は最後に書く（空白を含めてよい）。
+    const cap = /[\s](?:キャプション|説明)[：:]\s*(.*?)\s*$/u.exec(img[2]);
+    const options = (cap ? img[2].slice(0, cap.index) : img[2]).trim().split(/\s+/u).filter(Boolean);
+    const block = parseImageOptions(img[1], options);
+    if (cap && cap[1]) {
+      const at = line.lastIndexOf(cap[1]);
+      block.caption = { kind: "para", style: CAPTION_STYLE, atoms: parseInline(cap[1], opts, at) };
+    }
+    return block;
+  }
   const c = COMMAND.exec(line);
   if (c) {
     if (c[2] === "扉") return { kind: c[1] ? "tobira-close" : "tobira-open" };

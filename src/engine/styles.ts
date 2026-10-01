@@ -1,5 +1,6 @@
 import type { Block } from "./types.js";
 import { textBlocks } from "./blocks.js";
+import { NOTE_MARK_SCALE } from "./notes.js";
 
 // 段落スタイル・文字スタイルを、段落とマスに当てる（DTP-04）。
 // フォントは番号で指定する（0 は本文の書体）。どの番号がどのフォントかは呼び出し側が決める。
@@ -64,7 +65,7 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       const cs = (atom.style ? styles.character.get(atom.style) : undefined) ?? lineStyle;
       for (const cell of atom.cells) {
         cell.font = cs && cs.font >= 0 ? cs.font : ps.font;
-        cell.scale = ps.scale * (cs?.scale ?? 1);
+        cell.scale = ps.scale * (cs?.scale ?? 1) * (atom.note ? NOTE_MARK_SCALE : 1);
         cell.bold = ps.bold || !!cs?.bold;
         cell.color = cs?.color ?? ps.color ?? undefined;
         const form = cs?.glyphForm || ps.glyphForm || "";

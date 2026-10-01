@@ -107,11 +107,33 @@ export class ImageManager {
     const lineOpts = document.createElement("span");
     lineOpts.className = "row";
     lineOpts.append(lines, document.createTextNode("行"), wrap, pos);
-    const sync = () => (lineOpts.hidden = mode.value !== "lines");
+    // 版面・行の中：枠いっぱいに広げる（はみ出た分を切る）と、キャプション。
+    const fillLabel = document.createElement("label");
+    fillLabel.className = "check";
+    const fillBox = document.createElement("input");
+    fillBox.type = "checkbox";
+    fillLabel.append(fillBox, document.createTextNode("枠いっぱい（はみ出た分を切る）"));
+    const caption = document.createElement("input");
+    caption.type = "text";
+    caption.placeholder = "キャプション（空なら付けない）";
+    caption.setAttribute("aria-label", "キャプション");
+    const extra = document.createElement("div");
+    extra.className = "row";
+    extra.append(fillLabel, caption);
+    const sync = () => {
+      lineOpts.hidden = mode.value !== "lines";
+      extra.hidden = mode.value === "full";
+    };
     mode.addEventListener("change", sync);
     sync();
     const insert = this.button("原稿に入れる", () => {
       const opts = mode.value === "full" ? ["全面"] : mode.value === "lines" ? [`${Math.max(1, Number(lines.value) || 1)}行`, ...(wrapBox.checked ? ["回り込み"] : []), ...(pos.value ? [pos.value] : [])] : [];
+      if (mode.value !== "full") {
+        if (fillBox.checked) opts.push("切り抜き");
+        // キャプションは最後に書く（［］は記法と紛れるので、全角の〔〕にする）。
+        const text = caption.value.trim().replace(/［/g, "〔").replace(/］/g, "〕");
+        if (text) opts.push(`キャプション：${text}`);
+      }
       this.h.insertLine(`［＃画像：${img.name}${opts.map((o) => `　${o}`).join("")}］`);
     });
     const del = this.button("削除", () => this.remove(img));
@@ -125,7 +147,10 @@ export class ImageManager {
     actions.append(mode, insert, del);
     const body = document.createElement("div");
     body.className = "image-body";
-    body.append(head, actions, lineOpts);
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.textContent = "原稿の行には、ほかに「切り抜き：上10下10」（元の画像を％で切る）・「大きさ：80%」・「ずらす：右2下3」（mm）を書けます。";
+    body.append(head, actions, lineOpts, extra, help);
     box.append(thumb, body);
     return box;
   }

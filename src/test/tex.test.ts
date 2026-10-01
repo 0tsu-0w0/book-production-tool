@@ -126,3 +126,34 @@ describe("数式", () => {
     assert.match(raw, /\bc\n/, "曲線");
   });
 });
+
+describe("TeX：マクロ・参照・図", () => {
+  it("\newcommand（引数・省略時の値）と \def を展開し、定義の行は空にする（行の数は変えない）", async () => {
+    const { texToMarkup, extractMacros } = await import("../engine/tex.js");
+    const src = String.raw`\newcommand{\hero}{太郎}
+\newcommand\rb[2]{\ruby{#1}{#2}}
+\newcommand{\greet}[1][こんにちは]{「#1、\hero」}
+\def\pair#1#2{#2#1}
+\hero は\rb{漢字}{かんじ}。\greet \greet[やあ]\pair ab`;
+    assert.equal(extractMacros(src).text.split("\n").length, 5);
+    const out = texToMarkup(src).text;
+    assert.equal(out, "　太郎は｜漢字《かんじ》。「こんにちは、太郎」「やあ、太郎」ba");
+  });
+
+  it("\ref は見出しの題、\pageref は ??。図の \caption は画像のキャプションに、幅は大きさに", async () => {
+    const { texToMarkup } = await import("../engine/tex.js");
+    const src = String.raw`\section{はじめに}\label{s:a}
+\ref{s:a}と\pageref{s:a}と\ref{nai}
+\begin{figure}\includegraphics[width=.5\linewidth]{img/cat.jpg}\caption{猫 [1]}\end{figure}`;
+    const out = texToMarkup(src).text;
+    assert.match(out, /「はじめに」と\?\?と\?\?/);
+    assert.match(out, /［＃画像：cat　大きさ：50%　キャプション：猫 \[1\]］/);
+  });
+});
+
+describe("TeX：脚注", () => {
+  it("\footnote は注にする", async () => {
+    const { texToMarkup } = await import("../engine/tex.js");
+    assert.equal(texToMarkup(String.raw`雨\footnote{梅雨のこと}が降る。`).text, "　雨［＃注：梅雨のこと］が降る。");
+  });
+});

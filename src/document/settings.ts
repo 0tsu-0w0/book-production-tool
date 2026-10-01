@@ -218,6 +218,8 @@ export interface Settings {
   pages: PageStructure;
   /** 目次（DTP-14）。 */
   toc: TocSettings;
+  /** 注（［＃注：…］）を置く場所：章ごと（次の大見出しの前）か本の終わり。 */
+  notes: { placement: "chapter" | "end" };
   /** 詳細設定。 */
   advanced: AdvancedSettings;
   kinsoku: Kinsoku;
@@ -335,6 +337,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bookInfo: { title: "", author: "", publisher: "", printer: "", issued: "", extra: "" },
   pages: { front: [], back: [], padTo: 1 },
   toc: { title: "目次", levels: 2, numerals: "arabic", leader: "…" },
+  notes: { placement: "chapter" },
   advanced: {
     rubyPercent: 50,
     tcyMaxDigits: 3,
@@ -534,6 +537,7 @@ export function normalizeSettings(input: unknown): Settings {
   a.imagePpi = clamp(a.imagePpi, 150, 1200);
   a.safeMarginMm = clamp(a.safeMarginMm, 0, 10);
   if (s.output.pdfStandard !== "x4") s.output.pdfStandard = "x1a";
+  if (s.notes.placement !== "end") s.notes.placement = "chapter";
   if (s.toc.levels !== 1) s.toc.levels = 2;
   if (s.toc.numerals !== "kanji") s.toc.numerals = "arabic";
   if (s.book.writingMode !== "horizontal") s.book.writingMode = "vertical";

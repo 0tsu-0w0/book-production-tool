@@ -1,3 +1,4 @@
+import { placeNotes } from "./notes.js";
 import { toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { fontKey, type StyleSheet } from "../document/styles.js";
 import { bookPageBlocks } from "./book-pages.js";
@@ -102,9 +103,11 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   const parseOpts = toParseOptions(settings);
   const book = bookPageBlocks(settings.pages, settings.bookInfo, parseOpts);
   const body = parse(formatted, parseOpts, lineOf, (i) => origin[i] ?? i);
-  const source = [...book.front, ...body, ...book.back];
   // 原稿の段落にだけ行の番号がある（扉・奥付などの段落は原稿にない）。
-  const sourceLines = [...book.front.map(() => -1), ...lineOf, ...book.back.map(() => -1)].map((n) => (n < 0 ? undefined : n)) as number[];
+  // 注を章末か巻末に集める。
+  const noted = placeNotes(body, lineOf, settings.notes.placement);
+  const source = [...book.front, ...noted.blocks, ...book.back];
+  const sourceLines = [...book.front.map(() => -1), ...noted.lines.map((n) => n ?? -1), ...book.back.map(() => -1)].map((n) => (n < 0 ? undefined : n)) as number[];
   const styles = engineStyles(settings.styles, fonts);
   // 数式があるときだけ MathJax を使う（読み込みに時間がかかるため）。
   const hasMath = textBlocks(source).some((b) => b.atoms.some((a) => a.cells.some((c) => c.math)));

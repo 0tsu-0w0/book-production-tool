@@ -6,6 +6,9 @@
 //   改ページ \newpage・\clearpage → ［＃改ページ］、\cleardoublepage → ［＃改丁］
 //   目次     \tableofcontents　画像 \includegraphics[…]{ファイル} → ［＃画像：ファイル名（拡張子なし）］
 //   数式     $…$・\(…\) → ［＃数式］…［＃／数式］、\[…\]・$$…$$・equation などの環境 → ［＃別行数式］…［＃／別行数式］
+//   図       \begin{figure}…\includegraphics…\caption{…}…\end{figure} → ［＃画像：…　キャプション：…］
+//   マクロ   \newcommand・\renewcommand・\def（引数・省略時の値も）を展開してから置き換える
+//   参照     \label{…} は消し、\ref{…} はその見出しの題（「…」）にする（ページ番号の \pageref は ??）
 // 段落は LaTeX と同じく、空行で区切る（続く行は1つの段落につなぐ）。% から行末はコメント。
 // 知らない命令は、引数の中身だけを残して命令を消す。
 
@@ -26,6 +29,9 @@ const MATH_ENVS = new Set(["equation", "equation*", "align", "align*", "gather",
 const BLANK = "\n\u0002\n";
 const NO_INDENT = "\u0001";
 
+/** 注の中身：1行にし、記法と紛れる［］を〔〕にする。 */
+const noteText = (x: string) => x.replace(/\n/g, "").replace(/［/g, "〔").replace(/］/g, "〕");
+
 /** 引数1つを取って、その中身を置き換えたものを包む命令。 */
 const WRAP1: Record<string, (x: string) => string> = {
   chapter: (x) => `\n＃${x}\n`,
@@ -44,6 +50,8 @@ const WRAP1: Record<string, (x: string) => string> = {
   rensuji: (x) => `［＃縦中横］${x}［＃／縦中横］`,
   warichu: (x) => `［＃割注］${x}［＃／割注］`,
   textbf: (x) => `［＃太字］${x}［＃／太字］`,
+  footnote: (x) => `［＃注：${noteText(x)}］`,
+  endnote: (x) => `［＃注：${noteText(x)}］`,
   vspace: () => BLANK,
 };
 
@@ -126,10 +134,15 @@ class Reader {
   }
 }
 
+/** \label の名前 → その前の見出しの題（\ref で使う）。texToMarkup の間だけ持つ。 */
+let labels = new Map<string, string>();
+
 /** 段落（行をつないだもの）の中の命令を置き換える。 */
 export function convertInline(src: string): string {
   const r = new Reader(src);
   let out = "";
+  // 直前に置いた画像の行の「］」の位置（\caption を、その画像のキャプションにする）。
+  let imageEnd = -1;
   while (!r.done) {
     const c = r.peek();
     if (c === "$") {
@@ -221,7 +234,34 @@ export function convertInline(src: string): string {
       const file = r.group() ?? "";
       const name = file.split(/[\\/]/).pop()!.replace(/\.[A-Za-z0-9]+$/, "");
       const lines = /(\d+)\s*行/.exec(opts);
-      out += `\n［＃画像：${name}${lines ? `　${lines[1]}行` : ""}］\n`;
+      // width=0.8\textwidth のような幅は、版面に対する大きさにする。
+      const width = /width\s*=\s*([0-9.]+)\s*\\(?:text|line|column)width/.exec(opts);
+      const size = width && Number(width[1]) > 0 && Number(width[1]) < 1 ? `　大きさ：${Math.round(Number(width[1]) * 100)}%` : "";
+      out += `\n［＃画像：${name}${lines ? `　${lines[1]}行` : ""}${size}`;
+      imageEnd = out.length;
+      out += "］\n";
+      continue;
+    }
+    if (base === "caption") {
+      r.optional();
+      const text = convertInline(r.group() ?? "").replace(/\n/g, "").replace(/［/g, "〔").replace(/］/g, "〕");
+      if (imageEnd >= 0 && text) {
+        out = `${out.slice(0, imageEnd)}　キャプション：${text}${out.slice(imageEnd)}`;
+        imageEnd = -1;
+      } else if (text) {
+        out += `\n${text}\n`;
+      }
+      continue;
+    }
+    if (base === "label") {
+      r.group();
+      continue;
+    }
+    if (base === "ref" || base === "pageref" || base === "autoref" || base === "nameref") {
+      const key = r.group() ?? "";
+      const title = labels.get(key.trim());
+      // ページ番号は組んでみるまで分からないので、LaTeX の未解決と同じく ?? にする。
+      out += base === "pageref" || title === undefined ? "??" : `「${title}」`;
       continue;
     }
     if (WRAP1[base]) {
@@ -272,8 +312,161 @@ function indentParagraph(line: string): string {
   return `　${line}`;
 }
 
+/** マクロ：引数の数・省略できる最初の引数の既定値・中身。 */
+interface Macro {
+  args: number;
+  optional?: string;
+  body: string;
+}
+
+/** s[i] が { なら、対応する } までの中身と、その次の位置。 */
+function braceGroup(s: string, i: number): [string, number] | undefined {
+  if (s[i] !== "{") return undefined;
+  let depth = 0;
+  for (let k = i; k < s.length; k++) {
+    if (s[k] === "\\") {
+      k++;
+      continue;
+    }
+    if (s[k] === "{") depth++;
+    else if (s[k] === "}" && --depth === 0) return [s.slice(i + 1, k), k + 1];
+  }
+  return undefined;
+}
+
+const skipWs = (s: string, i: number) => {
+  while (i < s.length && /\s/.test(s[i])) i++;
+  return i;
+};
+
+/**
+ * \newcommand・\renewcommand・\providecommand・\def の定義を読み、原稿から消す（行の数は変えない）。
+ * 書き方：\newcommand{\名前}[引数の数][省略時の値]{中身}、\newcommand\名前{中身}、\def\名前#1#2{中身}。
+ */
+export function extractMacros(src: string): { text: string; macros: Map<string, Macro> } {
+  const macros = new Map<string, Macro>();
+  let out = "";
+  let i = 0;
+  const re = /\\(?:(re|provide)?newcommand\*?|def)(?![A-Za-z])/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    let k = skipWs(src, m.index + m[0].length);
+    let name: string | undefined;
+    const g = braceGroup(src, k);
+    if (g) {
+      name = /^\s*\\([A-Za-z]+)\s*$/.exec(g[0])?.[1];
+      k = g[1];
+    } else {
+      const n = /^\\([A-Za-z]+)/.exec(src.slice(k));
+      if (n) {
+        name = n[1];
+        k += n[0].length;
+      }
+    }
+    if (!name) continue;
+    let args = 0;
+    let optional: string | undefined;
+    if (m[0].startsWith("\\def")) {
+      // \def\名前#1#2{…}
+      const p = /^(?:#\d)*/.exec(src.slice(k))![0];
+      args = p.length / 2;
+      k += p.length;
+    } else {
+      k = skipWs(src, k);
+      const n = /^\[\s*(\d)\s*\]/.exec(src.slice(k));
+      if (n) {
+        args = Number(n[1]);
+        k = skipWs(src, k + n[0].length);
+        if (src[k] === "[") {
+          const end = src.indexOf("]", k);
+          if (end > 0) {
+            optional = src.slice(k + 1, end);
+            k = skipWs(src, end + 1);
+          }
+        }
+      }
+    }
+    k = skipWs(src, k);
+    const body = braceGroup(src, k);
+    if (!body) continue;
+    // \providecommand は、すでにあれば何もしない。
+    if (!(m[1] === "provide" && macros.has(name))) macros.set(name, { args, ...(optional !== undefined ? { optional } : {}), body: body[0].replace(/\n/g, " ") });
+    // 定義を消す。行の対応を保つため、改行は残す。
+    out += src.slice(i, m.index) + src.slice(m.index, body[1]).replace(/[^\n]/g, "");
+    i = body[1];
+    re.lastIndex = body[1];
+  }
+  return { text: out + src.slice(i), macros };
+}
+
+/** マクロを展開する（中身のマクロも。入れ子は20段まで）。 */
+export function expandMacros(src: string, macros: Map<string, Macro>): string {
+  if (macros.size === 0) return src;
+  let s = src;
+  for (let pass = 0; pass < 20; pass++) {
+    let changed = false;
+    let out = "";
+    let i = 0;
+    const re = /\\([A-Za-z]+)(?![A-Za-z])/g;
+    for (let m = re.exec(s); m; m = re.exec(s)) {
+      const macro = macros.get(m[1]);
+      // \\名前（強制改行のあとの文字）は命令ではない。
+      if (!macro || (m.index > 0 && s[m.index - 1] === "\\")) continue;
+      let k = m.index + m[0].length;
+      // 命令の名前のあとの空白は、命令の区切り（LaTeX と同じく読み飛ばす）。
+      while (s[k] === " ") k++;
+      const args: string[] = [];
+      if (macro.optional !== undefined) {
+        const at = skipWs(s, k);
+        if (s[at] === "[") {
+          const end = s.indexOf("]", at);
+          args.push(s.slice(at + 1, end));
+          k = end + 1;
+        } else {
+          args.push(macro.optional);
+        }
+      }
+      while (args.length < macro.args) {
+        const at = skipWs(s, k);
+        const g = braceGroup(s, at);
+        if (g) {
+          args.push(g[0]);
+          k = g[1];
+        } else {
+          // 波かっこのない引数は1字（または1つの命令）。
+          const t = /^\\[A-Za-z]+|^[\s\S]/u.exec(s.slice(at))?.[0] ?? "";
+          args.push(t);
+          k = at + t.length;
+        }
+      }
+      out += s.slice(i, m.index) + macro.body.replace(/#(\d)/g, (_, d: string) => args[Number(d) - 1] ?? "");
+      i = k;
+      re.lastIndex = k;
+      changed = true;
+    }
+    s = out + s.slice(i);
+    if (!changed) break;
+  }
+  return s;
+}
+
+/** \label を、その前の見出しの題と結びつける。 */
+function collectLabels(src: string): Map<string, string> {
+  const map = new Map<string, string>();
+  let title = "";
+  const re = /\\(?:(chapter|section|subsection|subsubsection)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}|label\s*\{([^{}]*)\})/g;
+  for (const m of src.matchAll(re)) {
+    if (m[1]) title = m[2].trim();
+    else if (m[3] !== undefined && title) map.set(m[3].trim(), title);
+  }
+  return map;
+}
+
 export function texToMarkup(src: string): TexResult {
-  const raw = src.replace(/\r\n?/g, "\n").split("\n").map(stripComment);
+  const stripped = src.replace(/\r\n?/g, "\n").split("\n").map(stripComment).join("\n");
+  const { text: undefinedText, macros } = extractMacros(stripped);
+  const expanded = expandMacros(undefinedText, macros);
+  labels = collectLabels(expanded);
+  const raw = expanded.split("\n");
   let start = 0;
   let end = raw.length;
   let title: string | undefined;

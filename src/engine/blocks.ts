@@ -6,6 +6,7 @@ export type TextBlock = Extract<Block, { kind: "para" | "heading" }>;
 export function textBlocks(blocks: Block[], out: TextBlock[] = []): TextBlock[] {
   for (const block of blocks) {
     if (block.kind === "para" || block.kind === "heading") out.push(block);
+    else if (block.kind === "image" && block.caption) out.push(block.caption);
     else if (block.kind === "pagegroup" || block.kind === "section") textBlocks(block.blocks, out);
   }
   return out;
