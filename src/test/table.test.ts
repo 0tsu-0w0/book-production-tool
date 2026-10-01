@@ -55,6 +55,22 @@ describe("表", () => {
 羅生門 & 1915 \\
 \hline
 \end{tabular}`).text;
-    assert.equal(out, "［＃表］\n| 書名 | 年 |\n|---|---|\n| 羅生門 | 1915 |\n［＃／表］");
+    // 列の指定 {l|r} は揃え（2列目は地＝右揃え）。
+    assert.equal(out, "［＃表］\n| 書名 | 年 |\n|---|---:|\n| 羅生門 | 1915 |\n［＃／表］");
+  });
+
+  it("区切りの行の「:---:」「---:」で、欄を中央・地（右）に揃える", () => {
+    const [t] = parse("［＃表］\n| a | b | c |\n|:---|:---:|---:|\n| あ | い | う |\n［＃／表］") as TableBlock[];
+    assert.deepEqual(t.align, ["start", "center", "end"]);
+    const spec = { ...DEFAULT_SPEC, charsPerLine: 30 };
+    const [page] = layoutDocument(parse("［＃表］\n| あああ | いいい | ううう |\n|:---|:---:|---:|\n| あ | い | う |\n［＃／表］"), spec);
+    // 1行目（右の行）は3字ずつの欄。2行目（左の行）の「い」は欄の中央（1字下がる）、「う」は地（2字下がる）。
+    const glyphs = (ch: string) => page.glyphs.filter((g) => g.text === ch);
+    const firstY = (ch: string) => Math.min(...glyphs(ch).map((g) => g.y));
+    const second = (ch: string) => glyphs(ch).reduce((a, b) => (b.x < a.x ? b : a));
+    const size = spec.fontSizePt;
+    assert.ok(Math.abs(second("あ").y - firstY("あ")) < 1e-6);
+    assert.ok(Math.abs(second("い").y - firstY("い") - size) < 1e-6);
+    assert.ok(Math.abs(second("う").y - firstY("う") - 2 * size) < 1e-6);
   });
 });

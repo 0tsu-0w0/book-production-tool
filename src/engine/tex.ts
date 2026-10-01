@@ -219,8 +219,8 @@ export function convertInline(src: string): string {
       } else if (base === "begin" && (env === "tabular" || env === "tabular*" || env === "tabularx")) {
         // 表：列の指定（{l|c|r} など。tabular* と tabularx は幅も）を読み飛ばし、行を \\、欄を & で分ける。
         if (env !== "tabular") r.group();
-        r.group();
-        out += tableMarkup(r.until(`\\end{${env}}`));
+        const spec = r.group() ?? "";
+        out += tableMarkup(r.until(`\\end{${env}}`), spec);
       } else if (env === "quote" || env === "quotation" || env === "center" || env === "flushright" || env === "flushleft" || env === "document") {
         out += "\n";
       }
@@ -319,7 +319,7 @@ function joinLines(a: string, b: string): string {
  * tabular の中身を、tategumi の表の記法（［＃表］…［＃／表］）にする。
  * 1行目のあとに \hline などの罫線があれば、1行目を見出しの行にする。罫線の命令は消す。
  */
-function tableMarkup(body: string): string {
+function tableMarkup(body: string, spec = ""): string {
   const RULES = /\\(?:hline|toprule|midrule|bottomrule|cline\s*\{[^}]*\})/g;
   const rows = body.split(/\\\\(?:\s*\[[^\]]*\])?/);
   const out: string[] = [];
@@ -333,7 +333,12 @@ function tableMarkup(body: string): string {
     out.push(`| ${cells.join(" | ")} |`);
   }
   if (out.length === 0) return "";
-  if (header) out.splice(1, 0, `|${out[0].split(" | ").map(() => "---").join("|")}|`);
+  // 列の指定の l・c・r を、区切りの行の揃え（---・:---:・---:）にする。
+  const aligns = (spec.replace(/\{[^}]*\}/g, "").match(/[lcrpXmb]/g) ?? []).map((a) => (a === "c" ? ":---:" : a === "r" ? "---:" : "---"));
+  const columns = out[0].split(" | ").length;
+  const rule = `|${Array.from({ length: columns }, (_, i) => aligns[i] ?? "---").join("|")}|`;
+  if (header) out.splice(1, 0, rule);
+  else if (aligns.some((a) => a !== "---")) out.unshift(rule);
   return `\n［＃表］\n${out.join("\n")}\n［＃／表］\n`;
 }
 

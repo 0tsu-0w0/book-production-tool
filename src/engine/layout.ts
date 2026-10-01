@@ -56,6 +56,8 @@ export interface Line {
   end?: boolean;
   /** 原稿の行の番号（0始まり。原稿にない行は undefined）。 */
   srcLine?: number;
+  /** ページごとの注の前の区切り線（字はない）。 */
+  footRule?: boolean;
   /** 表の行のとき：欄の境目（行の頭からの字数）と、表の行の最初・最後の行か（罫線を引くため）。 */
   table?: { cols: number[]; rowStart: boolean; rowEnd: boolean };
 }
@@ -281,7 +283,41 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   let pendingAnchors: string[] | undefined;
   /** 本文を回り込ませている画像：このページの from〜to の行は chars 字だけ短くする。 */
   let wrap: { page: number; from: number; to: number; chars: number; top: boolean } | null = null;
+  // ページごとの注：今のページの終わりに置く注の行と、その分として取っておく行数（区切り線を含む）。
+  let pageNotes: PageLine[] = [];
+  let noteReserve = 0;
+  /** 今のページの注を、ページの終わり（最後の行の側）に置く。 */
+  const flushNotes = () => {
+    if (pageNotes.length === 0) return;
+    const gap = snap(capacity - noteReserve - used);
+    if (gap > 0) current().push(Number.isInteger(gap) ? gap : gap);
+    current().push(...pageNotes);
+    used = capacity;
+    pageNotes = [];
+    noteReserve = 0;
+  };
+  /** 行の注を、行に分ける（段落スタイル「注」で組んだもの）。 */
+  const noteLines = (line: PageLine): Line[] => {
+    if (typeof line !== "object") return [];
+    const out: Line[] = [];
+    for (const a of line.atoms) {
+      const b = a.noteBlock;
+      if (!b) continue;
+      const lines = breakLines(b.atoms, spec.charsPerLine, b.format?.indent ?? 0, opts);
+      lines.forEach((l, i) => {
+        l.start = i === 0;
+        l.end = i === lines.length - 1;
+        l.span = 1;
+        l.align = "start";
+        l.srcLine = line.srcLine;
+      });
+      out.push(...lines);
+    }
+    return out;
+  };
+  const NOTE_RULE: Line = { atoms: [], indent: 0, span: 0.5, footRule: true };
   const newPage = (role: PageRole = flowRole) => {
+    flushNotes();
     pages.push([]);
     roles.push(role);
     images.push([]);
@@ -311,9 +347,17 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     // 行取り・行送りで幅の広い行が段の終わりをまたぐなら、次の段（またはページ）の頭へ送る。
     const inBand = snap(used % spec.linesPerPage);
     if (inBand > 0 && inBand + span > spec.linesPerPage + EPS) fillBand();
-    if (used + span > capacity + EPS && used > 0) newPage();
+    // この行に注があれば、注の行（と、ページで最初の注なら区切り線）の分も同じページに要る。
+    const notes = noteLines(line);
+    const need = () => (notes.length === 0 ? 0 : notes.length + (pageNotes.length === 0 ? NOTE_RULE.span! : 0));
+    if (used + span + noteReserve + need() > capacity + EPS && used > 0) newPage();
     current().push(line);
     used = snap(used + span);
+    if (notes.length > 0) {
+      if (pageNotes.length === 0) pageNotes.push(NOTE_RULE);
+      pageNotes.push(...notes);
+      noteReserve = snap(pageNotes.reduce<number>((s, l) => s + slots(l), 0));
+    }
   };
   const isOdd = (pageIndex: number) => (spec.firstPageNumber + pageIndex) % 2 !== 0;
   /** 次の行を奇数ページから始める（偶数ページに当たるときは白ページを1枚入れる）。 */
@@ -551,7 +595,10 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         cellLines.forEach((lines, c) => {
           const l = lines[i];
           const used = l ? natural(l.atoms) : 0;
-          atoms.push(spacer(pad), ...(l?.atoms ?? []), spacer(widths[c] - used + pad));
+          const free = widths[c] - used;
+          const align = t.align?.[c] ?? "start";
+          const before = align === "end" ? free : align === "center" ? free / 2 : 0;
+          atoms.push(spacer(pad + before), ...(l?.atoms ?? []), spacer(free - before + pad));
         });
         pushLine({ atoms, indent: 0, span: 1, align: "start", start: i === 0, end: i === k - 1, srcLine: row.line, table: { cols, rowStart: i === 0, rowEnd: i === k - 1 } });
       }
@@ -622,6 +669,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     all.slice(tail).forEach(pushLine);
   }
 
+  flushNotes();
   // 最後に残った空のページ（改ページのあとなど）は捨てる。
   if (pages.length > 1 && current().length === 0 && !fixed(roles[roles.length - 1])) {
     pages.pop();
@@ -736,6 +784,8 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
       const bandTop = top + band * (columnHeight + spec.columnGapPt);
       placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
       if (line.table) tableRules(lineShapes, line.table, x, bandTop, size, pitch * span);
+      // 注の前の区切り線：行の向きに、字数の3分の1の長さ。
+      if (line.footRule) lineShapes.push({ kind: "line", x1: x, y1: bandTop, x2: x, y2: bandTop + (spec.charsPerLine * size) / 3, width: size * 0.04, color: "" });
     }
     slot = snap(slot + span);
   }

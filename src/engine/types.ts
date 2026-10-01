@@ -53,6 +53,8 @@ export interface Atom {
   label?: string;
   /** ページ番号の参照（［＃ページ：名前］）。cells は組むたびに、そのラベルのページ番号にする。 */
   pageRef?: string;
+  /** ページごとの注のとき、そのページの終わりに置く注の段落（組むたびに作る）。 */
+  noteBlock?: { kind: "para"; atoms: Atom[]; style?: string; format?: ParaFormat };
   /** 注（［＃注：…］）の中身。cells は本文に入れる小さな注番号（「注」と番号。番号は組むたびに入れる）。 */
   note?: Atom[];
 }
@@ -144,6 +146,8 @@ export interface TableBlock {
   rows: TableRow[];
   /** 見出しの行の数（区切りの行「|---|」より前の行）。 */
   header: number;
+  /** 欄ごとの揃え（区切りの行の「:---」「:---:」「---:」）。ない欄は天（左）揃え。 */
+  align?: ("start" | "center" | "end")[];
 }
 
 /** 画像の大きさ（ピクセル）。縦横の比を決めるのに使う。 */

@@ -7,7 +7,13 @@ export const NOTE_STYLE = "注";
 /** 本文の注番号の大きさ（本文の字に対する割合）。 */
 export const NOTE_MARK_SCALE = 0.6;
 
-export type NotePlacement = "chapter" | "end";
+/** 注を置く場所：章の終わり・本の終わり・そのページの終わり（横組みではページの下、縦組みではページの左端）。 */
+export type NotePlacement = "chapter" | "end" | "page";
+
+/** 注の段落：「注1　中身」。 */
+function noteParagraph(n: number, atoms: Atom[]): { kind: "para"; style: string; atoms: Atom[] } {
+  return { kind: "para", style: NOTE_STYLE, atoms: [{ cells: [{ text: "注" }] }, { cells: [numberCell(n)] }, { cells: [{ text: "　" }] }, ...atoms] };
+}
 
 /** 注番号の数字のマス（3桁までは縦中横）。 */
 const numberCell = (n: number) => ({ text: String(n), tcy: n < 1000 });
@@ -30,17 +36,11 @@ export function placeNotes(blocks: Block[], lines: (number | undefined)[], place
     };
     push({ kind: "blank" });
     push({ kind: "para", style: NOTE_STYLE, atoms: [{ cells: [{ text: "注" }] }] });
-    for (const note of pending) {
-      push({
-        kind: "para",
-        style: NOTE_STYLE,
-        atoms: [{ cells: [{ text: "注" }] }, { cells: [numberCell(note.n)] }, { cells: [{ text: "　" }] }, ...note.atoms],
-      });
-    }
+    for (const note of pending) push(noteParagraph(note.n, note.atoms));
     pending = [];
   };
   blocks.forEach((block, i) => {
-    if (block.kind === "heading" && block.level === 1 && placement === "chapter") {
+    if (block.kind === "heading" && block.level === 1 && placement !== "end") {
       flush();
       n = 0;
     }
@@ -50,6 +50,12 @@ export function placeNotes(blocks: Block[], lines: (number | undefined)[], place
         n++;
         atom.cells[0].text = "注";
         Object.assign(atom.cells[1], numberCell(n));
+        if (placement === "page") {
+          // ページごと：注の段落は組むときにそのページの終わりへ置く。番号は章ごと。
+          atom.noteBlock = noteParagraph(n, atom.note);
+          continue;
+        }
+        atom.noteBlock = undefined;
         pending.push({ n, atoms: atom.note });
       }
     }

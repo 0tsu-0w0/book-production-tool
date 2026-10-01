@@ -258,7 +258,7 @@ export interface Settings {
   /** 目次（DTP-14）。 */
   toc: TocSettings;
   /** 注（［＃注：…］）を置く場所：章ごと（次の大見出しの前）か本の終わり。 */
-  notes: { placement: "chapter" | "end" };
+  notes: { placement: "chapter" | "end" | "page" };
   /** 表紙（表1・背・表4）。題と著者名は書誌のもの。 */
   cover: CoverSettings;
   /** 詳細設定。 */
@@ -580,7 +580,7 @@ export function normalizeSettings(input: unknown): Settings {
   a.imagePpi = clamp(a.imagePpi, 150, 1200);
   a.safeMarginMm = clamp(a.safeMarginMm, 0, 10);
   if (s.output.pdfStandard !== "x4") s.output.pdfStandard = "x1a";
-  if (s.notes.placement !== "end") s.notes.placement = "chapter";
+  if (s.notes.placement !== "end" && s.notes.placement !== "page") s.notes.placement = "chapter";
   if (!/^#[0-9a-f]{6}$/i.test(s.cover.background)) s.cover.background = "#ffffff";
   if (!/^#[0-9a-f]{6}$/i.test(s.cover.textColor)) s.cover.textColor = "#000000";
   if (s.toc.levels !== 1) s.toc.levels = 2;

@@ -465,6 +465,11 @@ export function parse(src: string, opts: ParseOptions = DEFAULT_PARSE_OPTIONS, l
         const row = rawLines[n];
         if (TABLE_RULE.test(row)) {
           table.header = table.rows.length;
+          // 「:---:」は中央、「---:」は地（右）揃え、「:---」と「---」は天（左）揃え。
+          table.align = splitTableRow(row).map((c) => {
+            const t = c.text.replace(/：/g, ":");
+            return t.startsWith(":") && t.endsWith(":") ? "center" : t.endsWith(":") ? "end" : "start";
+          });
           continue;
         }
         table.rows.push({
