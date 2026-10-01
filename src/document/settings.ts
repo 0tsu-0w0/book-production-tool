@@ -89,6 +89,8 @@ export interface BookLayout {
   gutterMm: number;
   /** 横組みの句読点：「、。」「，。」「，．」。縦組みでは使わない。 */
   punctuation: HorizontalPunctuation;
+  /** 横組みで、行末に入らない英単語をハイフンで分ける。 */
+  hyphenation: boolean;
 }
 
 export type HorizontalPunctuation = "、。" | "，。" | "，．";
@@ -353,6 +355,7 @@ export const DEFAULT_SETTINGS: Settings = {
     position: "top-gutter",
     writingMode: "vertical",
     punctuation: "、。",
+    hyphenation: true,
     topMm: 14,
     gutterMm: 12,
   },

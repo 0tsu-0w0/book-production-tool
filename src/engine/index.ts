@@ -1,5 +1,5 @@
 import { placeNotes } from "./notes.js";
-import { horizontalPunctuation, toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
+import { horizontalPunctuation, leftBound, toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { fontKey, type StyleSheet } from "../document/styles.js";
 import { bookPageBlocks } from "./book-pages.js";
 import { decoratePage } from "./decorate.js";
@@ -114,7 +114,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   const mathErrors: string[] = [];
   const prepare = (bs: Block[]) => {
     applyStyles(bs, styles);
-    measureRotated(bs, faces);
+    measureRotated(bs, faces, leftBound(settings) && settings.book.hyphenation);
     if (hasMath) mathErrors.push(...measureMath(bs, spec.charsPerLine, spec.lineGap, spec.mathSpaceEm));
     prepareSpacing(bs, spec.typography, spec.rubyScale);
     applyProportional(bs, faces);

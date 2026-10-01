@@ -11,6 +11,8 @@ export interface Cell {
   rotate?: boolean;
   /** 行方向の長さ（em）。省略時は 1。 */
   advance?: number;
+  /** 欧文の単語を分けてよい位置（横組みのハイフネーション）：at 字目で分けたときの、前半（「-」を含む）と後半の長さ（em）。 */
+  hyph?: { at: number; width: number; rest: number }[];
   /** 字形をマスの上端からずらす量（em。負なら上へ）。半角にした始め括弧などで使う。 */
   shift?: number;
   /** 行を合わせるために、さらに詰められる量（em）。約物のアキ。 */
@@ -148,6 +150,10 @@ export interface TableBlock {
   header: number;
   /** 欄ごとの揃え（区切りの行の「:---」「:---:」「---:」）。ない欄は天（左）揃え。 */
   align?: ("start" | "center" | "end")[];
+  /** 罫線：すべて（既定）・行の境目だけ・なし。 */
+  rules?: "all" | "rows" | "none";
+  /** 見出しの行のあとの罫線を二重線にする。 */
+  headerDouble?: boolean;
 }
 
 /** 画像の大きさ（ピクセル）。縦横の比を決めるのに使う。 */

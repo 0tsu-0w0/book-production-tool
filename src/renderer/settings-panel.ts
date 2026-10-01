@@ -143,6 +143,7 @@ function sections(): Section[] {
           ],
           when: (s) => isBook(s) && s.book.writingMode === "horizontal",
         },
+        { kind: "check", path: "book.hyphenation", label: "行末の英単語をハイフンで分ける（英語）", when: (s) => isBook(s) && s.book.writingMode === "horizontal" },
         {
           kind: "info",
           render: (s) => (isBook(s) && s.book.writingMode === "horizontal" ? "横組みでは、半角の英数字は半角のまま組み、数字は縦中横にしません。" : null),

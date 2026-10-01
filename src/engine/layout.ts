@@ -58,8 +58,11 @@ export interface Line {
   srcLine?: number;
   /** ページごとの注の前の区切り線（字はない）。 */
   footRule?: boolean;
-  /** 表の行のとき：欄の境目（行の頭からの字数）と、表の行の最初・最後の行か（罫線を引くため）。 */
-  table?: { cols: number[]; rowStart: boolean; rowEnd: boolean };
+  /**
+   * 表の行のとき（罫線を引くため）：欄の境目（行の頭からの字数）、行の前・後に引く罫線の範囲
+   * （表の行の最初・最後の行だけ。結合した欄の所は空ける）、二重線、罫線の引き方。
+   */
+  table?: { edges: number[]; top: [number, number][]; bottom: [number, number][]; double: boolean; rules: "all" | "rows" | "none" };
 }
 
 /** 行の文字列（ルビは除き、割注は含む）。 */
@@ -176,6 +179,21 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
       if (need <= compressible([...cur, a]) + EPS) {
         cur.push(queue.shift()!);
         push(-need);
+        continue;
+      }
+    }
+
+    // ハイフネーション：行末に入らない欧文の単語は、入るところで「-」を付けて分ける。
+    if (a.cells.length === 1 && a.cells[0].hyph) {
+      const c = a.cells[0];
+      const room = perLine - used;
+      const fit = c.hyph!.findLast((h) => h.width <= room + EPS);
+      if (fit) {
+        queue.shift();
+        queue.unshift(
+          { ...a, cells: [{ ...c, text: `${c.text.slice(0, fit.at)}-`, advance: fit.width, hyph: undefined }] },
+          { ...a, label: undefined, cells: [{ ...c, text: c.text.slice(fit.at), advance: fit.rest, hyph: undefined }] },
+        );
         continue;
       }
     }
@@ -563,7 +581,16 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     if (count === 0) return;
     const pad = TABLE_PAD;
     const natural = (atoms: Atom[]) => atoms.reduce((s, a) => s + atomWidth(a), 0);
-    let widths = Array.from({ length: count }, (_, c) => Math.max(1, ...t.rows.map((r) => (r.cells[c] ? natural(r.cells[c].atoms) : 0))));
+    const plain = (atoms: Atom[] | undefined) => (atoms ?? []).map((a) => a.cells.map((c) => c.text).join("")).join("").trim();
+    // 結合：中身が「<」だけの欄は左の欄と、「^」だけの欄は上の欄とつなぐ。
+    const kind = (r: number, c: number) => {
+      const text = plain(t.rows[r]?.cells[c]?.atoms);
+      return text === "<" || text === "＜" ? "left" : text === "^" || text === "＾" ? "up" : "cell";
+    };
+    // 欄の幅は、結合していない欄の中身から決める。
+    let widths = Array.from({ length: count }, (_, c) =>
+      Math.max(1, ...t.rows.map((r, i) => (r.cells[c] && kind(i, c) === "cell" && kind(i, c + 1) !== "left" ? natural(r.cells[c].atoms) : 0))),
+    );
     const room = spec.charsPerLine - count * pad * 2;
     const total = widths.reduce((s, w) => s + w, 0);
     if (total > room) {
@@ -583,24 +610,59 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     }
     const cols = [0];
     for (const w of widths) cols.push(cols[cols.length - 1] + w + pad * 2);
+    const end = cols[count];
+    // 行ごとの欄のまとまり（左とつないだ欄を1つに）。
+    const groups = t.rows.map((row, r) => {
+      const out: { from: number; to: number; atoms: Atom[]; up: boolean; align: "start" | "center" | "end" }[] = [];
+      for (let c = 0; c < count; c++) {
+        const k = kind(r, c);
+        if (k === "left" && out.length > 0) {
+          out[out.length - 1].to = c + 1;
+          continue;
+        }
+        out.push({ from: c, to: c + 1, atoms: k === "cell" ? (row.cells[c]?.atoms ?? []) : [], up: k === "up", align: t.align?.[c] ?? "start" });
+      }
+      return out;
+    });
+    /** 行の上（前）の罫線：上とつないだ欄の所は引かない。 */
+    const openTop = (r: number): [number, number][] => groups[r].filter((g) => !g.up).map((g) => [cols[g.from], cols[g.to]]);
     const spacer = (w: number): Atom => ({ cells: [{ text: "　", advance: w }] });
-    t.rows.forEach((row) => {
-      const cellLines = Array.from({ length: count }, (_, c) => (row.cells[c] ? breakLines(row.cells[c].atoms, widths[c], 0, { ...opts, justify: false }) : []));
+    t.rows.forEach((row, r) => {
+      const gs = groups[r];
+      const cellLines = gs.map((g) => breakLines(g.atoms, cols[g.to] - cols[g.from] - pad * 2, 0, { ...opts, justify: false }));
       const k = Math.max(1, ...cellLines.map((l) => l.length));
       // 表の行は段の途中で分けない（段より長いときは分ける）。
       const roomNow = roomInBand();
       if (roomNow < k && roomNow < spec.linesPerPage) breakBand();
+      const top = openTop(r);
+      // 行の下（後）の罫線：次の行で上とつないだ欄の所は引かない。
+      const bottom: [number, number][] = r + 1 < t.rows.length ? openTop(r + 1) : [[0, end]];
       for (let i = 0; i < k; i++) {
         const atoms: Atom[] = [];
-        cellLines.forEach((lines, c) => {
+        cellLines.forEach((lines, gi) => {
+          const g = gs[gi];
           const l = lines[i];
-          const used = l ? natural(l.atoms) : 0;
-          const free = widths[c] - used;
-          const align = t.align?.[c] ?? "start";
-          const before = align === "end" ? free : align === "center" ? free / 2 : 0;
+          const width = cols[g.to] - cols[g.from] - pad * 2;
+          const free = width - (l ? natural(l.atoms) : 0);
+          const before = g.align === "end" ? free : g.align === "center" ? free / 2 : 0;
           atoms.push(spacer(pad + before), ...(l?.atoms ?? []), spacer(free - before + pad));
         });
-        pushLine({ atoms, indent: 0, span: 1, align: "start", start: i === 0, end: i === k - 1, srcLine: row.line, table: { cols, rowStart: i === 0, rowEnd: i === k - 1 } });
+        pushLine({
+          atoms,
+          indent: 0,
+          span: 1,
+          align: "start",
+          start: i === 0,
+          end: i === k - 1,
+          srcLine: row.line,
+          table: {
+            edges: [...gs.map((g) => cols[g.from]), end],
+            top: i === 0 ? top : [],
+            bottom: i === k - 1 ? bottom : [],
+            double: i === k - 1 && !!t.headerDouble && r === t.header - 1,
+            rules: t.rules ?? "all",
+          },
+        });
       }
     });
   }
@@ -1011,12 +1073,18 @@ const TABLE_PAD = 0.5;
  * 隣の行の短い線とつながって、表の枠と欄の区切りになる。color が空なので文字の色で引く。
  */
 function tableRules(shapes: Shape[], t: NonNullable<Line["table"]>, x: number, top: number, size: number, width: number) {
+  if (t.rules === "none") return;
   const half = width / 2;
   const w = size * 0.05;
-  const end = top + t.cols[t.cols.length - 1] * size;
-  for (const b of t.cols) shapes.push({ kind: "line", x1: x - half, y1: top + b * size, x2: x + half, y2: top + b * size, width: w, color: "" });
-  if (t.rowStart) shapes.push({ kind: "line", x1: x + half, y1: top, x2: x + half, y2: end, width: w, color: "" });
-  if (t.rowEnd) shapes.push({ kind: "line", x1: x - half, y1: top, x2: x - half, y2: end, width: w, color: "" });
+  const along = (at: number, [a, b]: [number, number]) => shapes.push({ kind: "line", x1: at, y1: top + a * size, x2: at, y2: top + b * size, width: w, color: "" });
+  // 欄の境目（行に直交する短い線）。「行の罫」では引かない。
+  if (t.rules === "all") for (const b of t.edges) shapes.push({ kind: "line", x1: x - half, y1: top + b * size, x2: x + half, y2: top + b * size, width: w, color: "" });
+  for (const seg of t.top) along(x + half, seg);
+  for (const seg of t.bottom) {
+    along(x - half, seg);
+    // 二重線：もう1本を、行の側に少し離して引く。
+    if (t.double) along(x - half + size * 0.15, seg);
+  }
 }
 
 /** キャプションの行の間隔と、画像との間（本文の文字の大きさに対する割合）。 */

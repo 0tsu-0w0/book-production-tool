@@ -1,6 +1,6 @@
 {
   "name": "tategumi",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -17,6 +17,7 @@
     "@mathjax/src": "^4.1.3",
     "@pdf-lib/fontkit": "^1.1.1",
     "harfbuzzjs": "^1.6.2",
+    "hyphen": "^1.14.1",
     "jpeg-js": "^0.4.4",
     "pdf-lib": "^1.17.1",
     "pngjs": "^7.0.0"
@@ -62,6 +63,8 @@
       "!node_modules/@mathjax/mathjax-newcm-font/cjs/chtml/**",
       "!node_modules/@mathjax/mathjax-newcm-font/cjs/chtml.js",
       "!node_modules/speech-rule-engine/**",
+      "!node_modules/hyphen/!(en-us|patterns|hyphen.js|export-contract.js|package.json|LICENSE)",
+      "!node_modules/hyphen/patterns/!(en-us.js)",
       "!node_modules/mj-context-menu/**",
       "!node_modules/mhchemparser/**",
       "!node_modules/pdf-lib/{dist,es,ts3.4,src}/**",

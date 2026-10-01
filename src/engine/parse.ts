@@ -350,7 +350,7 @@ export function parseImageOptions(name: string, options: string[]): ImageBlock {
 const toHalfWidthDigits = (s: string) => s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
 
 /** 表の始まりと終わり。 */
-const TABLE_OPEN = /^\s*［＃表］\s*$/u;
+const TABLE_OPEN = /^\s*［＃表(?:[：:]\s*([^［］]*))?］\s*$/u;
 const TABLE_CLOSE = /^\s*［＃／表］\s*$/u;
 /** 見出しの行と本体を分ける区切りの行：|---|---|（全角も可）。 */
 const TABLE_RULE = /^\s*[|｜]?\s*[-－ー―:：]{2,}\s*(?:[|｜]\s*[-－ー―:：]{2,}\s*)*[|｜]?\s*$/u;
@@ -455,9 +455,18 @@ export function parse(src: string, opts: ParseOptions = DEFAULT_PARSE_OPTIONS, l
   const rawLines = src.replace(/\r\n?/g, "\n").split("\n");
   for (let n = 0; n < rawLines.length; n++) {
     const line = rawLines[n];
-    if (TABLE_OPEN.test(line)) {
+    const tableOpen = TABLE_OPEN.exec(line);
+    if (tableOpen) {
       // 表：［＃／表］（なければ空行か原稿の終わり）までの行を、表の行にする。
-      const table: Block = { kind: "table", rows: [], header: 0 };
+      // ［＃表：罫なし］・［＃表：行の罫］で罫線を、［＃表：見出し二重線］で見出しのあとの線を変える。
+      const options = (tableOpen[1] ?? "").split(/[\s　、,]+/u);
+      const table: Block = {
+        kind: "table",
+        rows: [],
+        header: 0,
+        ...(options.includes("罫なし") ? { rules: "none" as const } : options.includes("行の罫") ? { rules: "rows" as const } : {}),
+        ...(options.includes("見出し二重線") ? { headerDouble: true } : {}),
+      };
       (group ?? blocks).push(table);
       if (group) groupLines.push(sourceLine(n));
       else lineOf?.push(sourceLine(n));

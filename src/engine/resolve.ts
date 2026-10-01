@@ -1,3 +1,4 @@
+import { hyphenPoints } from "./hyphen.js";
 import type { Face, ShapedGlyph } from "./face.js";
 import type { Block, DrawItem, DrawPage, PageLayout, PlacedGlyph, Shape } from "./types.js";
 import { textBlocks } from "./blocks.js";
@@ -7,13 +8,17 @@ import { multiply, renderMath, type Matrix } from "./math.js";
 const TCY_MAX_WIDTH = 1;
 
 /** 横倒しにする文字列の長さ（em）を、そのマスのフォントで測って Cell に書き込む。 */
-export function measureRotated(blocks: Block[], faces: Face[]): void {
+export function measureRotated(blocks: Block[], faces: Face[], hyphenate = false): void {
   for (const block of textBlocks(blocks)) {
     for (const atom of block.atoms) {
       for (const cell of atom.cells) {
         if (!cell.rotate) continue;
         const face = faces[cell.font ?? 0] ?? faces[0];
-        cell.advance = (totalAdvance(face.shape(cell.text, "ltr")) / face.upem) * (cell.scale ?? 1);
+        const measure = (text: string) => (totalAdvance(face.shape(text, "ltr")) / face.upem) * (cell.scale ?? 1);
+        cell.advance = measure(cell.text);
+        // ハイフネーション：分けてよい位置ごとに、前半（「-」付き）と後半の長さを測っておく。
+        const points = hyphenate ? hyphenPoints(cell.text) : [];
+        cell.hyph = points.length > 0 ? points.map((at) => ({ at, width: measure(`${cell.text.slice(0, at)}-`), rest: measure(cell.text.slice(at)) })) : undefined;
       }
     }
   }
