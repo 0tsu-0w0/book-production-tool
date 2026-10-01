@@ -3,6 +3,7 @@ import { applyTemplate } from "../document/template.js";
 import { imageInfos, type DocImage } from "../document/document.js";
 import type { ImageInfo } from "../engine/types.js";
 import { ImageManager } from "./image-manager.js";
+import { CoverPreview } from "./cover-preview.js";
 import { PageTyping } from "./page-typing.js";
 import { InlineEditor } from "./inline-editor.js";
 import { ProofDialog, type ProofResult } from "./proof-dialog.js";
@@ -71,6 +72,18 @@ interface Api extends TemplateApi {
     { path: string; pages: number; pdfx: boolean; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined
   >;
   listIccProfiles(): Promise<{ path: string; name: string }[]>;
+  coverPreview(settings: Settings, pageCount: number, images: DocImage[]): Promise<{
+    page: DrawPage;
+    paths: Record<string, Record<number, string>>;
+    fontKeys: string[];
+    upems: number[];
+    spineMm: number;
+    widthMm: number;
+    heightMm: number;
+  }>;
+  exportCover(settings: Settings, pageCount: number, baseName: string, images: DocImage[]): Promise<
+    { path: string; spineMm: number; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined
+  >;
   chooseIccProfile(): Promise<{ path: string; name: string } | { error: string } | undefined>;
   beginImages(baseName: string, zip: boolean): Promise<string | undefined>;
   writeImage(name: string, bytes: ArrayBuffer): Promise<void>;
@@ -114,6 +127,35 @@ const imageManager = new ImageManager({
   },
 });
 panel.custom.set("images", () => imageManager.element());
+
+// 表紙の見本と書き出し。
+const coverPreview = new CoverPreview({
+  load: async () => {
+    const r = await api.coverPreview(settings, result?.pageCount ?? 0, imageManager.images);
+    addPaths(r.paths);
+    return { ...r, fonts: r.fontKeys.map((key, i) => ({ paths: storeFor(key), upem: r.upems[i] })) };
+  },
+  images: () => imageManager.bitmaps,
+  exportPdf: () => void exportCover(),
+});
+panel.custom.set("cover", () => coverPreview.element());
+
+function exportCover() {
+  return withBusy(async () => {
+    setStatus("表紙を書き出しています…");
+    const r = await api.exportCover(settings, result?.pageCount ?? 0, baseName(), imageManager.images);
+    if (!r) return setStatus("書き出しを取り消しました。");
+    if ("error" in r) {
+      setStatus(r.error);
+      alert(r.error);
+      return;
+    }
+    const pdfx = r.standard === "x4" ? "PDF/X-4" : "PDF/X-1a";
+    if (!r.standard) setStatus(`表紙（背幅 ${r.spineMm.toFixed(1)}mm）を保存しました：${r.path}`);
+    else if (r.problems.length === 0) setStatus(`表紙（背幅 ${r.spineMm.toFixed(1)}mm）は ${pdfx} の検査に通りました。保存先：${r.path}`);
+    else setStatus(`表紙を保存しましたが、${pdfx} の条件を満たしていません（${r.problems.join("、")}）：${r.path}`);
+  });
+}
 
 // ---- 紙面から原稿へ（DTP-15） ----
 
@@ -256,6 +298,8 @@ async function runTypeset() {
   preview.bleedMm = settings.advanced.bleedMm;
   updatePager();
   panel.setPageCount(r.pageCount);
+  panel.setImageNames(imageManager.images.map((i) => i.name));
+  coverPreview.update();
   // 紙面で入力しているときは、カーソルのあるページを見せる。
   if (caret && r.caretPage !== undefined && r.caretPage >= 0) preview.jumpTo(r.caretPage);
   preview.setDocument(r.version, r.pageCount, drawFonts(r), settings.nombreStart, r.pages);

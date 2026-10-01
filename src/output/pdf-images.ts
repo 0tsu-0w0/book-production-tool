@@ -60,15 +60,19 @@ function downsample(r: Raster, width: number, height: number): Raster {
   return { width, height, data: out };
 }
 
-/** 白の紙の上に重ねて、CMYK（4バイト）かグレー（1バイト）の画素の並びにする。式は文字の色の変換と同じ。 */
-export function toDeviceColor(r: Raster, mode: "cmyk" | "gray"): Uint8Array {
+/**
+ * 白の紙（matte があればその色）の上に重ねて、CMYK（4バイト）かグレー（1バイト）の画素の並びにする。
+ * 式は文字の色の変換と同じ。
+ */
+export function toDeviceColor(r: Raster, mode: "cmyk" | "gray", matte = "#ffffff"): Uint8Array {
   const n = r.width * r.height;
   const out = new Uint8Array(n * (mode === "cmyk" ? 4 : 1));
+  const [mr, mg, mb] = [1, 3, 5].map((k) => parseInt(matte.slice(k, k + 2), 16));
   for (let i = 0; i < n; i++) {
     const a = r.data[i * 4 + 3] / 255;
-    const red = (r.data[i * 4] * a + 255 * (1 - a)) / 255;
-    const green = (r.data[i * 4 + 1] * a + 255 * (1 - a)) / 255;
-    const blue = (r.data[i * 4 + 2] * a + 255 * (1 - a)) / 255;
+    const red = (r.data[i * 4] * a + mr * (1 - a)) / 255;
+    const green = (r.data[i * 4 + 1] * a + mg * (1 - a)) / 255;
+    const blue = (r.data[i * 4 + 2] * a + mb * (1 - a)) / 255;
     if (mode === "gray") {
       out[i] = Math.round((0.299 * red + 0.587 * green + 0.114 * blue) * 255);
       continue;
@@ -89,6 +93,13 @@ export function toDeviceColor(r: Raster, mode: "cmyk" | "gray"): Uint8Array {
 }
 
 /** 各画像が紙の上でいちばん大きく置かれる幅と高さ（pt）。縮める目安にする。 */
+/** その画像を置いた所の、透明な部分の下の色（undefined は白の紙）。 */
+function mattesOf(pages: DrawPage[], name: string): (string | undefined)[] {
+  const out = new Set<string | undefined>();
+  for (const page of pages) for (const s of page.shapes) if (s.kind === "image" && s.name === name) out.add(s.matte);
+  return [...out];
+}
+
 export function placedSizes(pages: DrawPage[]): Map<string, { w: number; h: number }> {
   const out = new Map<string, { w: number; h: number }>();
   for (const page of pages) {
@@ -101,7 +112,12 @@ export function placedSizes(pages: DrawPage[]): Map<string, { w: number; h: numb
   return out;
 }
 
-/** 使う画像を PDF に入れ、名前から PDF の参照を引けるようにする。 */
+/** 画像の参照の鍵：名前と、透明な部分の下の色（同じ画像でも下の色が違えば別に入れる）。 */
+export function imageKey(name: string, matte?: string): string {
+  return matte ? `${name}|${matte}` : name;
+}
+
+/** 使う画像を PDF に入れ、名前（と下の色。imageKey）から PDF の参照を引けるようにする。 */
 export async function embedImages(
   doc: PDFDocument,
   sources: PdfImageSource[],
@@ -125,15 +141,17 @@ export async function embedImages(
       const f = targetPpi / ppi;
       raster = downsample(raster, Math.max(1, Math.round(raster.width * f)), Math.max(1, Math.round(raster.height * f)));
     }
-    const stream = doc.context.flateStream(toDeviceColor(raster, mode), {
-      Type: "XObject",
-      Subtype: "Image",
-      Width: raster.width,
-      Height: raster.height,
-      ColorSpace: mode === "cmyk" ? "DeviceCMYK" : "DeviceGray",
-      BitsPerComponent: 8,
-    });
-    refs.set(src.name, doc.context.register(stream));
+    for (const matte of mattesOf(pages, src.name)) {
+      const stream = doc.context.flateStream(toDeviceColor(raster, mode, matte), {
+        Type: "XObject",
+        Subtype: "Image",
+        Width: raster.width,
+        Height: raster.height,
+        ColorSpace: mode === "cmyk" ? "DeviceCMYK" : "DeviceGray",
+        BitsPerComponent: 8,
+      });
+      refs.set(imageKey(src.name, matte), doc.context.register(stream));
+    }
   }
   return refs;
 }

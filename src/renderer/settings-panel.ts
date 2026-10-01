@@ -342,6 +342,18 @@ function sections(): Section[] {
       fields: [{ kind: "custom", id: "images" }],
     },
     {
+      title: "表紙",
+      fields: [
+        { kind: "info", render: () => "題と著者名は「書誌とページ構成」のもの、書体は段落スタイル「書名」「著者名」のものです。背幅は本文のページ数と本文用紙から計算します。" },
+        { kind: "color", path: "cover.background", label: "地の色", palette: COVER_COLORS },
+        { kind: "color", path: "cover.textColor", label: "文字の色", palette: TEXT_COLORS },
+        { kind: "select", path: "cover.frontImage", label: "表1（表）の画像", options: () => [["", "なし"], ...imageNames.map((n): Opt => [n, n])] },
+        { kind: "select", path: "cover.backImage", label: "表4（裏）の画像", options: () => [["", "なし"], ...imageNames.map((n): Opt => [n, n])] },
+        { kind: "check", path: "cover.spineText", label: "背に題と著者名を入れる（背幅4mm以上のとき）" },
+        { kind: "custom", id: "cover" },
+      ],
+    },
+    {
       title: "書き出し",
       fields: [
         {
@@ -444,6 +456,18 @@ function sections(): Section[] {
 
 /** 新規作成で使うテンプレートの名前（空なら標準の設定）。画面から知らされる。 */
 let defaultTemplateName = "";
+/** 文書の画像の名前（表紙の画像を選ぶのに使う）。画面から知らされる。 */
+let imageNames: string[] = [];
+/** 表紙の地の色の候補。 */
+const COVER_COLORS: [string, string][] = [
+  ["#ffffff", "白"],
+  ["#f3ede0", "生成り"],
+  ["#1f2a44", "紺"],
+  ["#7a2e2e", "えんじ"],
+  ["#2f4f3a", "深緑"],
+  ["#222222", "黒"],
+];
+
 /** PDF/X-4 に使える ICC プロファイル（この PC で見つかったもの）。画面から知らされる。 */
 let iccProfiles: { path: string; name: string }[] = [];
 
@@ -493,6 +517,11 @@ export class SettingsPanel {
 
   setDefaultTemplateName(name: string) {
     defaultTemplateName = name;
+    this.refresh();
+  }
+
+  setImageNames(names: string[]) {
+    imageNames = names;
     this.refresh();
   }
 

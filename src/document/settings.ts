@@ -119,6 +119,19 @@ export interface PageStructure {
 
 export const PAGE_ITEM_KINDS: PageItemKind[] = ["title", "blank", "colophon", "free", "toc"];
 
+/** 表紙。画像は文書の画像の名前（空なら使わない）。 */
+export interface CoverSettings {
+  /** 地の色（塗り足しまで）。 */
+  background: string;
+  /** 題・著者名の色。 */
+  textColor: string;
+  /** 表1（表）と表4（裏）の画像。塗り足しまで広げて、はみ出た分を切る。 */
+  frontImage: string;
+  backImage: string;
+  /** 背に題と著者名を入れる（背幅が4mmより狭いときは入れない）。 */
+  spineText: boolean;
+}
+
 /** 目次（DTP-14）。 */
 export interface TocSettings {
   /** 目次の題（空なら題を出さない）。 */
@@ -220,6 +233,8 @@ export interface Settings {
   toc: TocSettings;
   /** 注（［＃注：…］）を置く場所：章ごと（次の大見出しの前）か本の終わり。 */
   notes: { placement: "chapter" | "end" };
+  /** 表紙（表1・背・表4）。題と著者名は書誌のもの。 */
+  cover: CoverSettings;
   /** 詳細設定。 */
   advanced: AdvancedSettings;
   kinsoku: Kinsoku;
@@ -338,6 +353,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pages: { front: [], back: [], padTo: 1 },
   toc: { title: "目次", levels: 2, numerals: "arabic", leader: "…" },
   notes: { placement: "chapter" },
+  cover: { background: "#ffffff", textColor: "#000000", frontImage: "", backImage: "", spineText: true },
   advanced: {
     rubyPercent: 50,
     tcyMaxDigits: 3,
@@ -538,6 +554,8 @@ export function normalizeSettings(input: unknown): Settings {
   a.safeMarginMm = clamp(a.safeMarginMm, 0, 10);
   if (s.output.pdfStandard !== "x4") s.output.pdfStandard = "x1a";
   if (s.notes.placement !== "end") s.notes.placement = "chapter";
+  if (!/^#[0-9a-f]{6}$/i.test(s.cover.background)) s.cover.background = "#ffffff";
+  if (!/^#[0-9a-f]{6}$/i.test(s.cover.textColor)) s.cover.textColor = "#000000";
   if (s.toc.levels !== 1) s.toc.levels = 2;
   if (s.toc.numerals !== "kanji") s.toc.numerals = "arabic";
   if (s.book.writingMode !== "horizontal") s.book.writingMode = "vertical";

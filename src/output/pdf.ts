@@ -37,7 +37,7 @@ import {
 } from "pdf-lib";
 import type { DrawItem, DrawPage, Shape } from "../engine/types.js";
 import { embedCffFont, isCffFont } from "./cff-font.js";
-import { embedImages, type PdfImageSource } from "./pdf-images.js";
+import { embedImages, imageKey, type PdfImageSource } from "./pdf-images.js";
 import { svgPathOps } from "./svg-path.js";
 import { fillColor, strokeColor, type ColorMode } from "./color.js";
 import { japaneseTrimMarks, marksMargin } from "./marks.js";
@@ -149,14 +149,17 @@ export async function renderPdf(
     if (!options.pdfx && page.paper.toLowerCase() !== "#ffffff") {
       ops.push(fillColor(page.paper, options.color), rectangle(-bleed, -bleed, page.width + bleed * 2, page.height + bleed * 2), fill());
     }
-    // 画像は文字や飾りの下に描く。
+    // 図形は並びの順に描く（画面と同じ。本文のページでは画像が先頭なので、文字や飾りの下になる）。
     for (const shape of page.shapes) {
-      if (shape.kind !== "image") continue;
-      const ref = imageRefs.get(shape.name);
+      if (shape.kind !== "image") {
+        ops.push(...shapeOps(shape, page.height, options.color));
+        continue;
+      }
+      // 閲覧用（RGB）は透明のまま入れるので、下の色で分けない。
+      const ref = imageRefs.get(options.color === "rgb" ? shape.name : imageKey(shape.name, shape.matte));
       if (ref) ops.push(...imageOps(shape, page.height, pdfPage.node.newXObject("Im", ref)));
       else ops.push(...missingImageOps(shape, page.height, options.color));
     }
-    for (const shape of page.shapes) ops.push(...shapeOps(shape, page.height, options.color));
     ops.push(...textOps(page, fontsOf, options.color));
     ops.push(popGraphicsState());
     pdfPage.pushOperators(...ops);

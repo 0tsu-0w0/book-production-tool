@@ -66,7 +66,7 @@ export interface LazyTypesetResult extends Omit<TypesetResult, "pages"> {
 }
 
 /** スタイルの書体を、フォントの一覧の番号にする。 */
-function engineStyles(sheet: StyleSheet, fonts: FontTable): EngineStyles {
+export function engineStyles(sheet: StyleSheet, fonts: FontTable): EngineStyles {
   const indexOf = (f: FontChoice | null, inherit: number) => {
     if (!f) return inherit;
     const i = fonts.keys.indexOf(fontKey(f));

@@ -1023,3 +1023,128 @@ function placeRuby(glyphs: PlacedGlyph[], ruby: string, x: number, spanTop: numb
     glyphs.push({ text: ch, kind: "vert", x, y: center - rubySize / 2, size: rubySize, font: base?.font, color: base?.color });
   });
 }
+
+/** 表紙に置く文字（題・著者名）。scale は段落スタイルの文字の倍率（マスの大きさに掛かっている分）。 */
+export interface CoverText {
+  atoms: Atom[];
+  scale: number;
+}
+
+/** 表紙の組み方。長さは pt。 */
+export interface CoverInput {
+  trimWidth: number;
+  trimHeight: number;
+  spine: number;
+  bleed: number;
+  /** 左綴じ（横組みの本）。表1（表）が右に来る。 */
+  leftBound: boolean;
+  /** 表1の題・著者名を横組みにする。 */
+  horizontal: boolean;
+  title: CoverText;
+  author: CoverText;
+  spineTitle: CoverText;
+  spineAuthor: CoverText;
+  /** 背に文字を入れる（背幅が狭すぎるときは入れない）。 */
+  spineText: boolean;
+  background: string;
+  frontImage?: string;
+  backImage?: string;
+  images: Record<string, { width: number; height: number }>;
+}
+
+/** 表紙の横の並び：表1・背・表4 の左端（x）。 */
+export function coverParts(c: Pick<CoverInput, "trimWidth" | "spine" | "leftBound">): { front: number; spine: number; back: number; width: number } {
+  const width = c.trimWidth * 2 + c.spine;
+  // 右綴じ（縦組み）の本は、開いて置くと表1が左、表4が右。左綴じはその逆。
+  return c.leftBound ? { back: 0, spine: c.trimWidth, front: c.trimWidth + c.spine, width } : { front: 0, spine: c.trimWidth, back: c.trimWidth + c.spine, width };
+}
+
+/** 背の文字を入れられる最小の背幅（pt）。 */
+const MIN_SPINE_TEXT = 4 * MM;
+
+/**
+ * 表紙（表1・背・表4 を1枚に並べたもの）を組む。地の色、表1・表4の画像（塗り足しまで）、
+ * 表1の題と著者名、背の題と著者名。仕上がりの外の、背の折り目の印も付ける。
+ */
+export function layoutCover(c: CoverInput): PageLayout {
+  const { front, spine, back, width } = coverParts(c);
+  const H = c.trimHeight;
+  const b = c.bleed;
+  const shapes: Shape[] = [];
+  const glyphs: PlacedGlyph[] = [];
+  // 地の色（塗り足しまで）。
+  if (c.background.toLowerCase() !== "#ffffff") shapes.push({ kind: "rect", x: -b, y: -b, w: width + b * 2, h: H + b * 2, fill: c.background });
+  // 表1・表4の画像：外側の3辺は塗り足しまで、背の側は折り目まで。
+  const panel = (x: number, name: string | undefined) => {
+    if (!name) return;
+    const outerLeft = x === 0;
+    const box = { x: outerLeft ? -b : x, y: -b, w: c.trimWidth + b, h: H + b * 2 };
+    const block: ImageBlock = { kind: "image", name, mode: "full", lines: 1, wrap: false, position: "center" };
+    const shape = frameImage(name, c.images[name] ?? FALLBACK_IMAGE, box, true, block).shape;
+    // 透明な部分には地の色が見えるので、入稿用 PDF でも地の色の上に重ねる。
+    if (shape.kind === "image" && c.background.toLowerCase() !== "#ffffff") shape.matte = c.background;
+    shapes.push(shape);
+  };
+  panel(front, c.frontImage);
+  panel(back, c.backImage);
+
+  // 縦に1行ずつ置く（x は行の中心、top は1字目の上端）。
+  const column = (text: CoverText, size: number, right: number, top: number, length: number, align: "start" | "center" | "end", maxLines = 3) => {
+    const base = size / text.scale;
+    const perLine = Math.max(1, Math.floor(length / base + EPS));
+    const lines = breakLines(text.atoms, perLine, 0, { kinsoku: "strong", hanging: false, justify: false }).slice(0, maxLines);
+    lines.forEach((l, i) => {
+      l.align = align;
+      placeLine(glyphs, l, right - size / 2 - i * size * 1.4, top, base, base * 0.5, perLine, shapes);
+    });
+    return lines.length;
+  };
+
+  // 表1：縦組みなら右寄りに題、その左に著者名（地寄せ）。横組みなら上寄りに題、その下に著者名（中央）。
+  const titleSize = c.trimWidth * 0.075;
+  const authorSize = titleSize * 0.55;
+  if (!c.horizontal) {
+    const right = front + c.trimWidth * 0.8;
+    const n = column(c.title, titleSize, right + titleSize / 2, H * 0.12, H * 0.62, "start");
+    column(c.author, authorSize, right - n * titleSize * 1.4 - titleSize * 0.3 + authorSize / 2, H * 0.12, H * 0.74, "end", 2);
+  } else {
+    // 横組み：転置したページに縦に組み、横に戻す（本文の横組みと同じ）。
+    const sub: Shape[] = [];
+    const subGlyphs: PlacedGlyph[] = [];
+    const saved = glyphs.length;
+    const W = H; // 転置したページの幅 = 実際の高さ
+    const place = (text: CoverText, size: number, y: number) => {
+      const base = size / text.scale;
+      const perLine = Math.max(1, Math.floor((c.trimWidth * 0.8) / base + EPS));
+      const lines = breakLines(text.atoms, perLine, 0, { kinsoku: "strong", hanging: false, justify: false }).slice(0, 3);
+      lines.forEach((l, i) => {
+        l.align = "center";
+        placeLine(subGlyphs, l, W - y - i * size * 1.4, c.trimWidth * 0.1, base, base * 0.5, perLine, sub, true);
+      });
+      return lines.length;
+    };
+    const n = place(c.title, titleSize, H * 0.25);
+    place(c.author, authorSize, H * 0.25 + n * titleSize * 1.4 + titleSize * 0.4);
+    const turned = toHorizontal({ index: 0, width: W, height: c.trimWidth, block: { left: 0, top: 0, width: W, height: c.trimWidth }, lineCount: 0, role: "free", headings: [], lines: [], glyphs: subGlyphs, shapes: sub, paper: "#ffffff" });
+    glyphs.length = saved;
+    for (const g of turned.glyphs) glyphs.push({ ...g, x: g.x + front });
+    shapes.push(...turned.shapes);
+  }
+
+  // 背：題を上から、著者名を下に寄せて、どちらも縦に。背幅が狭ければ入れない。
+  if (c.spineText && c.spine >= MIN_SPINE_TEXT) {
+    const size = Math.min(c.spine * 0.6, titleSize * 0.7);
+    const center = spine + c.spine / 2;
+    column(c.spineTitle, size, center + size / 2, H * 0.07, H * 0.58, "start", 1);
+    const aSize = Math.min(size * 0.8, c.spine * 0.5);
+    column(c.spineAuthor, aSize, center + aSize / 2, H * 0.68, H * 0.25, "end", 1);
+  }
+
+  // 背の折り目の印（仕上がりの外。塗り足しのさらに外の、天と地に短い線）。
+  for (const x of [spine, spine + c.spine]) {
+    for (const [y1, y2] of [[-b - 1 * MM, -b - 6 * MM], [H + b + 1 * MM, H + b + 6 * MM]]) {
+      shapes.push({ kind: "line", x1: x, y1, x2: x, y2, width: 0.25, color: "#000000" });
+    }
+  }
+  return { index: 0, width, height: H, block: { left: 0, top: 0, width, height: H }, lineCount: 0, role: "free", headings: [], lines: [], glyphs, shapes, paper: "#ffffff" };
+}

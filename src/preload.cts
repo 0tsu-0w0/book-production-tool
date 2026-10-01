@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("api", {
   setDefaultTemplate: invoke("templates:set-default"),
   exportPdf: invoke("pdf:export"),
   listIccProfiles: invoke("icc:list"),
+  coverPreview: invoke("cover:preview"),
+  exportCover: invoke("cover:export"),
   chooseIccProfile: invoke("icc:choose"),
   beginImages: invoke("images:begin"),
   writeImage: invoke("images:write"),

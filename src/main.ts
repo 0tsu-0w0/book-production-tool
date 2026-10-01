@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { DocumentFormatError, FILE_EXTENSION, parseDocument, serializeDocument, type DocImage, type TategumiDocument } from "./document/document.js";
+import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type TategumiDocument } from "./document/document.js";
 import type { Settings } from "./document/settings.js";
 import { BUILTIN_TEMPLATES, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
+import { typesetCover } from "./engine/cover.js";
+import { checkPdfX } from "./output/check-pdfx.js";
+import { pdfOptions } from "./output/export-pdf.js";
+import { renderPdf } from "./output/pdf.js";
 import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js";
 import { checkLines, findVariants } from "./engine/proof.js";
 import { texToMarkup } from "./engine/tex.js";
@@ -338,6 +342,47 @@ ipcMain.handle("templates:import", async () => {
   }
 });
 
+/** PDF/X-4：印刷条件の ICC プロファイルを読む（入稿用で PDF/X-4 のときだけ）。 */
+function readIccFor(settings: Settings): { icc?: Uint8Array } | { error: string } {
+  if (settings.pdfKind === "screen" || settings.output.pdfStandard !== "x4") return {};
+  if (!settings.output.iccPath) return { error: "PDF/X-4 には、印刷条件の ICC プロファイル（CMYK）が要ります。設定の「書き出し」で選んでください。" };
+  try {
+    return { icc: fs.readFileSync(settings.output.iccPath) };
+  } catch {
+    return { error: `ICC プロファイルが見つかりません：${settings.output.iccPath}` };
+  }
+}
+
+/** 表紙の見本（設定欄に出す）。字形の輪郭は、まだ送っていないものだけ。 */
+ipcMain.handle("cover:preview", (_e, settings: Settings, pageCount: number, images: DocImage[] = []) => {
+  const { table } = fonts.loadTable(settings.font, settings.styles);
+  const r = typesetCover(settings, table, imageInfos(images), pageCount);
+  return { page: r.page, paths: glyphPaths([r.page], table, sentPaths), fontKeys: table.keys, upems: table.faces.map((f) => f.upem), spineMm: r.spineMm, widthMm: r.widthMm, heightMm: r.heightMm };
+});
+
+/** 表紙を PDF に書き出す（入稿用なら本文と同じ PDF/X・トンボ・塗り足し）。 */
+ipcMain.handle("cover:export", async (_e, settings: Settings, pageCount: number, baseName: string, images: DocImage[] = []) => {
+  if (snapshotDir && !autoPdf) return undefined;
+  const iccRead = readIccFor(settings);
+  if ("error" in iccRead) return iccRead;
+  const { canceled, filePath } = autoPdf
+    ? { canceled: false, filePath: path.resolve(autoPdf.replace(/\.pdf$/i, "") + "_表紙.pdf") }
+    : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}_表紙.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
+  if (canceled || !filePath) return undefined;
+  try {
+    const { loaded, table } = fonts.loadTable(settings.font, settings.styles);
+    const r = typesetCover(settings, table, imageInfos(images), pageCount);
+    const options = { ...pdfOptions(settings, path.basename(filePath, ".pdf")), icc: iccRead.icc };
+    const sources = images.map((i) => ({ name: i.name, mime: i.mime, bytes: Buffer.from(i.data, "base64") }));
+    const bytes = await renderPdf([r.page], loaded.map((l) => l.bytes), options, undefined, sources);
+    fs.writeFileSync(filePath, bytes);
+    const check = options.pdfx ? await checkPdfX(bytes, options.standard ?? "x1a") : undefined;
+    return { path: filePath, spineMm: r.spineMm, standard: options.standard, problems: check?.filter((c) => !c.ok).map((c) => c.rule) ?? [] };
+  } catch (e) {
+    return { error: `表紙を書き出せませんでした：${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+
 /** PDF/X-4 に使える ICC プロファイル（OS とアプリのフォルダから探す。一度探したら覚えておく）。 */
 let iccProfiles: { path: string; name: string }[] | undefined;
 ipcMain.handle("icc:list", () => (iccProfiles ??= findCmykProfiles()));
@@ -374,16 +419,9 @@ ipcMain.handle("pdf:export", async (_e, text: string, settings: Settings, baseNa
     : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
   if (canceled || !filePath) return undefined;
 
-  // PDF/X-4：印刷条件の ICC プロファイルを読む（入稿用のときだけ）。
-  let icc: Uint8Array | undefined;
-  if (settings.pdfKind !== "screen" && settings.output.pdfStandard === "x4") {
-    if (!settings.output.iccPath) return { error: "PDF/X-4 には、印刷条件の ICC プロファイル（CMYK）が要ります。設定の「書き出し」で選んでください。" };
-    try {
-      icc = fs.readFileSync(settings.output.iccPath);
-    } catch {
-      return { error: `ICC プロファイルが見つかりません：${settings.output.iccPath}` };
-    }
-  }
+  const iccRead = readIccFor(settings);
+  if ("error" in iccRead) return iccRead;
+  const icc = iccRead.icc;
   const input: PdfWorkerInput = {
     text,
     settings,

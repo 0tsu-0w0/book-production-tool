@@ -215,7 +215,17 @@ export type Shape =
   /** 塗りの輪郭（数式）。m は d の座標をページの座標に写す行列 [a, b, c, d, e, f]。 */
   | { kind: "path"; d: string; m: [number, number, number, number, number, number]; color: string }
   /** 画像。clip があれば、その範囲だけを見せる（全面の画像を塗り足しの外で切る）。画像がなければ枠だけ描く。 */
-  | { kind: "image"; name: string; x: number; y: number; w: number; h: number; clip?: { x: number; y: number; w: number; h: number } };
+  | {
+      kind: "image";
+      name: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      clip?: { x: number; y: number; w: number; h: number };
+      /** 透明な部分の下の色（#rrggbb。なければ白の紙）。入稿用 PDF で透明をなくすときに重ねる。 */
+      matte?: string;
+    };
 
 export interface LineText {
   text: string;
