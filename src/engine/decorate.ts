@@ -43,6 +43,22 @@ export interface MasterSettings {
   openingNombre: boolean;
 }
 
+/**
+ * 名前を付けたマスターページ（DTP-05）。［＃マスター：名前］のページから使う。
+ * 柱とノンブルの中身、飾りを、標準のマスターから変える（柱の位置・大きさは標準のまま）。
+ */
+export interface NamedMaster {
+  name: string;
+  bodyOdd: HeadSource;
+  bodyEven: HeadSource;
+  bodyNombre: boolean;
+  openingOdd: HeadSource;
+  openingEven: HeadSource;
+  openingNombre: boolean;
+  /** 上下の飾り。"inherit" なら標準のまま。 */
+  decoration: Decoration | "inherit";
+}
+
 /** そのページの時点での章題・節題（柱に使う）。 */
 export interface RunningHeads {
   chapter: string;
@@ -68,6 +84,8 @@ export interface PageDecor {
   horizontal?: boolean;
   /** 付記・ノンブルの大きさ（本文に対する割合。既定 0.8）。 */
   noteScale?: number;
+  /** 名前を付けたマスターページ。 */
+  masters?: NamedMaster[];
   paperColor: string;
   textColor: string;
   decoration: Decoration;
@@ -91,7 +109,24 @@ export function pageNumber(page: PageLayout, d: PageDecor): number {
   return d.nombreStart + page.index;
 }
 
-export function decoratePage(page: PageLayout, d: PageDecor, bodySize: number, running: RunningHeads = { chapter: "", section: "" }): void {
+export function decoratePage(page: PageLayout, decor: PageDecor, bodySize: number, running: RunningHeads = { chapter: "", section: "" }): void {
+  // 名前付きのマスターのページは、柱・ノンブル・飾りをそのマスターのものにする。
+  const named = page.master ? decor.masters?.find((m) => m.name === page.master) : undefined;
+  const d: PageDecor = named
+    ? {
+        ...decor,
+        master: {
+          ...decor.master,
+          bodyOdd: named.bodyOdd,
+          bodyEven: named.bodyEven,
+          bodyNombre: named.bodyNombre,
+          openingOdd: named.openingOdd,
+          openingEven: named.openingEven,
+          openingNombre: named.openingNombre,
+        },
+        decoration: named.decoration === "inherit" ? decor.decoration : named.decoration,
+      }
+    : decor;
   page.paper = d.paperColor;
   // 扉・奥付などには柱もノンブルも付けない（隠しノンブル）。
   if (page.role !== "body" && page.role !== "blank") return;

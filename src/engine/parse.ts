@@ -11,6 +11,7 @@ import type { Atom, Block, ImageBlock, SideLine } from "./types.js";
 //   扉      ［＃扉］…［＃／扉］（間の行を1ページの中央に置く）
 //   目次    ［＃目次］（見出しから目次を作って、ここに入れる）
 //   数式    ［＃数式］x^2［＃／数式］（行の中）／［＃別行数式］\int f\,dx［＃／別行数式］（1行に1つ）
+//   マスター ［＃マスター：名前］（このページから使うマスターページ。［＃マスター：標準］で戻す）
 //   画像    ［＃画像：名前］（版面に1ページ）／［＃画像：名前　全面］／［＃画像：名前　5行　回り込み　地］
 
 export interface ParseOptions {
@@ -44,6 +45,23 @@ const MANUAL_TCY = /^［＃縦中横］(.{1,6}?)［＃／縦中横］/;
 export function warichuAtom(text: string): Atom {
   const n = Math.max(1, Math.ceil([...text].length / 2));
   return { warichu: text, cells: Array.from({ length: n }, () => ({ text: "", advance: 0.5 })) };
+}
+
+/** ルビの読みを区切る字（熟語ルビ・モノルビ）。 */
+const RUBY_SEPARATOR = /[|｜]/;
+
+/**
+ * ルビの Atom を作る（DTP-07）。読みを「|」で親文字の数に区切った熟語ルビ（とう|きょう）は、
+ * どの読みも親文字に収まる（2字まで）なら1字ずつのモノルビにして、字の間で改行できるようにする。
+ * 収まらない読みがあれば、熟語全体にかけるグループルビにする（区切りは外す）。
+ */
+export function rubyAtoms(base: string[], reading: string): Atom[] {
+  if (!RUBY_SEPARATOR.test(reading)) return [{ cells: base.map((text) => ({ text })), ruby: reading }];
+  const parts = reading.split(RUBY_SEPARATOR);
+  if (parts.length === base.length && parts.every((p) => p.length > 0 && [...p].length <= 2)) {
+    return base.map((text, k) => ({ cells: [{ text }], ruby: parts[k] }));
+  }
+  return [{ cells: base.map((text) => ({ text })), ruby: parts.join("") }];
 }
 
 /** 圏点の名前と記号。 */
@@ -173,7 +191,7 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
       } else if (line) {
         for (const ch of base) atoms.push({ ...charAtom(ch), sideline: line });
       } else {
-        atoms.push({ cells: base.map((ch) => ({ text: toFullWidth(ch) })), ruby: m[2] });
+        atoms.push(...rubyAtoms(base.map((ch) => toFullWidth(ch)), m[2]));
       }
       i += m[0].length;
       continue;
@@ -185,7 +203,7 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
         base.unshift(atoms.pop()!.cells[0].text);
       }
       if (base.length > 0) {
-        atoms.push({ cells: base.map((text) => ({ text })), ruby: m[1] });
+        atoms.push(...rubyAtoms(base, m[1]));
         i += m[0].length;
         continue;
       }
@@ -236,7 +254,7 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
 }
 
 /** ページ操作の命令。スタイルの名前には使えない。 */
-export const PAGE_COMMANDS = ["改ページ", "改丁", "白ページ", "扉", "目次", "画像", "数式"];
+export const PAGE_COMMANDS = ["改ページ", "改丁", "白ページ", "扉", "目次", "画像", "数式", "マスター"];
 const COMMAND = /^\s*［＃(／?)(改ページ|改丁|白ページ|扉|目次)］\s*$/;
 
 /** 画像：［＃画像：名前］。名前のあとに全角か半角の空白で区切って、置き方を書ける。 */
@@ -249,10 +267,14 @@ export function parseImageOptions(name: string, options: string[]): ImageBlock {
   const wrap = options.includes("回り込み");
   const position = options.includes("天") ? "top" : options.includes("地") ? "bottom" : wrap ? "bottom" : "center";
   const mode = n > 0 ? "lines" : options.includes("全面") ? "full" : "block";
-  return { kind: "image", name, mode, lines: Math.max(1, n), wrap: mode === "lines" && wrap, position };
+  const parity = options.includes("偶数") ? "even" : options.includes("奇数") ? "odd" : undefined;
+  return { kind: "image", name, mode, lines: Math.max(1, n), wrap: mode === "lines" && wrap, position, ...(parity && mode !== "lines" ? { parity } : {}) };
 }
 
 const toHalfWidthDigits = (s: string) => s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
+
+/** マスターページの切り替え：［＃マスター：名前］（「標準」で元に戻す）。 */
+const MASTER = /^\s*［＃マスター[：:]\s*([^［］\s]+)\s*］\s*$/u;
 
 /** 扉の始まりと終わり。parse の最後で、間の段落を1つのまとまりにする。 */
 type Marker = { kind: "tobira-open" } | { kind: "tobira-close" };
@@ -265,6 +287,8 @@ function parseLine(line: string, opts: ParseOptions): Block | Marker {
     const at = line.indexOf("］") + 1;
     return { kind: "para", style: DISPLAY_MATH_STYLE, atoms: [{ cells: [{ text: dm[1], rotate: true, math: { display: true }, src: at }] }] };
   }
+  const ms = MASTER.exec(line);
+  if (ms) return { kind: "master", name: ms[1] === "標準" ? "" : ms[1] };
   const img = IMAGE.exec(line);
   if (img) return parseImageOptions(img[1], img[2].trim().split(/\s+/u).filter(Boolean));
   const c = COMMAND.exec(line);

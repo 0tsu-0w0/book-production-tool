@@ -5,7 +5,8 @@ import type { ImageInfo } from "../engine/types.js";
 import { ImageManager } from "./image-manager.js";
 import { InlineEditor } from "./inline-editor.js";
 import { ProofDialog, type ProofResult } from "./proof-dialog.js";
-import { imposeSpreads } from "../output/imposition.js";
+import { combineSpread, spreadLabel, spreadPairs } from "../output/imposition.js";
+import { parsePageRange } from "../document/range.js";
 import type { Finding } from "../output/preflight.js";
 import { DEFAULT_SETTINGS, leftBound, normalizeSettings, spreadOutput, toFormatOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { formatText } from "../engine/format.js";
@@ -542,10 +543,22 @@ function exportImages() {
     if (!check.go) return setStatus("書き出しをやめました。");
     const name = baseName();
     const zip = settings.output.zipImages;
+    const first = settings.nombreStart;
+    // 書き出すページ（範囲の指定。見開きなら、範囲に入るページを含む見開き）。
+    let wanted: Set<number>;
+    try {
+      wanted = parsePageRange(settings.image.range, first, pageCount);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+      return setStatus("ページの範囲を直してください。");
+    }
+    const spread = spreadOutput(settings, "images");
+    const pairs = spread ? spreadPairs(pageCount, first, leftBound(settings)).filter((p) => [p.right, p.left].some((i) => i !== null && wanted.has(i))) : [];
+    const needed = spread ? pairs.flatMap((p) => [p.right, p.left]).filter((i): i is number => i !== null) : [...wanted].sort((a, b) => a - b);
     const target = await api.beginImages(name, zip);
     if (!target) return setStatus("書き出しを取り消しました。");
-    // 書き出すときだけ、全ページを本体から受け取る。
-    const all = await api.pages(version, Array.from({ length: pageCount }, (_, i) => i));
+    // 書き出すときだけ、要るページを本体から受け取る。
+    const all = await api.pages(version, needed);
     if (!all) {
       await api.endImages(false);
       return setStatus("書き出しの準備中に原稿が変わりました。もう一度書き出してください。");
@@ -554,13 +567,13 @@ function exportImages() {
     const fonts = drawFonts(current).map((f) => ({ paths: f.paths.record(), upem: f.upem }));
     const { format, dpi, jpegQuality } = settings.image;
     const ext = format === "jpeg" ? "jpg" : "png";
-    const first = settings.nombreStart;
     // 見開きなら2ページを1枚に並べる。名前はページ番号（見開きは 002-003 のように）。
-    const imposed = spreadOutput(settings, "images")
-      ? imposeSpreads(all.pages, first, leftBound(settings))
-      : { pages: all.pages, labels: all.pages.map((p) => String(first + p.index).padStart(3, "0")) };
-    const pages = imposed.pages;
-    const names = imposed.labels.map((l) => `${name}_${l}.${ext}`);
+    const byIndex = new Map(all.pages.map((p) => [p.index, p]));
+    const get = (i: number | null) => (i === null ? null : (byIndex.get(i) ?? null));
+    const pages = spread ? pairs.map((p, k) => combineSpread(get(p.right), get(p.left), k)) : needed.map((i) => byIndex.get(i)!);
+    const labels = spread ? pairs.map((p) => spreadLabel(p, first, leftBound(settings))) : needed.map((i) => String(first + i).padStart(3, "0"));
+    // SNS 向け：4枚ずつの組（フォルダ「作品名_01」…）に分ける。
+    const names = labels.map((l, k) => `${settings.image.snsGroups ? `${name}_${String(Math.floor(k / 4) + 1).padStart(2, "0")}/` : ""}${name}_${l}.${ext}`);
     // 画像は画面の裏（Worker）で描き、1枚できるごとに保存する（NF-04）。
     const worker = new Worker(new URL("./export-worker.js", import.meta.url), { type: "module" });
     progress.hidden = false;
@@ -584,7 +597,8 @@ function exportImages() {
         }
       };
       const images = imageManager.images.map((i) => ({ name: i.name, mime: i.mime, bytes: Uint8Array.from(atob(i.data), (c) => c.charCodeAt(0)).buffer }));
-      const req: ExportRequest = { pages, fonts, dpi, format, jpegQuality, gray: settings.output.color === "gray", names, images };
+      const credit = settings.image.credit.trim() ? { text: settings.image.credit.trim(), color: settings.textColor } : undefined;
+      const req: ExportRequest = { pages, fonts, dpi, format, jpegQuality, gray: settings.output.color === "gray", names, images, credit };
       worker.postMessage(req);
     });
     worker.terminate();

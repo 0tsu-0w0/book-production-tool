@@ -16,6 +16,8 @@ export interface ExportRequest {
   names: string[];
   /** 文書の画像（ページに置くもの）。 */
   images: { name: string; mime: string; bytes: ArrayBuffer }[];
+  /** 画像にだけ入れるクレジット（下の余白の中央に小さく）。 */
+  credit?: { text: string; color: string };
 }
 
 export type ExportMessage =
@@ -47,6 +49,7 @@ self.onmessage = async (e: MessageEvent<ExportRequest>) => {
       const canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext("2d")!;
       drawPage(ctx, page, fonts, opts);
+      if (req.credit?.text) drawCredit(ctx, req.credit, width, height, opts.pxPerPt);
       if (req.gray) toGray(ctx, width, height);
       const blob = await canvas.convertToBlob(
         req.format === "jpeg" ? { type: "image/jpeg", quality: req.jpegQuality } : { type: "image/png" },
@@ -59,6 +62,19 @@ self.onmessage = async (e: MessageEvent<ExportRequest>) => {
     post({ type: "error", message: err instanceof Error ? err.message : String(err) });
   }
 };
+
+/** クレジット：下端から 3mm の位置に、6pt の文字で中央にそろえて書く（PDF には入れない）。 */
+function drawCredit(ctx: OffscreenCanvasRenderingContext2D, credit: { text: string; color: string }, width: number, height: number, pxPerPt: number) {
+  const mm = (72 / 25.4) * pxPerPt;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = `${6 * pxPerPt}px "Yu Gothic UI", "Hiragino Sans", sans-serif`;
+  ctx.fillStyle = credit.color;
+  ctx.globalAlpha = 0.6;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(credit.text, width / 2, height - 3 * mm);
+  ctx.globalAlpha = 1;
+}
 
 /** 描いた画像を輝度（Rec. 601）でグレーにする。PDF のグレースケールと同じ式。 */
 function toGray(ctx: OffscreenCanvasRenderingContext2D, width: number, height: number) {

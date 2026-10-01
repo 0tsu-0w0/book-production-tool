@@ -1,11 +1,11 @@
-import type { Decoration, HeadSource, MasterSettings, PageDecor, Placement } from "../engine/decorate.js";
+import type { Decoration, HeadSource, MasterSettings, NamedMaster, PageDecor, Placement } from "../engine/decorate.js";
 import type { FormatOptions } from "../engine/format.js";
 import type { ParseOptions } from "../engine/parse.js";
 import type { Typography } from "../engine/spacing.js";
 import type { Kinsoku, LayoutSpec } from "../engine/types.js";
 import { DEFAULT_STYLES, normalizeStyles, type StyleSheet } from "./styles.js";
 
-export type { Decoration, HeadSource, MasterSettings, Placement };
+export type { Decoration, HeadSource, MasterSettings, NamedMaster, Placement };
 
 // 文書ごとの設定。文書ファイルに保存され、同じ設定なら同じ組版になる（NF-05）。
 
@@ -57,6 +57,12 @@ export interface ImageSettings {
   format: "png" | "jpeg";
   dpi: number;
   jpegQuality: number;
+  /** 書き出すページ（ノンブルで「1-10, 15, 20-」。空なら全ページ。OUT-07）。 */
+  range: string;
+  /** SNS 向けに4枚ずつの組（フォルダ）に分ける（OUT-08）。 */
+  snsGroups: boolean;
+  /** 画像にだけ入れるクレジット（下の余白に小さく。空なら入れない。OUT-08）。 */
+  credit: string;
 }
 
 /** 判型と版面を自分で決めるときの設定（DTP-01〜03）。 */
@@ -196,6 +202,8 @@ export interface Settings {
   blankPageNombre: boolean;
   /** 柱とマスターページ（詳しい組み方のとき。DTP-05）。 */
   master: MasterSettings;
+  /** 名前を付けたマスターページ（［＃マスター：名前］で使う）。 */
+  masters: NamedMaster[];
   /** 約物の詰めとルビの掛け方（DTP-06・07）。 */
   typography: Typography;
   /** 段落スタイル・文字スタイル（DTP-04）。 */
@@ -316,6 +324,7 @@ export const DEFAULT_SETTINGS: Settings = {
     openingEven: "none",
     openingNombre: true,
   },
+  masters: [],
   // 既定は全角ベタ組み（参照元と同じ）。JIS 準拠は設定で選ぶ。
   typography: { mode: "grid", lineHeadBracket: "full", oikomi: true, rubyOverhang: true },
   styles: DEFAULT_STYLES,
@@ -364,7 +373,7 @@ export const DEFAULT_SETTINGS: Settings = {
   decoColor1: "#9e3d3f",
   decoColor2: "#223a70",
   font: null,
-  image: { format: "png", dpi: 350, jpegQuality: 0.92 },
+  image: { format: "png", dpi: 350, jpegQuality: 0.92, range: "", snsGroups: false, credit: "" },
   pdfKind: "print",
   output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1 },
 };
@@ -487,6 +496,10 @@ export function normalizeSettings(input: unknown): Settings {
       out.pages = normalizePages(v);
       continue;
     }
+    if (key === "masters") {
+      out.masters = normalizeMasters(v);
+      continue;
+    }
     if (def !== null && typeof def === "object" && !Array.isArray(def)) {
       if (v && typeof v === "object") {
         const merged = out[key] as Record<string, unknown>;
@@ -527,6 +540,32 @@ export function normalizeSettings(input: unknown): Settings {
   return s;
 }
 
+const HEAD_SOURCES: HeadSource[] = ["none", "book-title", "chapter", "section"];
+
+function normalizeMasters(v: unknown): NamedMaster[] {
+  if (!Array.isArray(v)) return [];
+  const head = (x: unknown, def: HeadSource): HeadSource => (HEAD_SOURCES.includes(x as HeadSource) ? (x as HeadSource) : def);
+  const seen = new Set<string>();
+  return v
+    .filter((m): m is Record<string, unknown> => !!m && typeof m === "object" && typeof (m as { name?: unknown }).name === "string")
+    .filter((m) => {
+      const name = m.name as string;
+      if (!name || /[［］＃／：:\s]/u.test(name) || name === "標準" || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    })
+    .map((m) => ({
+      name: m.name as string,
+      bodyOdd: head(m.bodyOdd, "none"),
+      bodyEven: head(m.bodyEven, "none"),
+      bodyNombre: m.bodyNombre !== false,
+      openingOdd: head(m.openingOdd, "none"),
+      openingEven: head(m.openingEven, "none"),
+      openingNombre: m.openingNombre !== false,
+      decoration: typeof m.decoration === "string" ? (m.decoration as NamedMaster["decoration"]) : "inherit",
+    }));
+}
+
 function normalizePages(v: unknown): PageStructure {
   const src = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
   const items = (list: unknown): PageItem[] =>
@@ -555,6 +594,7 @@ export function toPageDecor(s: Settings): PageDecor {
   const { note1, note2, note2Faint, nombre, nombreStart, placement, spread, border, blankPageNombre, paperColor, textColor, decoration, decoColor1, decoColor2 } = s;
   return {
     mode: s.layoutMode,
+    masters: s.masters,
     // 柱の書名が空なら、書誌の書名を使う。
     master: { ...s.master, bookTitle: s.master.bookTitle || s.bookInfo.title },
     note1,

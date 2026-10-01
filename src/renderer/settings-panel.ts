@@ -1,3 +1,4 @@
+import { MasterEditor } from "./master-editor.js";
 import { PageStructureEditor } from "./page-structure-editor.js";
 import { StyleEditor } from "./style-editor.js";
 import {
@@ -41,6 +42,7 @@ type Field =
   | { kind: "styles" }
   | { kind: "pages" }
   | { kind: "custom"; id: string }
+  | { kind: "masters" }
   | { kind: "info"; render: (s: Settings) => string | null; tone?: "warning"; when?: (s: Settings) => boolean }
   | { kind: "button"; label: string; action: string };
 
@@ -274,6 +276,7 @@ function sections(): Section[] {
           ],
         },
         { kind: "number", path: "master.sizePt", label: "柱・ノンブルの文字サイズ", min: 5, max: 14, step: 0.5, unit: "pt", when: isBook },
+        { kind: "masters" },
         { kind: "number", path: "master.gapMm", label: "版面からの距離", min: 1, max: 20, step: 0.5, unit: "mm", when: isBook },
         { kind: "info", when: isBook, render: () => "本文ページ" },
         { kind: "select", path: "master.bodyOdd", label: "奇数ページ（左）の柱", options: HEAD_SOURCES, when: isBook },
@@ -361,6 +364,9 @@ function sections(): Section[] {
         { kind: "select", path: "image.dpi", label: "画像の解像度", numeric: true, options: DPI_OPTIONS },
         { kind: "number", path: "image.jpegQuality", label: "JPEGの品質", min: 0.5, max: 1, step: 0.01, when: (s) => s.image.format === "jpeg" },
         { kind: "check", path: "output.zipImages", label: "画像を1つの ZIP にまとめる" },
+        { kind: "text", path: "image.range", label: "書き出すページ（画像。空なら全ページ）", placeholder: "例：1-10, 15, 20-" },
+        { kind: "check", path: "image.snsGroups", label: "SNS 向けに4枚ずつの組（フォルダ）に分ける" },
+        { kind: "text", path: "image.credit", label: "画像にだけ入れるクレジット（下の余白に小さく）", placeholder: "例：© 山田花子／tategumi" },
         { kind: "select", path: "output.paper", label: "本文用紙（背幅の計算）", options: [...Object.keys(PAPERS).map((k): Opt => [k, `${k}（1枚 ${PAPERS[k]}mm）`]), [CUSTOM_PAPER, CUSTOM_PAPER]] },
         { kind: "number", path: "output.paperThicknessMm", label: "紙1枚の厚さ", min: 0.03, max: 0.5, step: 0.005, unit: "mm", when: (s) => s.output.paper === CUSTOM_PAPER },
         {
@@ -560,6 +566,8 @@ export class SettingsPanel {
         return this.buildColor(field.path, field.label, field.palette, title);
       case "styles":
         return this.buildStyles();
+      case "masters":
+        return new MasterEditor(this.settings.masters, () => this.onChange(this.settings)).element;
       case "custom":
         return this.custom.get(field.id)?.() ?? document.createElement("div");
       case "pages":

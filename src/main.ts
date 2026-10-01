@@ -399,9 +399,15 @@ ipcMain.handle("images:begin", async (_e, baseName: string, zip: boolean) => {
 
 ipcMain.handle("images:write", (_e, name: string, bytes: ArrayBuffer) => {
   if (!imageTarget) throw new Error("書き出し先が決まっていません。");
-  const file = path.basename(name);
+  // 名前は「ファイル名」か「フォルダ名/ファイル名」（SNS 向けの組）。それより深い場所や上のフォルダには書かない。
+  const parts = name.split(/[\\/]/).map((p) => path.basename(p)).filter((p) => p && p !== "." && p !== "..").slice(-2);
+  const file = parts.join("/");
   if (imageTarget.kind === "zip") imageTarget.zip.add(file, new Uint8Array(bytes));
-  else fs.writeFileSync(path.join(imageTarget.dir, file), Buffer.from(bytes));
+  else {
+    const target = path.join(imageTarget.dir, ...parts);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, Buffer.from(bytes));
+  }
 });
 
 /** ok が false なら、書きかけの ZIP を消す（フォルダに書いた画像はそのまま）。 */

@@ -211,7 +211,8 @@ export function convertInline(src: string): string {
     if (base === "ruby") {
       r.optional();
       const rb = r.group() ?? "";
-      const rt = (r.group() ?? "").replace(/\|/g, "");
+      // 読みの「|」は残す（熟語ルビ・モノルビとして組む）。
+      const rt = r.group() ?? "";
       out += `｜${convertInline(rb)}《${rt}》`;
       continue;
     }

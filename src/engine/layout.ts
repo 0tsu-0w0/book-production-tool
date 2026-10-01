@@ -265,12 +265,16 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   const current = () => pages[pages.length - 1];
   /** ページごとの画像（置く場所は placePage で決める）。 */
   const images: ImagePlacement[][] = [[]];
+  // ページごとのマスターページの名前（空なら標準）と、いま使っているマスター。
+  let currentMaster = "";
+  const masters: string[] = [""];
   /** 本文を回り込ませている画像：このページの from〜to の行は chars 字だけ短くする。 */
   let wrap: { page: number; from: number; to: number; chars: number; top: boolean } | null = null;
   const newPage = (role: PageRole = flowRole) => {
     pages.push([]);
     roles.push(role);
     images.push([]);
+    masters.push(currentMaster);
     used = 0;
   };
   /** 今のページに何か入っていれば、次のページへ進む。 */
@@ -390,6 +394,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         breakPage();
         roles[roles.length - 1] = "blank";
         break;
+      case "master":
+        // 今のページにまだ何もなければ、このページから。あれば次のページから。
+        currentMaster = block.name;
+        if (current().length === 0) masters[masters.length - 1] = currentMaster;
+        break;
       case "pagegroup":
         placeGroup(block);
         break;
@@ -441,6 +450,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   function placeImage(block: ImageBlock) {
     if (block.mode !== "lines") {
       breakPage();
+      // 偶数・奇数ページの指定：合わなければ白ページを1枚入れる。
+      if (block.parity && isOdd(pages.length - 1) !== (block.parity === "odd")) {
+        roles[roles.length - 1] = "blank";
+        newPage();
+      }
       roles[roles.length - 1] = "image";
       images[images.length - 1].push({ block, slot: 0 });
       return;
@@ -526,8 +540,13 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     pages.pop();
     roles.pop();
     images.pop();
+    masters.pop();
   }
-  return pages.map((lines, i) => placePage(lines, i, spec, roles[i], images[i]));
+  return pages.map((lines, i) => {
+    const page = placePage(lines, i, spec, roles[i], images[i]);
+    if (masters[i]) page.master = masters[i];
+    return page;
+  });
 }
 
 interface ImagePlacement {

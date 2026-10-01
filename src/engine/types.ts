@@ -84,6 +84,8 @@ export type Block =
   | { kind: "pad"; multiple: number; reserve: number }
   /** 目次を入れる場所（組版の前に、見出しから作った段落に置き換える）。 */
   | { kind: "toc" }
+  /** ここから使うマスターページ（名前。空なら標準のマスター）。DTP-05。 */
+  | { kind: "master"; name: string }
   /** 画像（DTP-12）。 */
   | ImageBlock
   /** 新しいページから始めて流し込み、終わったら改ページする段落のまとまり（目次）。そのページの種類は role。 */
@@ -101,6 +103,8 @@ export interface ImageBlock {
   wrap: boolean;
   /** 行の中での位置：天・中央・地。 */
   position: "top" | "center" | "bottom";
+  /** 全面・版面の画像を置くページ：偶数ページか奇数ページか（扉絵を章扉と向かい合わせるときなど）。 */
+  parity?: "even" | "odd";
 }
 
 /** 画像の大きさ（ピクセル）。縦横の比を決めるのに使う。 */
@@ -222,6 +226,8 @@ export interface PageLayout {
   /** このページに入った行数（空行を含む）。 */
   lineCount: number;
   role: PageRole;
+  /** このページのマスターページの名前（なければ標準のマスター）。 */
+  master?: string;
   /** このページで始まる見出し（柱に使う）。 */
   headings: { level: 1 | 2; text: string }[];
   /** このページの行の文字（ルビを除く）。段落の最初の行・最後の行か（校正の補助に使う）。 */

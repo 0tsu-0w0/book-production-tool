@@ -50,10 +50,15 @@ export function combineSpread(right: DrawPage | null, left: DrawPage | null, ind
 
 /** ページを見開きにまとめる。名前はページ番号を右→左の順につないだもの（例：002-003）。 */
 export function imposeSpreads(pages: DrawPage[], firstPageNumber: number, leftBound = false): { pages: DrawPage[]; labels: string[] } {
-  const num = (i: number) => String(firstPageNumber + i).padStart(3, "0");
   const pairs = spreadPairs(pages.length, firstPageNumber, leftBound);
   return {
     pages: pairs.map((p, i) => combineSpread(p.right === null ? null : pages[p.right], p.left === null ? null : pages[p.left], i)),
-    labels: pairs.map((p) => (leftBound ? [p.left, p.right] : [p.right, p.left]).filter((v): v is number => v !== null).map(num).join("-")),
+    labels: pairs.map((p) => spreadLabel(p, firstPageNumber, leftBound)),
   };
+}
+
+/** 見開きの名前（読む順にページ番号をつなぐ。例：002-003）。 */
+export function spreadLabel(p: Spread, firstPageNumber: number, leftBound = false): string {
+  const num = (i: number) => String(firstPageNumber + i).padStart(3, "0");
+  return (leftBound ? [p.left, p.right] : [p.right, p.left]).filter((v): v is number => v !== null).map(num).join("-");
 }
