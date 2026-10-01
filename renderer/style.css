@@ -1,0 +1,167 @@
+:root {
+  --bg: #efece6;
+  --panel: #fbfaf7;
+  --ink: #1f1d1a;
+  --muted: #6b665d;
+  --line: #d9d4ca;
+  --accent: #2f5d8a;
+  --accent-ink: #ffffff;
+  --danger: #a8322d;
+  --warn-bg: #fdf1dc;
+  --warn-ink: #7a4b00;
+  --focus: #2f5d8a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1b19;
+    --panel: #252421;
+    --ink: #ebe7df;
+    --muted: #a39d92;
+    --line: #3b3935;
+    --accent: #6a9bd0;
+    --accent-ink: #10151b;
+    --danger: #e0716b;
+    --warn-bg: #3a2e18;
+    --warn-ink: #f0c77a;
+    --focus: #8fb8e6;
+  }
+}
+
+* { box-sizing: border-box; }
+/* display を指定した要素でも、hidden 属性で確実に隠す。 */
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 "Yu Gothic UI", "Hiragino Sans", system-ui, sans-serif;
+}
+button, select, input, textarea { font: inherit; color: inherit; }
+button, select, input[type="text"], input[type="number"] {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+button { cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.danger { color: var(--danger); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.spacer { flex: 1; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0; }
+
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.toolbar .group { display: flex; gap: 4px; }
+.segmented button { border-radius: 0; margin-left: -1px; }
+.segmented button:first-child { border-radius: 4px 0 0 4px; }
+.segmented button:last-child { border-radius: 0 4px 4px 0; }
+.segmented button[aria-checked="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+
+main { display: grid; grid-template-columns: minmax(300px, 32%) 1fr 340px; min-height: 0; }
+
+.editor { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+.assist { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.assist button { padding: 2px 8px; font-size: 12px; }
+textarea#source {
+  width: 100%; height: 100%; resize: none; border: 0; padding: 14px 16px;
+  background: var(--panel);
+  font: 15px/1.9 "Yu Mincho", "Hiragino Mincho ProN", serif;
+}
+textarea#source:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+.editor-status { padding: 4px 12px; border-top: 1px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.preview { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+.stage { position: relative; overflow: auto; display: flex; align-items: center; justify-content: center; gap: 0; padding: 16px; min-height: 0; }
+.stage canvas { box-shadow: 0 1px 3px rgba(0,0,0,.18), 0 6px 20px rgba(0,0,0,.08); background: #fff; }
+.stage .spread { display: flex; gap: 0; }
+.stage .spread .blank { background: transparent; box-shadow: none; }
+.stage.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); align-content: start; gap: 14px; }
+.stage.grid figure { margin: 0; cursor: pointer; text-align: center; }
+.stage.grid figure canvas { width: 100%; height: auto; }
+.stage.grid figcaption { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.stage.grid figure:hover canvas, .stage.grid figure:focus-visible canvas { outline: 2px solid var(--accent); }
+.pager { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 6px; border-top: 1px solid var(--line); }
+#page-label { min-width: 6em; text-align: center; font-variant-numeric: tabular-nums; }
+
+.settings { overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 4px 0 24px; }
+.settings details { border-bottom: 1px solid var(--line); }
+.settings summary { padding: 10px 14px; font-weight: 600; cursor: pointer; }
+.settings .fields { padding: 0 14px 12px; display: grid; gap: 8px; }
+.field { display: grid; gap: 3px; }
+.field > span { color: var(--muted); font-size: 12px; }
+.field.inline { grid-template-columns: 1fr auto; align-items: center; }
+.field.check { display: flex; gap: 6px; align-items: center; }
+.field select, .field input[type="text"], .field textarea { width: 100%; }
+.field input[type="number"] { width: 6em; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+.swatches button {
+  width: 22px; height: 22px; padding: 0; border-radius: 3px; border: 1px solid var(--line);
+}
+.swatches button[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.swatches input[type="color"] { width: 30px; height: 24px; padding: 0; border: 1px solid var(--line); background: none; }
+.warning { background: var(--warn-bg); color: var(--warn-ink); padding: 6px 8px; border-radius: 4px; font-size: 12px; }
+.computed { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.statusbar { display: flex; gap: 12px; align-items: center; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); min-height: 28px; }
+.statusbar progress { width: 200px; }
+
+dialog { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); max-width: min(900px, 90vw); width: 900px; }
+dialog h2 { margin: 0 0 4px; font-size: 16px; }
+dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 12px 0 0; }
+dialog menu .spacer { flex: 1; }
+dialog h3 { margin: 16px 0 6px; font-size: 13px; }
+#template-dialog { width: 640px; }
+.template-pane { display: grid; grid-template-columns: 1fr 180px; gap: 12px; margin-top: 8px; }
+.template-pane select { width: 100%; font-size: 13px; }
+.template-actions { display: flex; flex-direction: column; gap: 8px; }
+#tpl-name { flex: 1; }
+.page-items { display: flex; flex-direction: column; gap: 4px; }
+.page-item { display: grid; grid-template-columns: 1fr auto auto auto; gap: 4px; align-items: center; }
+.page-item textarea { grid-column: 1 / -1; width: 100%; min-height: 3.5em; font: inherit; }
+.page-item button { padding: 2px 6px; }
+.diff { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 4px; font: 13px/1.7 "Yu Mincho", "Hiragino Mincho ProN", serif; }
+.diff .pair { display: grid; grid-template-columns: 4em 1fr; border-bottom: 1px solid var(--line); }
+.diff .no { color: var(--muted); padding: 4px 8px; font: 12px/1.7 system-ui, sans-serif; text-align: right; }
+.diff del, .diff ins { display: block; padding: 2px 8px; text-decoration: none; white-space: pre-wrap; }
+.diff del { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.diff ins { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.diff .removed { color: var(--muted); font-style: italic; }
+
+#check-dialog { width: 560px; }
+.check-list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.check-list li { padding: 6px 8px 6px 28px; border-radius: 4px; position: relative; font-size: 13px; line-height: 1.6; }
+.check-list li::before { position: absolute; left: 8px; top: 6px; font-weight: bold; }
+.check-list li.error { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.check-list li.error::before { content: "×"; color: var(--danger); }
+.check-list li.warning { background: var(--warn-bg); color: var(--warn-ink); }
+.check-list li.warning::before { content: "!"; }
+.check-list li.info { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.check-list li.info::before { content: "i"; color: var(--accent); }
+.stage.gray canvas { filter: grayscale(1); }
+.image-item { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: start; padding: 6px 0; border-top: 1px solid var(--line); }
+.image-item img { width: 64px; height: 64px; object-fit: contain; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 3px; }
+.image-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.image-body input[type="text"] { flex: 1; min-width: 0; }
+.image-body input[type="number"] { width: 4em; }
+dialog.floating { position: fixed; inset: 64px 24px auto auto; margin: 0; width: 460px; max-height: 75vh; overflow: auto; box-shadow: 0 8px 28px rgba(0,0,0,0.18); z-index: 10; }
+.floating-head { display: flex; gap: 8px; align-items: center; }
+.floating-head .spacer { flex: 1; }
+.proof-body h3 { margin: 12px 0 4px; font-size: 13px; }
+.proof-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.proof-list li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.proof-tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+.proof-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+button.link { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; }
+.inline-edit { position: fixed; z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; box-shadow: 0 8px 28px rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 6px; }
+.inline-edit textarea { width: 100%; font: 15px/1.7 "Yu Mincho", "Hiragino Mincho ProN", serif; resize: vertical; }
+.preview canvas { cursor: text; }
+/* TeX の記法のとき：欧文を等幅の欧文フォントで表示する（和文フォントでは \ が ¥ に見えるため）。 */
+textarea#source.tex { font-family: "Cascadia Mono", Consolas, Menlo, "Yu Gothic UI", "Hiragino Sans", sans-serif; }

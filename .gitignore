@@ -1,0 +1,8 @@
+# 依存関係と、作るたびに生まれるもの
+node_modules/
+dist/
+release/
+# 確認用の出力（見本の PDF・画像など）
+out/
+ci/
+ci-fonts.txt

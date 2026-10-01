@@ -1,0 +1,68 @@
+# Mac での確認：テスト、開発版と .dmg のアプリでの起動と書き出し、PDF/X-1a の検査。
+# 結果（PDF・画面・.dmg）は、この実行の Artifacts からダウンロードできる。
+name: mac
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      # 署名の証明書は使わない（簡易署名だけ。package.json の mac.identity）。
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存関係を入れる
+        run: npm ci
+
+      - name: テスト
+        run: npm test
+
+      - name: Mac のフォントを調べる
+        run: node scripts/ci-fonts.mjs | tee ci-fonts.txt
+
+      - name: 確認用の文書を作る
+        run: node scripts/ci-sample.mjs ci
+
+      - name: 開発版で起動して、PDF と画像を書き出す
+        run: |
+          npx electron . --snapshot=ci/dev-vertical --doc=ci/vertical.tategumi --export-pdf=ci/dev-vertical.pdf --export-images=ci/dev-vertical-images
+          npx electron . --snapshot=ci/dev-horizontal --doc=ci/horizontal.tategumi --export-pdf=ci/dev-horizontal.pdf
+          npx electron . --snapshot=ci/dev-tex --doc=ci/math.tex --export-pdf=ci/dev-tex.pdf
+
+      - name: Mac のフォント（ヒラギノ）で PDF を書き出す
+        run: node dist/cli.js ci/hiragino.tategumi ci/cli-hiragino.pdf | tee ci/cli-hiragino.txt
+
+      - name: .dmg を作る
+        run: npm run dist:mac
+
+      - name: 作ったアプリで起動して、PDF を書き出す
+        run: |
+          APP="$(ls -d release/mac*/tategumi.app | head -1)"
+          echo "アプリ：$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | tee ci/codesign.txt || true
+          lipo -archs "$APP/Contents/MacOS/tategumi" | tee ci/archs.txt
+          "$APP/Contents/MacOS/tategumi" --snapshot=ci/app-vertical --doc=ci/vertical.tategumi --export-pdf=ci/app-vertical.pdf
+
+      - name: PDF/X-1a の検査
+        run: node scripts/ci-check-pdf.mjs ci/dev-vertical.pdf ci/dev-horizontal.pdf ci/dev-tex.pdf ci/app-vertical.pdf ci/cli-hiragino.pdf
+
+      - name: 結果を残す
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-results
+          path: |
+            ci/
+            ci-fonts.txt
+            release/*.dmg
+          retention-days: 14

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:">
+  <title>tategumi</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="group">
+      <button data-command="new" title="新規（Ctrl+N）">新規</button>
+      <button data-command="open" title="開く（Ctrl+O）">開く</button>
+      <button data-command="save" title="上書き保存（Ctrl+S）">保存</button>
+    </div>
+    <div class="group segmented" role="radiogroup" aria-label="表示">
+      <button data-view="single" role="radio" aria-checked="true">1ページ</button>
+      <button data-view="spread" role="radio" aria-checked="false">見開き</button>
+      <button data-view="grid" role="radio" aria-checked="false">一覧</button>
+    </div>
+    <label class="check"><input type="checkbox" id="guides"> 仕上がり線と塗り足し</label>
+    <span class="spacer"></span>
+    <button data-command="export-images">画像を書き出す</button>
+    <button data-command="export-pdf" class="primary">PDFを書き出す</button>
+  </header>
+
+  <main>
+    <section class="editor" aria-label="原稿">
+      <div class="assist" role="toolbar" aria-label="入力補助">
+        <button data-insert="ruby" title="選んだ文字にルビを付ける">ルビ</button>
+        <button data-insert="kenten" title="選んだ文字に圏点を付ける">圏点</button>
+        <button data-insert="dash" title="――">ダッシュ</button>
+        <button data-insert="ellipsis" title="……">三点リーダ</button>
+        <button data-insert="heading" title="行頭に ＃ を入れる">見出し</button>
+        <button data-insert="pagebreak" title="＝＝＝ の行を入れる">改ページ</button>
+        <button data-insert="odd" title="［＃改丁］の行を入れる（次の奇数ページから）">改丁</button>
+        <button data-insert="blankpage" title="［＃白ページ］の行を入れる">白ページ</button>
+        <button data-command="proof" title="表記ゆれ・禁則違反・段落末の1文字だけの行（Ctrl+K）">校正</button>
+        <button data-insert="tobira" title="選んだ行を［＃扉］…［＃／扉］で囲む（1ページの中央に置く）">扉</button>
+        <span class="spacer"></span>
+        <button data-insert="end" title="文末へ移動">文末へ</button>
+        <button data-insert="clear" class="danger" title="本文を消す">本文クリア</button>
+      </div>
+      <textarea id="source" spellcheck="false" aria-label="原稿"></textarea>
+      <div class="editor-status" id="counts">–</div>
+    </section>
+
+    <section class="preview" aria-label="プレビュー">
+      <div class="stage" id="stage"></div>
+      <nav class="pager" aria-label="ページ送り">
+        <button id="next" title="次のページ（左へ）">◀ 次</button>
+        <span id="page-label">– / –</span>
+        <button id="prev" title="前のページ（右へ）">前 ▶</button>
+      </nav>
+    </section>
+
+    <aside class="settings" id="settings" aria-label="設定"></aside>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status" role="status"></span>
+    <progress id="progress" hidden></progress>
+  </footer>
+
+  <dialog id="diff-dialog">
+    <form method="dialog">
+      <h2>自動整形で変わる行</h2>
+      <p class="hint">原稿そのものは書き換えません。組版のときにだけ、この整形をかけます。</p>
+      <div id="diff-body" class="diff"></div>
+      <menu><button value="close" class="primary">閉じる</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="proof-dialog" class="floating" aria-labelledby="proof-title">
+    <div class="floating-head">
+      <h2 id="proof-title">校正の補助</h2>
+      <span class="spacer"></span>
+      <button type="button" id="proof-rerun">もう一度調べる</button>
+      <button type="button" id="proof-close" aria-label="閉じる">×</button>
+    </div>
+    <p class="hint">表記ゆれは原稿から、禁則違反と段落末の1文字だけの行は組んだ結果から探します。選ぶと、その場所を開きます。</p>
+    <div id="proof-body" class="proof-body"></div>
+  </dialog>
+
+  <dialog id="check-dialog">
+    <form method="dialog">
+      <h2>書き出す前の検査</h2>
+      <ul id="check-list" class="check-list"></ul>
+      <menu>
+        <button value="cancel">やめる</button>
+        <button value="go" class="primary" id="check-go">このまま書き出す</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="template-dialog">
+    <form method="dialog">
+      <h2>テンプレート</h2>
+      <p class="hint">判型・版面・スタイル・柱・ページ構成・書き出しの設定をまとめたものです。原稿と、書名・著者名は含みません。</p>
+      <div class="template-pane">
+        <select id="tpl-list" size="10" aria-label="テンプレートの一覧"></select>
+        <div class="template-actions">
+          <button type="button" id="tpl-new" class="primary">これで新規作成</button>
+          <button type="button" id="tpl-apply">今の文書に適用</button>
+          <button type="button" id="tpl-default">新規作成の既定にする</button>
+          <button type="button" id="tpl-delete" class="danger">削除</button>
+          <p class="hint" id="tpl-note"></p>
+        </div>
+      </div>
+      <h3>今の設定をテンプレートとして保存</h3>
+      <div class="row">
+        <input type="text" id="tpl-name" placeholder="テンプレートの名前" aria-label="テンプレートの名前" maxlength="80">
+        <button type="button" id="tpl-save">保存</button>
+      </div>
+      <label class="check"><input type="checkbox" id="tpl-save-default"> 保存したテンプレートを新規作成の既定にする</label>
+      <p class="hint" id="tpl-default-note"></p>
+      <menu>
+        <button type="button" id="tpl-import">ファイルから読み込む…</button>
+        <button type="button" id="tpl-folder">保存先のフォルダを開く</button>
+        <span class="spacer"></span>
+        <button value="close">閉じる</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script type="module" src="../dist/renderer/renderer.js"></script>
+</body>
+</html>
