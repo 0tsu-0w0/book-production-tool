@@ -1,6 +1,6 @@
 {
   "name": "tategumi",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -45,7 +45,32 @@
       "!dist/**/*.map",
       "renderer/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "!**/*.map",
+      "!**/*.d.ts",
+      "!**/*.d.mts",
+      "!**/*.md",
+      "!**/LICENSE.md",
+      "!node_modules/@mathjax/src/{mjs,ts,bundle,components,tsconfig}/**",
+      "!node_modules/@mathjax/src/cjs/{a11y,ui}/**",
+      "!node_modules/@mathjax/src/cjs/output/chtml/**",
+      "!node_modules/@mathjax/src/cjs/output/chtml.js",
+      "!node_modules/@mathjax/src/cjs/input/{mathml,asciimath}/**",
+      "!node_modules/@mathjax/src/cjs/input/{mathml,asciimath}.js",
+      "!node_modules/@mathjax/mathjax-newcm-font/{mjs,svg,chtml}/**",
+      "!node_modules/@mathjax/mathjax-newcm-font/*.js",
+      "!node_modules/@mathjax/mathjax-newcm-font/cjs/chtml/**",
+      "!node_modules/@mathjax/mathjax-newcm-font/cjs/chtml.js",
+      "!node_modules/speech-rule-engine/**",
+      "!node_modules/mj-context-menu/**",
+      "!node_modules/mhchemparser/**",
+      "!node_modules/pdf-lib/{dist,es,ts3.4,src}/**",
+      "!node_modules/pdf-lib/yarn.lock",
+      "!node_modules/@pdf-lib/fontkit/{es,lib}/**",
+      "!node_modules/@pdf-lib/fontkit/dist/{fontkit.es.js,fontkit.es.min.js,fontkit.umd.min.js}",
+      "!node_modules/@pdf-lib/standard-fonts/dist/**",
+      "!node_modules/@pdf-lib/upng/dist/**",
+      "!node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm"
     ],
     "asar": true,
     "fileAssociations": [
@@ -96,6 +121,7 @@
     ],
     "dmg": {
       "title": "tategumi ${version}"
-    }
+    },
+    "publish": null
   }
 }

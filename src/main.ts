@@ -17,7 +17,8 @@ import { SAMPLE_TEXT } from "./sample.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
-const fonts = new FontService();
+// PC のフォントを調べた結果は控えておき、次の起動では変わったファイルだけを調べる。
+const fonts = new FontService({ cacheFile: path.join(app.getPath("userData"), "font-cache.json") });
 
 // 確認用：--snapshot=<フォルダ> で起動すると、先頭のページを PNG に書き出して終了する。--doc=<文書> でその文書を開く。
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);

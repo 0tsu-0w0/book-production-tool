@@ -69,6 +69,12 @@ npm run dist:mac   # Mac：release/tategumi-<版>-mac.dmg（Intel と Apple Sili
 | 文書 | .tategumi 文書の保存・読み込み（形式の版番号つき）、.txt の読み込み（UTF-8 / Shift_JIS）、自動の控えと異常終了からの復元、保存していない変更の確認 | NF-07 |
 | 性能 | 10万字（287ページ）で、1文字直してからプレビューが描き直されるまで中央値 約0.2秒。PDF と画像の書き出しは別スレッドで行い、進み具合を表示する | NF-03・04 |
 
+### 速さと大きさ（0.4.1 時点。10万字・287ページの文書、Windows）
+
+- 1文字直してからプレビューが描き直されるまで：中央値 約0.13秒（組版 約55ms・受け渡し 約15ms・描画 約50ms）。
+- 起動：同梱のフォントで組むときは PC のフォントを調べない。PC のフォントの一覧は控え（ユーザーデータの font-cache.json）を使い、2回目からは 0.5秒 → 0.04秒。
+- 配布物：アプリ本体（app.asar）約27MB、インストーラー約105MB（大部分は Electron）。依存関係のうち使わない部分（ブラウザー用の束・型・ソースマップ・MathJax の HTML 出力や読み上げなど）は package.json の build.files で外している。
+
 ### 組み直しを速くしている仕組み
 
 | 仕組み | 場所 |
@@ -78,6 +84,8 @@ npm run dist:mac   # Mac：release/tategumi-<版>-mac.dmg（Intel と Apple Sili
 | 字形の割り当ては、画面が頼んだページだけ行う | `typesetLazy`（`src/engine/index.ts`） |
 | 全ページは本体が持ち、画面には見えているページと前後数ページだけを送る | `src/main.ts`・`src/renderer/preview.ts` |
 | 1ページの字形を色ごとに1つのパスにまとめて塗る | `src/renderer/draw.ts` |
+| 1字ごとの配置で一時的なオブジェクトを作らない。描けない字かどうかはフォントが覚えておく | `src/engine/layout.ts`・`src/engine/face.ts` |
+| 校正の補助で使う行の文字は、頼まれたときに作る | `src/engine/layout.ts` |
 
 計測：`npm run build && node scripts/make-test-doc.mjs --book` のあと、
 `node scripts/bench.mjs`（組版の段階ごとの時間）や、

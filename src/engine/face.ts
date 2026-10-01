@@ -18,6 +18,8 @@ export class Face {
   private readonly paths = new Map<number, string>();
   private readonly shapeCache = new Map<string, ShapedGlyph[]>();
   private readonly buffer = new hb.Buffer();
+  /** 字形がない（または輪郭が空の）字か。組み直すたびに調べ直さないよう、向きごとに覚えておく。 */
+  private readonly missing = { ttb: new Map<string, boolean>(), ltr: new Map<string, boolean>() };
 
   constructor(bytes: Uint8Array) {
     const face = new hb.Face(new hb.Blob(new Uint8Array(bytes)));
@@ -64,6 +66,18 @@ export class Face {
       this.shapeCache.set(key, shaped);
     }
     return shaped;
+  }
+
+  /** このフォントで描けない字か（字形がないか、輪郭が空）。空白は描けない字とみなさない。 */
+  isMissing(ch: string, direction: "ttb" | "ltr"): boolean {
+    const known = this.missing[direction];
+    let v = known.get(ch);
+    if (v === undefined) {
+      const gid = /\s/u.test(ch) ? -1 : (this.shape(ch, direction)[0]?.gid ?? 0);
+      v = gid === 0 || (gid > 0 && this.path(gid) === "");
+      known.set(ch, v);
+    }
+    return v;
   }
 
   /** 字形の横方向の送り幅（フォント単位）。 */

@@ -164,17 +164,14 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
  * 文字ごとに、その字に当たっている書体で調べる。
  */
 function missingChars(blocks: Block[], faces: Face[]): string[] {
-  const seen = new Set<string>();
-  const missing: string[] = [];
+  const missing = new Set<string>();
   const check = (text: string, direction: "ttb" | "ltr", face: Face) => {
-    for (const ch of text) {
-      if (/\s/u.test(ch)) continue;
-      const key = `${faces.indexOf(face)}:${ch}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const gid = face.shape(ch, direction)[0]?.gid ?? 0;
-      if ((gid === 0 || face.path(gid) === "") && !missing.includes(ch)) missing.push(ch);
+    // ほとんどのマスは1字。調べた結果はフォントが覚えている（Face.isMissing）。
+    if (text.length === 1) {
+      if (face.isMissing(text, direction)) missing.add(text);
+      return;
     }
+    for (const ch of text) if (face.isMissing(ch, direction)) missing.add(ch);
   };
   for (const block of textBlocks(blocks)) {
     for (const atom of block.atoms) {
@@ -184,7 +181,7 @@ function missingChars(blocks: Block[], faces: Face[]): string[] {
       if (atom.ruby) check(atom.ruby, "ttb", faces[atom.cells[0].font ?? 0] ?? faces[0]);
     }
   }
-  return missing;
+  return [...missing];
 }
 
 /**

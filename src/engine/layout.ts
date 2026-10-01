@@ -622,6 +622,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     slot += span;
   }
 
+  let lineTexts: PageLayout["lines"] | undefined;
   const page: PageLayout = {
     index,
     width,
@@ -630,7 +631,10 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     lineCount: slot,
     role: lines.length === 0 && role === "body" ? "blank" : role,
     headings: lines.flatMap((l) => (l !== "blank" && l.heading ? [l.heading] : [])),
-    lines: lines.flatMap((l) => (l === "blank" ? [] : [{ text: lineText(l), start: !!l.start, end: !!l.end }])),
+    // 行の文字（校正の補助で使う）は、頼まれたときに作る。
+    get lines() {
+      return (lineTexts ??= lines.flatMap((l) => (l === "blank" ? [] : [{ text: lineText(l), start: !!l.start, end: !!l.end }])));
+    },
     glyphs,
     shapes: [...pageImages.map((p) => imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height)), ...lineShapes],
     paper: "#ffffff",
@@ -741,20 +745,15 @@ function placeLine(
       const scale = cell.scale ?? 1;
       const y = bandTop + (offset + shift) * size;
       const kind = cell.math ? "math" : cell.rotate ? "rot" : cell.tcy ? "tcy" : "vert";
-      glyphs.push({
-        text: cell.text,
-        kind,
-        x,
-        y,
-        size: size * scale,
-        font: cell.font,
-        bold: cell.bold,
-        color: cell.color,
-        ...(cell.features ? { features: cell.features } : {}),
-        ...(cell.math?.display ? { display: true } : {}),
-        ...(cell.math && cell.math.pad !== undefined ? { pad: cell.math.pad } : {}),
-        ...(line.srcLine !== undefined && cell.src !== undefined ? { src: [line.srcLine, cell.src] as [number, number] } : {}),
-      });
+      // 1字ごとに作るので、使わない項目のための一時的なオブジェクトを作らない（組み直しを速くするため）。
+      const g: PlacedGlyph = { text: cell.text, kind, x, y, size: size * scale, font: cell.font, bold: cell.bold, color: cell.color };
+      if (cell.features) g.features = cell.features;
+      if (cell.math) {
+        if (cell.math.display) g.display = true;
+        if (cell.math.pad !== undefined) g.pad = cell.math.pad;
+      }
+      if (line.srcLine !== undefined && cell.src !== undefined) g.src = [line.srcLine, cell.src];
+      glyphs.push(g);
       if (atom.kenten) {
         const rs = rubySize * scale;
         const ms = atom.kenten === "﹅" || atom.kenten === "﹆" ? rs : rs * SMALL_MARK;

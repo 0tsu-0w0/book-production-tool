@@ -41,6 +41,15 @@ function listFiles(dir: string, depth = 0): string[] {
 }
 
 /** 1つのファイルの中のフォントを調べる。読めないファイルは空の一覧を返す。 */
+function statOrNull(file: string): { size: number; mtimeMs: number } | null {
+  try {
+    const s = fs.statSync(file);
+    return { size: s.size, mtimeMs: s.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
 export function inspectFontFile(file: string): FaceInfo[] {
   let fd: number | undefined;
   try {
@@ -61,11 +70,31 @@ export function inspectFontFile(file: string): FaceInfo[] {
 }
 
 /** 縦書きに使える日本語フォントの一覧。可変フォントと埋め込み禁止のフォントは除く。 */
-export function scanFonts(dirs = fontDirectories()): FontEntry[] {
+/** フォントファイルを調べた結果の控え（ファイルの大きさと更新時刻が同じなら、読み直さない）。 */
+export interface ScanCache {
+  [file: string]: { size: number; mtimeMs: number; faces: FaceInfo[] };
+}
+
+/**
+ * PC のフォントを調べる。cache を渡すと、変わっていないファイルは控えを使い（起動を速くするため）、
+ * 調べ直したファイルの結果を cache に書き足す（なくなったファイルは cache から消す）。
+ */
+export function scanFonts(dirs = fontDirectories(), cache?: ScanCache): FontEntry[] {
   const seen = new Set<string>();
   const out: FontEntry[] = [];
-  for (const file of dirs.flatMap((d) => listFiles(d))) {
-    for (const info of inspectFontFile(file)) {
+  const files = dirs.flatMap((d) => listFiles(d));
+  if (cache) for (const f of Object.keys(cache)) if (!files.includes(f)) delete cache[f];
+  for (const file of files) {
+    let faces: FaceInfo[];
+    const stat = cache ? statOrNull(file) : null;
+    const hit = stat && cache?.[file];
+    if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) {
+      faces = hit.faces;
+    } else {
+      faces = inspectFontFile(file);
+      if (cache && stat) cache[file] = { size: stat.size, mtimeMs: stat.mtimeMs, faces };
+    }
+    for (const info of faces) {
       if (!info.japanese || !info.vertical || !info.embeddable || info.variable || !info.postscriptName) continue;
       if (seen.has(info.postscriptName)) continue;
       seen.add(info.postscriptName);

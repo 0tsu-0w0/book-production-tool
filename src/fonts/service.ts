@@ -5,7 +5,10 @@ import type { FontChoice } from "../document/settings.js";
 import { fontKey, requiredFonts, type StyleSheet } from "../document/styles.js";
 import { Face } from "../engine/face.js";
 import type { FontTable } from "../engine/index.js";
-import { loadFontBytes, scanFonts, type FontEntry } from "./catalog.js";
+import { loadFontBytes, scanFonts, type FontEntry, type ScanCache } from "./catalog.js";
+
+/** フォントの控えの形式（調べる中身を変えたら上げる）。 */
+const CACHE_VERSION = 1;
 
 // 使うフォントを決めて読み込む。同じフォントは一度だけ読む。
 
@@ -37,14 +40,40 @@ export class FontService {
   private catalog: FontEntry[] | undefined;
   private readonly cache = new Map<string, LoadedFont>();
 
+  /** cacheFile を渡すと、フォントを調べた結果をそのファイルに控え、次の起動で使い回す。 */
+  constructor(private readonly options: { cacheFile?: string } = {}) {}
+
   /** 同梱フォントを先頭に、PC に入っている縦書き用の日本語フォントを続けた一覧。 */
   list(): FontEntry[] {
     if (!this.catalog) {
       const bundled = BUNDLED_FONTS.filter((f) => fs.existsSync(f.path));
       const bundledNames = new Set(bundled.map((f) => f.postscriptName));
-      this.catalog = [...bundled, ...scanFonts().filter((f) => !bundledNames.has(f.postscriptName))];
+      const cache = this.readCache();
+      const scanned = scanFonts(undefined, cache);
+      this.writeCache(cache);
+      this.catalog = [...bundled, ...scanned.filter((f) => !bundledNames.has(f.postscriptName))];
     }
     return this.catalog;
+  }
+
+  private readCache(): ScanCache | undefined {
+    if (!this.options.cacheFile) return undefined;
+    try {
+      const data = JSON.parse(fs.readFileSync(this.options.cacheFile, "utf8"));
+      return data?.version === CACHE_VERSION && data.files && typeof data.files === "object" ? data.files : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private writeCache(cache: ScanCache | undefined) {
+    if (!cache || !this.options.cacheFile) return;
+    try {
+      fs.mkdirSync(path.dirname(this.options.cacheFile), { recursive: true });
+      fs.writeFileSync(this.options.cacheFile, JSON.stringify({ version: CACHE_VERSION, files: cache }), "utf8");
+    } catch {
+      // 控えを書けなくても、一覧は作れる。
+    }
   }
 
   /**
@@ -54,6 +83,9 @@ export class FontService {
   defaultChoice(): FontChoice {
     const env = process.env.TATEGUMI_FONT;
     if (env && fs.existsSync(env)) return { name: env, postscriptName: "", path: env, index: 0 };
+    // 同梱のフォントがあれば、PC のフォントを調べずに決める（起動を速くするため）。
+    const bundled = BUNDLED_FONTS.find((f) => fs.existsSync(f.path));
+    if (bundled) return { name: bundled.name, postscriptName: bundled.postscriptName, path: bundled.path, index: bundled.index };
     const found = this.list().find((f) => !f.cff);
     if (!found) throw new Error("縦書きに使える日本語フォント（TrueType）が見つかりません。");
     return { name: found.name, postscriptName: found.postscriptName, path: found.path, index: found.index };

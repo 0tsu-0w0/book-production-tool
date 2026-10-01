@@ -66,8 +66,8 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         cell.bold = ps.bold || !!cs?.bold;
         cell.color = cs?.color ?? ps.color ?? undefined;
         const form = cs?.glyphForm || ps.glyphForm || "";
-        if (form) cell.features = form;
-        else delete cell.features;
+        // delete を使うとオブジェクトが遅い形に変わるので、undefined を入れる。
+        cell.features = form || undefined;
         cell.proportional = !!(ps.proportional || cs?.proportional);
       }
     }
