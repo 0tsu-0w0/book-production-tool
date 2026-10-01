@@ -33,7 +33,7 @@ type Path = string;
 type Opt = [value: string, label: string];
 
 type Field =
-  | { kind: "select"; path: Path; label: string; options: Opt[] | (() => Opt[]); numeric?: boolean; when?: (s: Settings) => boolean }
+  | { kind: "select"; path: Path; label: string; options: Opt[] | ((s: Settings) => Opt[]); numeric?: boolean; when?: (s: Settings) => boolean }
   | { kind: "check"; path: Path; label: string; when?: (s: Settings) => boolean }
   | { kind: "number"; path: Path; label: string; min: number; max: number; step: number; unit?: string; when?: (s: Settings) => boolean }
   | { kind: "text"; path: Path; label: string; placeholder?: string; multiline?: boolean; when?: (s: Settings) => boolean }
@@ -44,7 +44,7 @@ type Field =
   | { kind: "custom"; id: string }
   | { kind: "masters" }
   | { kind: "info"; render: (s: Settings) => string | null; tone?: "warning"; when?: (s: Settings) => boolean }
-  | { kind: "button"; label: string; action: string };
+  | { kind: "button"; label: string; action: string; when?: (s: Settings) => boolean };
 
 interface Section {
   title: string;
@@ -348,10 +348,41 @@ function sections(): Section[] {
           path: "pdfKind",
           label: "PDFの種類",
           options: [
-            ["print", "入稿用（PDF/X-1a・CMYK・トンボ付き）"],
-            ["print-nomarks", "入稿用（PDF/X-1a・CMYK・トンボなし）"],
+            ["print", "入稿用（PDF/X・CMYK・トンボ付き）"],
+            ["print-nomarks", "入稿用（PDF/X・CMYK・トンボなし）"],
             ["screen", "閲覧用（RGB）"],
           ],
+        },
+        {
+          kind: "select",
+          path: "output.pdfStandard",
+          label: "入稿用 PDF の規格",
+          options: [
+            ["x1a", "PDF/X-1a:2003（迷ったらこちら）"],
+            ["x4", "PDF/X-4（印刷条件の ICC プロファイルを埋め込む）"],
+          ],
+          when: (s) => s.pdfKind !== "screen",
+        },
+        {
+          kind: "select",
+          path: "output.iccPath",
+          label: "印刷条件（ICC プロファイル）",
+          options: (s) => {
+            const list: Opt[] = [["", "（選んでいません）"], ...iccProfiles.map((p): Opt => [p.path, p.name])];
+            const current = s.output.iccPath;
+            if (current && !iccProfiles.some((p) => p.path === current)) list.push([current, current.split(/[\/]/).pop() ?? current]);
+            return list;
+          },
+          when: (s) => s.pdfKind !== "screen" && s.output.pdfStandard === "x4",
+        },
+        { kind: "button", label: "ICC プロファイルのファイルを選ぶ…", action: "choose-icc", when: (s) => s.pdfKind !== "screen" && s.output.pdfStandard === "x4" },
+        {
+          kind: "info",
+          tone: "warning",
+          render: (s) =>
+            s.pdfKind !== "screen" && s.output.pdfStandard === "x4" && !s.output.iccPath
+              ? "PDF/X-4 には、印刷所が指定する印刷条件の ICC プロファイル（CMYK。例：Japan Color 2001 Coated）が要ります。"
+              : null,
         },
         { kind: "select", path: "output.color", label: "色", options: [["auto", "自動（入稿用は CMYK、閲覧用・画像は RGB）"], ["gray", "グレースケール（モノクロ印刷用）"]] },
         { kind: "select", path: "output.imposition", label: "面付け", options: [["single", "単ページ"], ["spread", "見開き（閲覧用 PDF と画像）"]] },
@@ -412,6 +443,8 @@ function sections(): Section[] {
 
 /** 新規作成で使うテンプレートの名前（空なら標準の設定）。画面から知らされる。 */
 let defaultTemplateName = "";
+/** PDF/X-4 に使える ICC プロファイル（この PC で見つかったもの）。画面から知らされる。 */
+let iccProfiles: { path: string; name: string }[] = [];
 
 /** WCAG のコントラスト比が 4.5 未満なら警告を出す。 */
 function contrastWarning(s: Settings): string | null {
@@ -459,6 +492,11 @@ export class SettingsPanel {
 
   setDefaultTemplateName(name: string) {
     defaultTemplateName = name;
+    this.refresh();
+  }
+
+  setIccProfiles(list: { path: string; name: string }[]) {
+    iccProfiles = list;
     this.refresh();
   }
 
@@ -519,9 +557,25 @@ export class SettingsPanel {
     switch (field.kind) {
       case "select": {
         const select = document.createElement("select");
-        const options = typeof field.options === "function" ? field.options() : field.options;
-        for (const [value, label] of options) select.add(new Option(label, value));
-        select.value = String(getPath(this.settings, field.path));
+        const fill = (options: Opt[]) => {
+          select.replaceChildren(...options.map(([value, label]) => new Option(label, value)));
+          select.value = String(getPath(this.settings, field.path));
+        };
+        if (typeof field.options === "function") {
+          // 中身が変わる選択肢（見つかった ICC プロファイルなど）は、変わったときに作り直す。
+          const make = field.options;
+          let last = "";
+          const update = () => {
+            const options = make(this.settings);
+            const key = JSON.stringify(options);
+            if (key !== last) fill(options);
+            last = key;
+          };
+          update();
+          this.refreshers.push(update);
+        } else {
+          fill(field.options);
+        }
         select.addEventListener("change", () => this.changed(field.path, field.numeric ? Number(select.value) : select.value));
         wrap.append(title(field.label), select);
         return wrap;

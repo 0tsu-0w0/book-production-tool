@@ -60,6 +60,8 @@ export interface LazyTypesetResult extends Omit<TypesetResult, "pages"> {
   page(index: number): DrawPage;
   /** i 番目のページの行の文字（校正の補助に使う）。 */
   lines(index: number): LineText[];
+  /** 原稿の位置（行・行の中の位置）の字があるページ（その位置より前で最後の字のページ）。字がなければ -1。 */
+  pageOf(line: number, offset: number): number;
 }
 
 /** スタイルの書体を、フォントの一覧の番号にする。 */
@@ -146,6 +148,16 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
       return page;
     },
     lines: (index) => layouts[index]?.lines ?? [],
+    pageOf(line, offset) {
+      let best = -1;
+      for (let i = 0; i < layouts.length; i++) {
+        for (const g of layouts[i].glyphs) {
+          const s = g.src;
+          if (s && (s[0] < line || (s[0] === line && s[1] <= offset))) best = i;
+        }
+      }
+      return best;
+    },
     upems: faces.map((f) => f.upem),
     upem: faces[0].upem,
     missingChars: missingChars(blocks, faces),

@@ -109,3 +109,47 @@ describe("画像を偶数・奇数ページに置く（DTP-12）", () => {
     assert.deepEqual(pages.map((p) => p.role), ["body", "blank", "image"]);
   });
 });
+
+describe("段落ごとの行送り", () => {
+  const withPitch = (pitch: number, text: string, style = "広く") =>
+    parse(text).map((b) =>
+      (b.kind === "para" || b.kind === "heading") && b.style === style
+        ? { ...b, format: { indent: 0, align: "start" as const, lineSpan: 1, linePitch: pitch, spaceBefore: 0, spaceAfter: 0 } }
+        : b,
+    );
+  const xs = (page: ReturnType<typeof layoutDocument>[number], ch: string) =>
+    page.glyphs.filter((g) => g.text === ch).map((g) => g.x);
+
+  it("行送り 150% の段落は、行の間が標準の1.5倍になる", () => {
+    const spec = { ...DEFAULT_SPEC, charsPerLine: 1 };
+    const [page] = layoutDocument(withPitch(1.5, "［＃広く］ああ"), spec);
+    const [a, b] = xs(page, "あ");
+    const pitch = spec.fontSizePt * spec.lineGap;
+    assert.ok(Math.abs(a - b - pitch * 1.5) < 1e-6);
+  });
+
+  it("端数が出ても、ページに入る行数を超えない（15行のページに 150% の行は10行）", () => {
+    const spec = { ...DEFAULT_SPEC, charsPerLine: 1 };
+    const pages = layoutDocument(withPitch(1.5, "［＃広く］" + "あ".repeat(11)), spec);
+    assert.equal(pages.length, 2);
+    assert.equal(xs(pages[0], "あ").length, 10);
+    // 版面の左端（最後の行）より左には出ない。
+    for (const x of xs(pages[0], "あ")) assert.ok(x >= pages[0].block.left - 1e-6);
+  });
+
+  it("行送り 50% と標準の行が混ざっても、後ろの行の位置がずれない", () => {
+    const spec = { ...DEFAULT_SPEC, charsPerLine: 1 };
+    const [page] = layoutDocument(withPitch(0.5, "［＃広く］ああ\nい"), spec);
+    // 0.5 + 0.5 で1行分。「い」は2行目（標準の行の位置）に来る。
+    const pitch = spec.fontSizePt * spec.lineGap;
+    const right = page.block.left + page.block.width - spec.fontSizePt / 2;
+    assert.ok(Math.abs(xs(page, "い")[0] - (right - pitch * 1)) < 1e-6);
+  });
+
+  it("スタイルの読み込みで、行送りを 0.5〜3 にそろえる", async () => {
+    const { normalizeStyles } = await import("../document/styles.js");
+    const s = normalizeStyles({ paragraph: [{ name: "a", linePitch: 9 }, { name: "b" }] });
+    assert.equal(s.paragraph[0].linePitch, 3);
+    assert.equal(s.paragraph[1].linePitch, 1);
+  });
+});

@@ -34,6 +34,8 @@ export interface ParagraphStyle {
   scale: number;
   /** 行取り：1行を何行分の幅に取るか（その中央に置く）。 */
   lineSpan: number;
+  /** 行送り：標準の行送りに対する倍率（1 なら標準。0.5〜3）。 */
+  linePitch: number;
   /** 行の中での揃え：天（字下げのあと）・中央・地。 */
   align: "start" | "center" | "end";
   /** 字下げ（字数）。 */
@@ -90,6 +92,7 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   font: null,
   scale: 1,
   lineSpan: 1,
+  linePitch: 1,
   align: "start",
   indent: 0,
   spaceBefore: 0,
@@ -163,6 +166,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         font: font(p.font),
         scale: num(p.scale, 1, 0.3, 5),
         lineSpan: Math.round(num(p.lineSpan, 1, 1, 10)),
+        linePitch: Math.round(num(p.linePitch, 1, 0.5, 3) * 100) / 100,
         align: p.align === "center" || p.align === "end" ? p.align : "start",
         indent: num(p.indent, 0, 0, 40),
         spaceBefore: Math.round(num(p.spaceBefore, 0, 0, 10)),

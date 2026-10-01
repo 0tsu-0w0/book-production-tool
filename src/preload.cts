@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld("api", {
   getDefaultTemplate: invoke("templates:get-default"),
   setDefaultTemplate: invoke("templates:set-default"),
   exportPdf: invoke("pdf:export"),
+  listIccProfiles: invoke("icc:list"),
+  chooseIccProfile: invoke("icc:choose"),
   beginImages: invoke("images:begin"),
   writeImage: invoke("images:write"),
   endImages: invoke("images:end"),

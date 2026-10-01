@@ -12,6 +12,8 @@ export interface PdfWorkerInput {
   fonts: { key: string; bytes: Uint8Array }[];
   title: string;
   images: DocImage[];
+  /** PDF/X-4 の印刷条件の ICC プロファイル。 */
+  icc?: Uint8Array;
 }
 
 export type PdfWorkerMessage =
@@ -32,6 +34,7 @@ try {
       if (done === total || done % 5 === 0) send({ type: "progress", done, total });
     },
     input.images,
+    input.icc,
   );
   send({ type: "done", result });
 } catch (err) {

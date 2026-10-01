@@ -3,6 +3,7 @@ import { applyTemplate } from "../document/template.js";
 import { imageInfos, type DocImage } from "../document/document.js";
 import type { ImageInfo } from "../engine/types.js";
 import { ImageManager } from "./image-manager.js";
+import { PageTyping } from "./page-typing.js";
 import { InlineEditor } from "./inline-editor.js";
 import { ProofDialog, type ProofResult } from "./proof-dialog.js";
 import { combineSpread, spreadLabel, spreadPairs } from "../output/imposition.js";
@@ -38,6 +39,8 @@ interface TypesetResult {
   missingChars: string[];
   mathErrors: string[];
   engineMs: number;
+  /** 紙面で入力しているときの、カーソルのあるページ（なければ -1）。 */
+  caretPage?: number;
 }
 
 type Opened =
@@ -55,7 +58,7 @@ interface Api extends TemplateApi {
     startPage: number;
   }>;
   listFonts(): Promise<{ list: FontOption[]; defaultChoice: FontChoice }>;
-  typeset(text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo>): Promise<TypesetResult>;
+  typeset(text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo>, caret?: [number, number]): Promise<TypesetResult>;
   pages(version: number, indices: number[]): Promise<{ pages: DrawPage[]; paths: Record<string, Record<number, string>> } | null>;
   openDocument(): Promise<Opened | undefined>;
   openPath(file: string): Promise<Opened>;
@@ -65,8 +68,10 @@ interface Api extends TemplateApi {
   saveRecovery(doc: TategumiDocument, filePath: string | null): Promise<void>;
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<
-    { path: string; pages: number; pdfx: boolean; problems: string[] } | { error: string } | undefined
+    { path: string; pages: number; pdfx: boolean; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined
   >;
+  listIccProfiles(): Promise<{ path: string; name: string }[]>;
+  chooseIccProfile(): Promise<{ path: string; name: string } | { error: string } | undefined>;
   beginImages(baseName: string, zip: boolean): Promise<string | undefined>;
   writeImage(name: string, bytes: ArrayBuffer): Promise<void>;
   endImages(ok: boolean): Promise<void>;
@@ -131,8 +136,22 @@ const inlineEditor = new InlineEditor({
   },
 });
 
+// 紙面に直接打って直す（カーソルを置いて打つ）。
+const typing = new PageTyping(preview, {
+  source,
+  vertical: () => !(settings.layoutMode === "book" && settings.book.writingMode === "horizontal"),
+  setStatus: (text) => setStatus(text),
+  stopped: () => ($<HTMLInputElement>("page-typing").checked = false),
+});
+typing.onMissing = () => scheduleTypeset(0);
+preview.onShown = () => typing.render();
+
 preview.onPick = (item, ev, double) => {
   const [line, offset] = item.src!;
+  if (typing.active) {
+    typing.place([line, offset]);
+    return;
+  }
   if (double) {
     inlineEditor.open(line, offset, ev.clientX, ev.clientY);
     return;
@@ -222,7 +241,8 @@ function scheduleTypeset(delay = 60) {
 async function runTypeset() {
   const seq = ++typesetSeq;
   const started = performance.now();
-  const r = await api.typeset(source.value, settings, firstTypeset, preview.wanted(), imageInfos(imageManager.images));
+  const caret = typing.active ? typing.caret : undefined;
+  const r = await api.typeset(source.value, settings, firstTypeset, preview.wanted(), imageInfos(imageManager.images), caret);
   lastIpcMs = performance.now() - started;
   firstTypeset = false;
   // 輪郭は、組版の結果を捨てる場合でも受け取っておく（本体は送ったものとして覚えている）。
@@ -236,6 +256,8 @@ async function runTypeset() {
   preview.bleedMm = settings.advanced.bleedMm;
   updatePager();
   panel.setPageCount(r.pageCount);
+  // 紙面で入力しているときは、カーソルのあるページを見せる。
+  if (caret && r.caretPage !== undefined && r.caretPage >= 0) preview.jumpTo(r.caretPage);
   preview.setDocument(r.version, r.pageCount, drawFonts(r), settings.nombreStart, r.pages);
   const chars = [...source.value.replace(/\n/g, "")].length;
   counts.textContent =
@@ -278,9 +300,24 @@ function onSettingsChanged(s: Settings) {
 }
 
 function onPanelAction(action: string) {
-  if (action === "show-diff") showDiff();
+  if (action === "choose-icc") void chooseIcc();
+  else if (action === "show-diff") showDiff();
   else if (action === "save-template") void templates.open(true);
   else if (action === "open-templates") void templates.open();
+}
+
+/** PDF/X-4 の印刷条件（ICC プロファイル）をファイルから選ぶ。 */
+async function chooseIcc() {
+  const r = await api.chooseIccProfile();
+  if (!r) return;
+  if ("error" in r) {
+    alert(`この ICC プロファイルは使えません：${r.error}`);
+    return;
+  }
+  panel.setIccProfiles(await api.listIccProfiles());
+  settings.output.iccPath = r.path;
+  panel.render(settings);
+  onSettingsChanged(settings);
 }
 
 function setStatus(text: string) {
@@ -467,6 +504,8 @@ const templates = new TemplateDialog(api, {
   defaultChanged: (name) => panel.setDefaultTemplateName(name),
 });
 void api.getDefaultTemplate().then((d) => panel.setDefaultTemplateName(d?.name ?? ""));
+// PDF/X-4 に使える ICC プロファイルを探しておく（起動の邪魔にならないよう、少し後で）。
+setTimeout(() => void api.listIccProfiles().then((list) => panel.setIccProfiles(list)), 1500);
 
 // ---- 書き出し ----
 
@@ -528,9 +567,10 @@ function exportPdf() {
       return;
     }
     const note = check.notes.length > 0 ? `　※${check.notes.join(" ")}` : "";
+    const pdfx = r.standard === "x4" ? "PDF/X-4" : "PDF/X-1a";
     if (!r.pdfx) setStatus(`PDF（${r.pages}枚）を保存しました：${r.path}${note}`);
-    else if (r.problems.length === 0) setStatus(`PDF/X-1a の検査に通りました（${r.pages}ページ）。保存先：${r.path}${note}`);
-    else setStatus(`保存しましたが、PDF/X-1a の条件を満たしていません（${r.problems.join("、")}）：${r.path}`);
+    else if (r.problems.length === 0) setStatus(`${pdfx} の検査に通りました（${r.pages}ページ）。保存先：${r.path}${note}`);
+    else setStatus(`保存しましたが、${pdfx} の条件を満たしていません（${r.problems.join("、")}）：${r.path}`);
   });
 }
 
@@ -657,6 +697,12 @@ function setView(mode: ViewMode) {
 // ---- 画面の部品をつなぐ ----
 
 source.addEventListener("input", markChanged);
+$<HTMLInputElement>("page-typing").addEventListener("change", (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  // 紙面での入力は1ページ表示で行う。
+  if (on) setView("single");
+  typing.setActive(on);
+});
 for (const b of document.querySelectorAll<HTMLButtonElement>("[data-command]")) {
   b.addEventListener("click", () => void runCommand(b.dataset.command!));
 }

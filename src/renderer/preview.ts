@@ -101,6 +101,29 @@ export class Preview {
     this.show();
   }
 
+  /** 次に表示するページを決める（描くのは次の setDocument・show のとき）。 */
+  jumpTo(index: number) {
+    this.current = Math.max(0, index);
+  }
+
+  /** 1ページ表示で今描いているページ（紙面で入力するときに使う）。 */
+  currentPage(): DrawPage | undefined {
+    return this.mode === "single" && this.singleCanvas?.isConnected ? this.drawn.get(this.singleCanvas)?.page : undefined;
+  }
+
+  /** ページの座標（pt）を、画面の座標（px）にする。1ページ表示のときだけ。 */
+  toClient(x: number, y: number): { x: number; y: number; pxPerPt: number } | undefined {
+    const canvas = this.singleCanvas;
+    const d = canvas?.isConnected ? this.drawn.get(canvas) : undefined;
+    if (!canvas || !d) return undefined;
+    const box = canvas.getBoundingClientRect();
+    const scale = d.pxPerPt / (window.devicePixelRatio || 1);
+    return { x: box.left + (x + d.bleed) * scale, y: box.top + (y + d.bleed) * scale, pxPerPt: scale };
+  }
+
+  /** 1ページ表示でページを描き直したとき（紙面で入力するときのカーソルを置き直す）。 */
+  onShown?: () => void;
+
   /** 見開きの先に来るページか（偶数ページ。右綴じでは右、左綴じでは左に置く）。 */
   private isRightPage(index: number): boolean {
     return (this.firstNumber + index) % 2 === 0;
@@ -199,6 +222,7 @@ export class Preview {
     if (this.stage.firstChild !== this.singleCanvas || this.stage.childNodes.length !== 1) this.stage.replaceChildren(this.singleCanvas);
     this.lastDrawMs = performance.now() - t;
     this.label.textContent = `${this.current + 1} / ${this.pageCount}`;
+    this.onShown?.();
   }
 
   private showSpread([rightIndex, leftIndex]: [number, number]) {

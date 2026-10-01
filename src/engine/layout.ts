@@ -220,12 +220,16 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
   return lines;
 }
 
-type PageLine = Line | "blank";
+/** ページの行：本文の行、空行（1行）、または数字（その行数分の空き。行送りを変えた段落の端数を埋める）。 */
+type PageLine = Line | "blank" | number;
 
-/** 行が使う行数（行取り）。空行は1行。 */
+/** 行が使う行数（行取り・行送りを含む。端数もある）。空行は1行。 */
 function slots(line: PageLine): number {
-  return line === "blank" ? 1 : (line.span ?? 1);
+  return line === "blank" ? 1 : typeof line === "number" ? line : (line.span ?? 1);
 }
+
+/** 行数の足し算の誤差を丸める（行送りの端数を足していくと、整数からわずかにずれるため）。 */
+const snap = (v: number) => Math.round(v * 1e6) / 1e6;
 
 /** 原稿全体を行に分け、ページに割り付け、各文字の位置を決める。 */
 export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: number[]): PageLayout[] {
@@ -281,21 +285,26 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   const breakPage = () => {
     if (current().length > 0 || fixed(roles[roles.length - 1])) newPage();
   };
+  /** 今の段の残りを空ける（次の行は次の段の頭から）。 */
+  const fillBand = () => {
+    const inBand = snap(used % spec.linesPerPage);
+    if (inBand === 0) return;
+    const n = snap(Math.min(spec.linesPerPage - inBand, capacity - used));
+    if (n <= 0) return;
+    if (Number.isInteger(n)) for (let k = 0; k < n; k++) current().push("blank");
+    else current().push(n);
+    used = snap(used + n);
+  };
   const pushLine = (line: PageLine) => {
     // 扉などのページのあとは、新しいページから続ける。
     if (fixed(roles[roles.length - 1])) newPage();
     const span = slots(line);
-    // 行取りの行が段の終わりをまたぐなら、次の段（またはページ）の頭へ送る。
-    const inBand = used % spec.linesPerPage;
-    if (span > 1 && inBand > 0 && inBand + span > spec.linesPerPage) {
-      for (let k = inBand; k < spec.linesPerPage && used < capacity; k++) {
-        current().push("blank");
-        used++;
-      }
-    }
-    if (used + span > capacity && used > 0) newPage();
+    // 行取り・行送りで幅の広い行が段の終わりをまたぐなら、次の段（またはページ）の頭へ送る。
+    const inBand = snap(used % spec.linesPerPage);
+    if (inBand > 0 && inBand + span > spec.linesPerPage + EPS) fillBand();
+    if (used + span > capacity + EPS && used > 0) newPage();
     current().push(line);
-    used += span;
+    used = snap(used + span);
   };
   const isOdd = (pageIndex: number) => (spec.firstPageNumber + pageIndex) % 2 !== 0;
   /** 次の行を奇数ページから始める（偶数ページに当たるときは白ページを1枚入れる）。 */
@@ -329,7 +338,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const first = used + out.length;
     const page = pages.length - 1;
     const w = wrap;
-    const inWrap = (i: number) => !!w && w.page === page && first + i * f.lineSpan >= w.from && first + i * f.lineSpan < w.to;
+    const span = f.lineSpan * (f.linePitch ?? 1);
+    const inWrap = (i: number) => !!w && w.page === page && first + i * span >= w.from && first + i * span < w.to;
     const widthAt = (i: number) => (inWrap(i) ? spec.charsPerLine - w!.chars : spec.charsPerLine);
     // 扉では、天付きの段落を行の中央に置く。
     const align = centerStart && f.align === "start" ? "center" : f.align;
@@ -341,7 +351,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       if (w?.top && inWrap(i)) line.offset = w.chars;
       line.start = i === 0;
       line.end = i === count - 1;
-      line.span = f.lineSpan;
+      line.span = span;
       line.align = align;
       if (i === 0 && heading) line.heading = heading;
       line.srcLine = srcLine;
@@ -366,7 +376,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     }
     while (lines[0] === "blank") lines.shift();
     while (lines[lines.length - 1] === "blank") lines.pop();
-    const total = lines.reduce((s, l) => s + slots(l), 0);
+    const total = lines.reduce<number>((s, l) => s + slots(l), 0);
     if (total > spec.linesPerPage) {
       // 1段に収まらなければ、ふつうの本文として流し込む。
       lines.forEach(pushLine);
@@ -462,14 +472,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const n = Math.min(block.lines, spec.linesPerPage);
     if (fixed(roles[roles.length - 1])) newPage();
     // 画像の行は段をまたがない。段の残りが足りなければ、次の段（またはページ）の頭へ。
-    const inBand = used % spec.linesPerPage;
-    if (inBand > 0 && inBand + n > spec.linesPerPage) {
-      for (let k = inBand; k < spec.linesPerPage && used < capacity; k++) {
-        current().push("blank");
-        used++;
-      }
-    }
-    if (used + n > capacity && used > 0) newPage();
+    const inBand = snap(used % spec.linesPerPage);
+    if (inBand > 0 && inBand + n > spec.linesPerPage + EPS) fillBand();
+    if (used + n > capacity + EPS && used > 0) newPage();
     const geo = imageGeometry(block, spec);
     images[images.length - 1].push({ block, slot: used });
     if (block.wrap && geo.wrapChars > 0) {
@@ -484,17 +489,14 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
 
   /** 今の段に残っている行数（次に新しいページや段になるなら、1段まるごと）。 */
   function roomInBand(): number {
-    if (fixed(roles[roles.length - 1]) || used >= capacity) return spec.linesPerPage;
-    return spec.linesPerPage - (used % spec.linesPerPage);
+    if (fixed(roles[roles.length - 1]) || used >= capacity - EPS) return spec.linesPerPage;
+    return snap(spec.linesPerPage - (used % spec.linesPerPage));
   }
 
   /** 今の段の残りを空けて、次の段（またはページ）から続ける。 */
   function breakBand() {
-    if (fixed(roles[roles.length - 1]) || used % spec.linesPerPage === 0) return;
-    for (let k = used % spec.linesPerPage; k < spec.linesPerPage && used < capacity; k++) {
-      current().push("blank");
-      used++;
-    }
+    if (fixed(roles[roles.length - 1])) return;
+    fillBand();
   }
 
   /**
@@ -512,15 +514,17 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     while (tail > lead && all[tail - 1] === "blank") tail--;
     const text = all.slice(lead, tail);
     all.slice(0, lead).forEach(pushLine);
-    const textSlots = text.reduce((s, l) => s + slots(l), 0);
+    const textSlots = text.reduce<number>((s, l) => s + slots(l), 0);
     if (f?.keepWithNext) {
       const room = roomInBand();
       if (room < spec.linesPerPage && room < textSlots + (all.length - tail) + after + 1) breakBand();
     }
-    if (f?.keepLines && text.length >= 2 && textSlots === text.length) {
-      const room = roomInBand();
+    if (f?.keepLines && text.length >= 2) {
+      // 段の残りに入る行数（行取り・行送りで1行の幅が違っても、段落の中では同じ）。
+      const per = textSlots / text.length;
+      const room = Math.floor(roomInBand() / per + EPS);
       if (room < text.length) {
-        if (room === 1) {
+        if (room <= 1) {
           breakBand();
         } else if (text.length - room === 1) {
           text.slice(0, room - 1).forEach(pushLine);
@@ -630,7 +634,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
   let slot = 0;
   for (const line of lines) {
     const span = slots(line);
-    if (line !== "blank") {
+    if (typeof line === "object") {
       // 行取りの行は、取った行の中央に置く。
       const band = Math.floor(slot / spec.linesPerPage);
       const col = (slot % spec.linesPerPage) + (span - 1) / 2;
@@ -638,7 +642,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
       const bandTop = top + band * (columnHeight + spec.columnGapPt);
       placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
     }
-    slot += span;
+    slot = snap(slot + span);
   }
 
   let lineTexts: PageLayout["lines"] | undefined;
@@ -649,10 +653,10 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     block: { left, top, width: blockWidth, height: blockHeight },
     lineCount: slot,
     role: lines.length === 0 && role === "body" ? "blank" : role,
-    headings: lines.flatMap((l) => (l !== "blank" && l.heading ? [l.heading] : [])),
+    headings: lines.flatMap((l) => (typeof l === "object" && l.heading ? [l.heading] : [])),
     // 行の文字（校正の補助で使う）は、頼まれたときに作る。
     get lines() {
-      return (lineTexts ??= lines.flatMap((l) => (l === "blank" ? [] : [{ text: lineText(l), start: !!l.start, end: !!l.end }])));
+      return (lineTexts ??= lines.flatMap((l) => (typeof l !== "object" ? [] : [{ text: lineText(l), start: !!l.start, end: !!l.end }])));
     },
     glyphs,
     shapes: [...pageImages.map((p) => imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height)), ...lineShapes],

@@ -102,6 +102,9 @@ export class StyleEditor {
       const p = style as ParagraphStyle;
       this.root.append(this.number("行取り", p.lineSpan, 1, 10, 1, "行", (v) => (p.lineSpan = v)));
       this.root.append(
+        this.number("行送り（標準に対する割合）", Math.round(p.linePitch * 100), 50, 300, 5, "%", (v) => (p.linePitch = Math.round(v) / 100)),
+      );
+      this.root.append(
         this.labeled(
           "揃え",
           this.select(

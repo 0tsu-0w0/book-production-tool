@@ -59,6 +59,8 @@ export interface ParaFormat {
   align: "start" | "center" | "end";
   /** 行取り（何行分の幅を取るか）。 */
   lineSpan: number;
+  /** 行送り：標準の行送りに対する倍率（1 なら標準）。行取りとかけ合わせた幅を1行が取る。 */
+  linePitch?: number;
   spaceBefore: number;
   spaceAfter: number;
   /** 孤立行を避ける：段落の1行目だけがページ（段）の最後に、最後の1行だけが次のページに残らないようにする。 */

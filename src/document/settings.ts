@@ -164,6 +164,10 @@ export interface OutputSettings {
   paper: string;
   /** 自分で入れる紙の厚さ（mm）。 */
   paperThicknessMm: number;
+  /** 入稿用 PDF の規格：PDF/X-1a:2003 か PDF/X-4。 */
+  pdfStandard: "x1a" | "x4";
+  /** PDF/X-4 に埋め込む印刷条件（CMYK の ICC プロファイル）のファイル。 */
+  iccPath: string;
 }
 
 /** 詳細設定：ふだんは既定のままでよい、細かな組版と書き出しの値。 */
@@ -375,7 +379,7 @@ export const DEFAULT_SETTINGS: Settings = {
   font: null,
   image: { format: "png", dpi: 350, jpegQuality: 0.92, range: "", snsGroups: false, credit: "" },
   pdfKind: "print",
-  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1 },
+  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "" },
 };
 
 /** 紙1枚の厚さ（mm）。 */
@@ -529,6 +533,7 @@ export function normalizeSettings(input: unknown): Settings {
   a.bleedMm = clamp(a.bleedMm, 0, 10);
   a.imagePpi = clamp(a.imagePpi, 150, 1200);
   a.safeMarginMm = clamp(a.safeMarginMm, 0, 10);
+  if (s.output.pdfStandard !== "x4") s.output.pdfStandard = "x1a";
   if (s.toc.levels !== 1) s.toc.levels = 2;
   if (s.toc.numerals !== "kanji") s.toc.numerals = "arabic";
   if (s.book.writingMode !== "horizontal") s.book.writingMode = "vertical";

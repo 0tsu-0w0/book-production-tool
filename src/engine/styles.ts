@@ -8,6 +8,7 @@ export interface EngineParagraphStyle {
   font: number;
   scale: number;
   lineSpan: number;
+  linePitch?: number;
   align: "start" | "center" | "end";
   indent: number;
   spaceBefore: number;
@@ -51,6 +52,7 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       indent: ps.indent,
       align: ps.align,
       lineSpan: ps.lineSpan,
+      linePitch: ps.linePitch ?? 1,
       spaceBefore: ps.spaceBefore,
       spaceAfter: ps.spaceAfter,
       keepLines: ps.keepLines,

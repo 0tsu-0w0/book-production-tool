@@ -1,5 +1,5 @@
 import fontkit from "@pdf-lib/fontkit";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   PDFArray,
   PDFDocument,
@@ -41,6 +41,7 @@ import { embedImages, type PdfImageSource } from "./pdf-images.js";
 import { svgPathOps } from "./svg-path.js";
 import { fillColor, strokeColor, type ColorMode } from "./color.js";
 import { japaneseTrimMarks, marksMargin } from "./marks.js";
+import { iccProblem, outputConditionId, readIcc } from "./icc.js";
 
 const MM = 72 / 25.4;
 
@@ -48,14 +49,19 @@ export interface PdfOptions {
   title: string;
   /** PDF に入れる画像を、この解像度を大きく超えるなら縮める（既定 400ppi）。 */
   imagePpi?: number;
-  /** 色の指定方法。PDF/X-1a では cmyk か gray に限る。 */
+  /** 色の指定方法。PDF/X では cmyk か gray に限る。 */
   color: ColorMode;
-  /** PDF/X-1a:2003 として書き出す。 */
+  /** PDF/X として書き出す（standard の版で。既定は PDF/X-1a:2003）。 */
   pdfx: boolean;
+  /** PDF/X の版。x4 なら icc（印刷条件の CMYK の ICC プロファイル）が要る。 */
+  standard?: PdfXStandard;
+  icc?: Uint8Array;
   /** 日本式トンボを付ける。 */
   marks: boolean;
   bleedMm: number;
 }
+
+export type PdfXStandard = "x1a" | "x4";
 
 /** 入稿用：PDF/X-1a:2003、CMYK（本文は K100%）、トンボと塗り足し 3mm。 */
 export const PRINT_PDF: Omit<PdfOptions, "title"> = { color: "cmyk", pdfx: true, marks: true, bleedMm: 3 };
@@ -84,7 +90,9 @@ export async function renderPdf(
   onProgress?: (done: number, total: number) => void,
   images: PdfImageSource[] = [],
 ): Promise<Uint8Array> {
-  if (options.pdfx && options.color === "rgb") throw new Error("PDF/X-1a では RGB の色を使えません。");
+  if (options.pdfx && options.color === "rgb") throw new Error("PDF/X では RGB の色を使えません。");
+  const x4 = options.pdfx && options.standard === "x4";
+  const icc = x4 ? checkedIcc(options.icc) : undefined;
 
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
@@ -157,6 +165,11 @@ export async function renderPdf(
 
   if (!options.pdfx) return doc.save();
 
+  if (icc) {
+    applyPdfX4(doc, icc, options.title, now);
+    // PDF/X-4 は PDF 1.6。読む側を選ばないよう、オブジェクトストリームは使わない。
+    return setHeaderVersion(await doc.save({ useObjectStreams: false }), "1.6");
+  }
   applyPdfX1a(doc);
   // PDF/X-1a:2003 は PDF 1.4 まで。オブジェクトストリーム（PDF 1.5 以降の機能）は使わない。
   const bytes = await doc.save({ useObjectStreams: false });
@@ -343,6 +356,81 @@ function setColorSpace(page: PDFPage, name: string, ref: ReturnType<typeof regis
   const resources = page.node.Resources()!;
   resources.set(PDFName.of("ColorSpace"), page.doc.context.obj({ [name]: ref }));
   return name;
+}
+
+/** PDF/X-4 に埋め込む ICC プロファイルを確かめる。 */
+function checkedIcc(bytes: Uint8Array | undefined): { bytes: Uint8Array; name: string } {
+  if (!bytes) throw new Error("PDF/X-4 には、印刷条件の ICC プロファイル（CMYK）が要ります。設定の「書き出し」で選んでください。");
+  const info = readIcc(bytes);
+  const problem = iccProblem(info);
+  if (problem) throw new Error(`この ICC プロファイルは PDF/X-4 に使えません：${problem}`);
+  return { bytes, name: info.name || "CMYK" };
+}
+
+const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** XMP の日時（文書情報の CreationDate・ModDate と同じ時刻。秒まで、UTC）。 */
+const xmpDate = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+/**
+ * PDF/X-4（ISO 15930-7）に必要なもの：XMP メタデータ（GTS_PDFXVersion・版の情報）、
+ * ICC プロファイルを埋め込んだ出力インテント、文書情報の Trapped、ファイル識別子。
+ */
+function applyPdfX4(doc: PDFDocument, icc: { bytes: Uint8Array; name: string }, title: string, date: Date) {
+  const { context, catalog } = doc;
+  const info = context.lookup(context.trailerInfo.Info, PDFDict);
+  info.set(PDFName.of("GTS_PDFXVersion"), PDFString.of("PDF/X-4"));
+  info.set(PDFName.of("Trapped"), PDFName.of("False"));
+
+  const profile = context.flateStream(icc.bytes, { N: 4 });
+  const id = outputConditionId(icc.name);
+  const intent = context.obj({
+    Type: "OutputIntent",
+    S: "GTS_PDFX",
+    OutputConditionIdentifier: PDFString.of(id),
+    OutputCondition: PDFString.of(icc.name),
+    ...(id !== icc.name ? { RegistryName: PDFString.of(OUTPUT_INTENT.registry) } : {}),
+    Info: PDFString.of(icc.name),
+    DestOutputProfile: context.register(profile),
+  });
+  catalog.set(PDFName.of("OutputIntents"), context.obj([context.register(intent)]));
+
+  const uuid = randomUUID();
+  const when = xmpDate(date);
+  const packet = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about=""
+ xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+ xmlns:pdf="http://ns.adobe.com/pdf/1.3/"
+ xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
+ xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/">
+<dc:format>application/pdf</dc:format>
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">${xml(title)}</rdf:li></rdf:Alt></dc:title>
+<xmp:CreateDate>${when}</xmp:CreateDate>
+<xmp:ModifyDate>${when}</xmp:ModifyDate>
+<xmp:MetadataDate>${when}</xmp:MetadataDate>
+<xmp:CreatorTool>tategumi</xmp:CreatorTool>
+<pdf:Producer>tategumi (pdf-lib)</pdf:Producer>
+<pdf:Trapped>False</pdf:Trapped>
+<xmpMM:DocumentID>uuid:${uuid}</xmpMM:DocumentID>
+<xmpMM:InstanceID>uuid:${uuid}</xmpMM:InstanceID>
+<xmpMM:VersionID>1</xmpMM:VersionID>
+<xmpMM:RenditionClass>default</xmpMM:RenditionClass>
+<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>
+</rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>`;
+  // メタデータは圧縮しない（読む側が中身を探せるように）。
+  const metadata = context.stream(new TextEncoder().encode(packet), { Type: "Metadata", Subtype: "XML" });
+  catalog.set(PDFName.of("Metadata"), context.register(metadata));
+
+  const fileId = PDFHexString.of(randomBytes(16).toString("hex"));
+  context.trailerInfo.ID = PDFArray.withContext(context);
+  (context.trailerInfo.ID as PDFArray).push(fileId);
+  (context.trailerInfo.ID as PDFArray).push(fileId);
 }
 
 /** PDF/X-1a:2003 に必要な文書情報・出力インテント・ファイル識別子を付ける。 */

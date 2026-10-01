@@ -9,6 +9,7 @@ import { BUILTIN_TEMPLATES, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
+import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js";
 import { checkLines, findVariants } from "./engine/proof.js";
 import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
@@ -132,13 +133,15 @@ function pagesPayload(indices: number[]) {
   return { pages: picked, paths: glyphPaths(picked, table, sentPaths) };
 }
 
-ipcMain.handle("typeset", (_e, text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo> = {}) => {
+ipcMain.handle("typeset", (_e, text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo> = {}, caret?: [number, number]) => {
   const started = performance.now();
   const { table, loaded, warnings } = fonts.loadTable(settings.font, settings.styles);
   const result = typesetLazy(text, settings, table, images);
   if (reset) sentPaths.clear();
   latest = { version: ++version, result, fonts: table };
-  const { pages, paths } = pagesPayload(wanted);
+  // 紙面で入力しているときは、カーソルのあるページも一緒に送る（DTP-15）。
+  const caretPage = caret ? result.pageOf(caret[0], caret[1]) : -1;
+  const { pages, paths } = pagesPayload(caretPage >= 0 ? [...wanted, caretPage - 1, caretPage, caretPage + 1].filter((i) => i >= 0 && i < result.pageCount) : wanted);
   return {
     version,
     pageCount: result.pageCount,
@@ -152,6 +155,7 @@ ipcMain.handle("typeset", (_e, text: string, settings: Settings, reset: boolean,
     columns: result.columns,
     pages,
     paths,
+    caretPage,
     font: loaded[0].choice,
     fontWarning: warnings.join(" "),
     /** 本体での組版にかかった時間（計測用）。 */
@@ -334,6 +338,29 @@ ipcMain.handle("templates:import", async () => {
   }
 });
 
+/** PDF/X-4 に使える ICC プロファイル（OS とアプリのフォルダから探す。一度探したら覚えておく）。 */
+let iccProfiles: { path: string; name: string }[] | undefined;
+ipcMain.handle("icc:list", () => (iccProfiles ??= findCmykProfiles()));
+
+ipcMain.handle("icc:choose", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
+    title: "印刷条件の ICC プロファイル（CMYK）を選ぶ",
+    filters: [{ name: "ICC プロファイル", extensions: ["icc", "icm"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths[0]) return undefined;
+  try {
+    const info = readIcc(fs.readFileSync(filePaths[0]));
+    const problem = iccProblem(info);
+    if (problem) return { error: problem };
+    const entry = { path: filePaths[0], name: info.name || path.basename(filePaths[0]) };
+    iccProfiles = [...(iccProfiles ?? []).filter((p) => p.path !== entry.path), entry];
+    return entry;
+  } catch (e) {
+    return { error: e instanceof IccError ? e.message : `読めませんでした：${String(e)}` };
+  }
+});
+
 ipcMain.handle("templates:open-folder", () => {
   fs.mkdirSync(templatesDir(), { recursive: true });
   void shell.openPath(templatesDir());
@@ -347,12 +374,23 @@ ipcMain.handle("pdf:export", async (_e, text: string, settings: Settings, baseNa
     : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
   if (canceled || !filePath) return undefined;
 
+  // PDF/X-4：印刷条件の ICC プロファイルを読む（入稿用のときだけ）。
+  let icc: Uint8Array | undefined;
+  if (settings.pdfKind !== "screen" && settings.output.pdfStandard === "x4") {
+    if (!settings.output.iccPath) return { error: "PDF/X-4 には、印刷条件の ICC プロファイル（CMYK）が要ります。設定の「書き出し」で選んでください。" };
+    try {
+      icc = fs.readFileSync(settings.output.iccPath);
+    } catch {
+      return { error: `ICC プロファイルが見つかりません：${settings.output.iccPath}` };
+    }
+  }
   const input: PdfWorkerInput = {
     text,
     settings,
     fonts: loaded.map((l, i) => ({ key: table.keys[i], bytes: l.bytes })),
     title: path.basename(filePath, ".pdf"),
     images,
+    icc,
   };
   const worker = new Worker(path.join(here, "pdf-worker.js"), { workerData: input });
   return new Promise((resolve) => {
@@ -360,9 +398,14 @@ ipcMain.handle("pdf:export", async (_e, text: string, settings: Settings, baseNa
       if (msg.type === "progress") send("progress", { label: "PDF", done: msg.done, total: msg.total });
       else if (msg.type === "error") resolve({ error: msg.message });
       else {
-        fs.writeFileSync(filePath, msg.result.bytes);
+        try {
+          fs.writeFileSync(filePath, msg.result.bytes);
+        } catch (e) {
+          resolve({ error: `PDF を保存できませんでした：${e instanceof Error ? e.message : String(e)}` });
+          return;
+        }
         const problems = msg.result.check?.filter((c) => !c.ok).map((c) => c.rule) ?? [];
-        resolve({ path: filePath, pages: msg.result.pages, pdfx: !!msg.result.check, problems });
+        resolve({ path: filePath, pages: msg.result.pages, pdfx: !!msg.result.check, standard: msg.result.standard, problems });
       }
     });
     worker.on("error", (err: Error) => resolve({ error: err.message }));

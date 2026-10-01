@@ -11,7 +11,7 @@ import {
   type PDFObject,
 } from "pdf-lib";
 
-// 書き出した PDF を読み直して、PDF/X-1a:2003（ISO 15930-4）の主な条件を満たすかを調べる。
+// 書き出した PDF を読み直して、PDF/X-1a:2003（ISO 15930-4）・PDF/X-4（ISO 15930-7）の主な条件を満たすかを調べる。
 // Acrobat のプリフライトの代わりにはならないが、書き出し処理の誤りはここで見つける。
 
 export interface CheckItem {
@@ -24,12 +24,18 @@ const FORBIDDEN_COLOR_SPACES = ["DeviceRGB", "CalRGB", "CalGray", "Lab", "ICCBas
 const FORBIDDEN_KEYS = ["JavaScript", "EmbeddedFiles"];
 
 export async function checkPdfX1a(bytes: Uint8Array): Promise<CheckItem[]> {
+  return checkPdfX(bytes, "x1a");
+}
+
+export async function checkPdfX(bytes: Uint8Array, standard: "x1a" | "x4"): Promise<CheckItem[]> {
   const items: CheckItem[] = [];
   const add = (rule: string, ok: boolean, detail?: string) => items.push({ rule, ok, detail });
   const raw = Buffer.from(bytes).toString("latin1");
+  const x4 = standard === "x4";
 
   const version = /^%PDF-(\d)\.(\d)/.exec(raw);
-  add("PDF のバージョンが 1.4 以下", !!version && Number(version[1]) === 1 && Number(version[2]) <= 4, version?.[0]);
+  const maxMinor = x4 ? 6 : 4;
+  add(`PDF のバージョンが 1.${maxMinor} 以下`, !!version && Number(version[1]) === 1 && Number(version[2]) <= maxMinor, version?.[0]);
   add("オブジェクトストリーム・相互参照ストリームを使っていない", !/\/Type\s*\/(ObjStm|XRef)\b/.test(raw));
 
   const doc = await PDFDocument.load(bytes, { updateMetadata: false });
@@ -44,7 +50,18 @@ export async function checkPdfX1a(bytes: Uint8Array): Promise<CheckItem[]> {
     return v ? decodeText(v) : undefined;
   };
   add("文書情報に Title がある", !!infoText("Title"));
-  add("文書情報の GTS_PDFXVersion が PDF/X-1a:2003", infoText("GTS_PDFXVersion") === "PDF/X-1a:2003", infoText("GTS_PDFXVersion"));
+  if (x4) {
+    // PDF/X-4 の版は XMP メタデータに書く。
+    const meta = doc.catalog.lookupMaybe(PDFName.of("Metadata"), PDFStream);
+    const xmp = meta instanceof PDFRawStream ? Buffer.from(decodePDFRawStream(meta).decode()).toString("utf8") : "";
+    add("XMP メタデータの GTS_PDFXVersion が PDF/X-4", /<pdfxid:GTS_PDFXVersion>PDF\/X-4<\/pdfxid:GTS_PDFXVersion>/.test(xmp));
+    add(
+      "XMP メタデータに作成日・版の情報（VersionID・RenditionClass）がある",
+      ["xmp:CreateDate", "xmp:ModifyDate", "xmpMM:DocumentID", "xmpMM:VersionID", "xmpMM:RenditionClass"].every((k) => xmp.includes(`<${k}>`)),
+    );
+  } else {
+    add("文書情報の GTS_PDFXVersion が PDF/X-1a:2003", infoText("GTS_PDFXVersion") === "PDF/X-1a:2003", infoText("GTS_PDFXVersion"));
+  }
   const trapped = infoDict?.get(PDFName.of("Trapped"));
   add("文書情報の Trapped が True か False", trapped === PDFName.of("True") || trapped === PDFName.of("False"), trapped?.toString());
   add("文書情報に CreationDate と ModDate がある", !!infoText("CreationDate") && !!infoText("ModDate"));
@@ -56,6 +73,13 @@ export async function checkPdfX1a(bytes: Uint8Array): Promise<CheckItem[]> {
     .find((d): d is PDFDict => d instanceof PDFDict && d.get(PDFName.of("S")) === PDFName.of("GTS_PDFX"));
   const conditionId = pdfxIntent?.get(PDFName.of("OutputConditionIdentifier"));
   add("出力インテント（GTS_PDFX）と印刷条件の識別子がある", !!conditionId, conditionId ? decodeText(conditionId) : undefined);
+  if (x4) {
+    const profile = pdfxIntent?.lookupMaybe(PDFName.of("DestOutputProfile"), PDFStream);
+    const n = profile?.dict.get(PDFName.of("N"));
+    const header = profile instanceof PDFRawStream ? decodePDFRawStream(profile).decode() : undefined;
+    const ok = !!header && n instanceof PDFNumber && n.asNumber() === 4 && Buffer.from(header.subarray(36, 40)).toString("latin1") === "acsp";
+    add("出力インテントに CMYK の ICC プロファイルが埋め込まれている", ok);
+  }
 
   const pages = doc.getPages();
   const boxProblems: string[] = [];
