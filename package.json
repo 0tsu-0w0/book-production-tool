@@ -1,6 +1,6 @@
 {
   "name": "tategumi",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -83,6 +83,13 @@
         "description": "tategumi 文書",
         "role": "Editor",
         "mimeType": "application/x-tategumi"
+      },
+      {
+        "ext": "tgbook",
+        "name": "tategumi ブック",
+        "description": "tategumi ブック",
+        "role": "Editor",
+        "mimeType": "application/x-tategumi-book"
       }
     ],
     "win": {

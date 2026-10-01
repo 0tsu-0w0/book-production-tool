@@ -178,3 +178,14 @@ textarea#source.tex { font-family: "Cascadia Mono", Consolas, Menlo, "Yu Gothic 
 
 /* 表紙の見本。 */
 .cover-preview { display: block; max-width: 100%; border: 1px solid var(--line); background: #fff; }
+
+/* ブック。 */
+.book-dialog { width: min(760px, 92vw); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); padding: 16px; }
+.book-dialog::backdrop { background: rgba(0,0,0,0.3); }
+.book-head { display: flex; align-items: center; gap: 8px; }
+.book-head h2 { flex: 1; font-size: 15px; margin: 0; }
+.book-list { margin: 8px 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
+.book-list li { display: flex; align-items: center; gap: 6px; }
+.book-list .book-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-list .warning { color: var(--danger); }
+.book-actions { justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

@@ -477,7 +477,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         break;
       case "anchor":
         // 今のページが埋まっていれば、次の字の入る次のページ。
-        (used >= capacity - EPS ? (pendingAnchors ??= []) : anchors[anchors.length - 1]).push(block.name);
+        // 扉などの1ページで終わるページのあとも、次のページ。
+        (used >= capacity - EPS || fixed(roles[roles.length - 1]) ? (pendingAnchors ??= []) : anchors[anchors.length - 1]).push(block.name);
         break;
       case "master":
         // 今のページにまだ何もなければ、このページから。あれば次のページから。

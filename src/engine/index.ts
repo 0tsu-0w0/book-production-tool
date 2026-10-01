@@ -61,6 +61,8 @@ export interface LazyTypesetResult extends Omit<TypesetResult, "pages"> {
   page(index: number): DrawPage;
   /** i 番目のページの行の文字（校正の補助に使う）。 */
   lines(index: number): LineText[];
+  /** ラベル（［＃ラベル：名前］）のあるページ（0始まり）。 */
+  labelPages(): Map<string, number>;
   /** 原稿の位置（行・行の中の位置）の字があるページ（その位置より前で最後の字のページ）。字がなければ -1。 */
   pageOf(line: number, offset: number): number;
 }
@@ -159,6 +161,11 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
       return page;
     },
     lines: (index) => layouts[index]?.lines ?? [],
+    labelPages() {
+      const map = new Map<string, number>();
+      for (const p of layouts) for (const l of p.labels ?? []) if (!map.has(l)) map.set(l, p.index);
+      return map;
+    },
     pageOf(line, offset) {
       let best = -1;
       for (let i = 0; i < layouts.length; i++) {

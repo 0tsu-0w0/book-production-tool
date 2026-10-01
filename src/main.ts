@@ -9,6 +9,7 @@ import { BUILTIN_TEMPLATES, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
+import { BOOK_EXTENSION, BookFormatError, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
 import { typesetCover } from "./engine/cover.js";
 import { checkPdfX } from "./output/check-pdfx.js";
 import { pdfOptions } from "./output/export-pdf.js";
@@ -30,7 +31,7 @@ const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`
 const snapshotDir = arg("snapshot");
 /** 文書をダブルクリックして起動したとき（Windows）は、コマンドラインにそのパスが来る。 */
 function fileFromArgv(argv: string[]): string | undefined {
-  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(tategumi|txt|tex)$/i.test(a) && fs.existsSync(a));
+  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(tategumi|txt|tex|tgbook)$/i.test(a) && fs.existsSync(a));
 }
 let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 // 確認用：ダイアログを出さずに、指定した場所へ書き出す（--snapshot と一緒に使う）。
@@ -78,6 +79,8 @@ function openFile(file: string): { text: string; settings?: Settings; images?: D
   return { text: doc.text, settings: doc.settings, images: doc.images, filePath: file };
 }
 
+const isBookFile = (file: string) => file.toLowerCase().endsWith(`.${BOOK_EXTENSION}`);
+
 function openSafely(file: string) {
   try {
     return openFile(file);
@@ -110,7 +113,9 @@ ipcMain.handle("init", () => {
   return {
     sample: SAMPLE_TEXT,
     recovery: snapshotDir ? undefined : recovery,
-    opened: startupDoc ? openSafely(startupDoc) : undefined,
+    // ブックのファイルなら、ブックの画面で開く。
+    opened: startupDoc && !isBookFile(startupDoc) ? openSafely(startupDoc) : undefined,
+    book: startupDoc && isBookFile(startupDoc) ? startupDoc : undefined,
     snapshot: !!snapshotDir,
     autoExport: !!(autoPdf || autoImages),
     bench,
@@ -411,7 +416,10 @@ ipcMain.handle("templates:open-folder", () => {
   void shell.openPath(templatesDir());
 });
 
-ipcMain.handle("pdf:export", async (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = []) => {
+ipcMain.handle("pdf:export", (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = []) => exportPdfFile(text, settings, baseName, images));
+
+/** PDF を書き出す（保存先を聞いて、別スレッドで組んで書き出し、入稿用なら検査する）。 */
+async function exportPdfFile(text: string, settings: Settings, baseName: string, images: DocImage[]) {
   if (snapshotDir && !autoPdf) return undefined;
   const { loaded, table } = fonts.loadTable(settings.font, settings.styles);
   const { canceled, filePath } = autoPdf
@@ -448,7 +456,129 @@ ipcMain.handle("pdf:export", async (_e, text: string, settings: Settings, baseNa
     });
     worker.on("error", (err: Error) => resolve({ error: err.message }));
   });
+}
+
+// ---- ブック（InDesign のブック機能にあたるもの） ----
+
+/** ブックの文書を読む。読めなかった文書は undefined にし、理由を errors に入れる。 */
+function loadBookDocs(bookPath: string, book: Book): { docs: (BookDocument | undefined)[]; errors: string[] } {
+  const dir = path.dirname(bookPath);
+  const errors: string[] = [];
+  const docs = book.documents.map((entry, i) => {
+    const file = path.resolve(dir, entry.path);
+    try {
+      const opened = openFile(file);
+      return {
+        name: path.basename(file),
+        text: opened.text,
+        settings: opened.settings,
+        images: opened.images ?? [],
+        tex: !!opened.tex || opened.settings?.format.markup === "tex",
+      };
+    } catch (e) {
+      errors[i] = fs.existsSync(file) ? (e instanceof DocumentFormatError ? e.message : `読めません：${String(e)}`) : "ファイルが見つかりません";
+      return undefined;
+    }
+  });
+  return { docs, errors };
+}
+
+const bookFilters = [{ name: "tategumi ブック", extensions: [BOOK_EXTENSION] }];
+
+ipcMain.handle("book:new", async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog(win!, { defaultPath: `新しいブック.${BOOK_EXTENSION}`, filters: bookFilters });
+  if (canceled || !filePath) return undefined;
+  const book = newBook();
+  fs.writeFileSync(filePath, serializeBook(book), "utf8");
+  return { path: filePath, book };
 });
+
+ipcMain.handle("book:open", async (_e, file?: string) => {
+  if (!file) {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win!, { filters: bookFilters, properties: ["openFile"] });
+    if (canceled || !filePaths[0]) return undefined;
+    file = filePaths[0];
+  }
+  try {
+    return { path: file, book: parseBook(fs.readFileSync(file, "utf8")) };
+  } catch (e) {
+    return { error: e instanceof BookFormatError ? e.message : `ブックを開けませんでした：${String(e)}` };
+  }
+});
+
+ipcMain.handle("book:save", (_e, bookPath: string, book: Book) => {
+  const tmp = `${bookPath}.tmp`;
+  fs.writeFileSync(tmp, serializeBook(book), "utf8");
+  fs.renameSync(tmp, bookPath);
+});
+
+/** ブックに入れる文書を選ぶ（ブックのファイルからの相対パスで返す）。 */
+ipcMain.handle("book:choose-docs", async (_e, bookPath: string) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
+    title: "ブックに入れる文書を選ぶ",
+    filters: [{ name: "tategumi 文書・テキスト・TeX", extensions: [FILE_EXTENSION, "txt", "tex"] }],
+    properties: ["openFile", "multiSelections"],
+  });
+  if (canceled) return [];
+  return filePaths.map((f) => path.relative(path.dirname(bookPath), f).replace(/\\/g, "/"));
+});
+
+/** ブックを組んで、文書ごとのページの範囲を返す（ページ番号はノンブル）。 */
+ipcMain.handle("book:info", (_e, bookPath: string, book: Book) => {
+  const { docs, errors } = loadBookDocs(bookPath, book);
+  const combined = combineBook(book, docs);
+  if (combined.included.length === 0) return { pages: 0, ranges: [], errors, renamed: [] };
+  const { table } = fonts.loadTable(combined.settings.font, combined.settings.styles);
+  const result = typesetLazy(combined.text, combined.settings, table, imageInfos(combined.images));
+  const starts = result.labelPages();
+  const first = combined.settings.nombreStart;
+  const ranges = combined.included.map((i, k) => {
+    const start = starts.get(docLabel(i)) ?? 0;
+    const next = k + 1 < combined.included.length ? (starts.get(docLabel(combined.included[k + 1])) ?? result.pageCount) : result.pageCount;
+    return { index: i, from: first + start, to: first + Math.max(start, next - 1) };
+  });
+  return { pages: result.pageCount, ranges, errors, renamed: combined.renamed };
+});
+
+/** ブック全体を1つの PDF に書き出す。 */
+ipcMain.handle("book:export-pdf", (_e, bookPath: string, book: Book) => {
+  const { docs, errors } = loadBookDocs(bookPath, book);
+  const missing = errors.flatMap((e, i) => (e && book.documents[i].include ? [`${book.documents[i].path}：${e}`] : []));
+  if (missing.length > 0) return { error: `読めない文書があります。\n${missing.join("\n")}` };
+  const combined = combineBook(book, docs);
+  if (combined.included.length === 0) return { error: "書き出す文書がありません。" };
+  return exportPdfFile(combined.text, combined.settings, path.basename(bookPath, `.${BOOK_EXTENSION}`), combined.images);
+});
+
+/** ブック全体をつないだ原稿を、新しい（無題の）文書として開く（画像の書き出しや全体の確認に）。 */
+ipcMain.handle("book:combined", (_e, bookPath: string, book: Book) => {
+  const combined = combineBook(book, loadBookDocs(bookPath, book).docs);
+  return { text: combined.text, settings: combined.settings, images: combined.images, filePath: null };
+});
+
+/** スタイルの元の文書の設定を、ほかの文書（tategumi 文書だけ）に書き込む。書き込んだ数を返す。 */
+ipcMain.handle("book:sync", (_e, bookPath: string, book: Book) => {
+  const dir = path.dirname(bookPath);
+  const { docs } = loadBookDocs(bookPath, book);
+  const source = docs[book.styleSource]?.settings;
+  if (!source) return { error: "スタイルの元の文書に設定がありません（tategumi 文書を選んでください）。" };
+  let count = 0;
+  book.documents.forEach((entry, i) => {
+    const doc = docs[i];
+    if (i === book.styleSource || !doc?.settings || !entry.path.toLowerCase().endsWith(`.${FILE_EXTENSION}`)) return;
+    const file = path.resolve(dir, entry.path);
+    // 記法（標準・TeX）は文書ごとのまま。
+    const settings = { ...structuredClone(source), format: { ...structuredClone(source.format), markup: doc.settings.format.markup } };
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, serializeDocument({ text: doc.text, settings, images: doc.images }), "utf8");
+    fs.renameSync(tmp, file);
+    count++;
+  });
+  return { count };
+});
+
+/** ブックの文書の場所（開くため）。 */
+ipcMain.handle("book:doc-path", (_e, bookPath: string, rel: string) => path.resolve(path.dirname(bookPath), rel));
 
 /** 画像の書き出し先：フォルダか ZIP（OUT-05）。書き出しの間だけ持つ。 */
 let imageTarget: { kind: "dir"; dir: string } | { kind: "zip"; zip: ZipWriter } | undefined;
@@ -558,6 +688,8 @@ function buildMenu() {
         cmd("名前を付けて保存…", "save-as", "CmdOrCtrl+Shift+S"),
         cmd("テンプレート…", "templates"),
         cmd("今の設定をテンプレートとして保存…", "save-template"),
+        { type: "separator" },
+        cmd("ブック…", "book", "CmdOrCtrl+B"),
         { type: "separator" },
         cmd("PDF を書き出す…", "export-pdf", "CmdOrCtrl+E"),
         cmd("画像を書き出す…", "export-images", "CmdOrCtrl+Shift+E"),

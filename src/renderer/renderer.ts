@@ -3,6 +3,8 @@ import { applyTemplate } from "../document/template.js";
 import { imageInfos, type DocImage } from "../document/document.js";
 import type { ImageInfo } from "../engine/types.js";
 import { ImageManager } from "./image-manager.js";
+import { BookDialog, type BookInfo } from "./book-dialog.js";
+import type { Book } from "../document/book.js";
 import { CoverPreview } from "./cover-preview.js";
 import { PageTyping } from "./page-typing.js";
 import { InlineEditor } from "./inline-editor.js";
@@ -44,6 +46,8 @@ interface TypesetResult {
   caretPage?: number;
 }
 
+type PdfResult = { path: string; pages: number; pdfx: boolean; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined;
+
 type Opened =
   | { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string } }
   | { error: string };
@@ -54,6 +58,8 @@ interface Api extends TemplateApi {
     recovery?: { doc: TategumiDocument; filePath: string | null; savedAt: string };
     opened?: Opened;
     snapshot: boolean;
+    /** 起動のときに開くよう頼まれたブックのファイル。 */
+    book?: string;
     autoExport: boolean;
     bench: boolean;
     startPage: number;
@@ -68,9 +74,16 @@ interface Api extends TemplateApi {
   setDocumentState(dirty: boolean, filePath: string | null): Promise<void>;
   saveRecovery(doc: TategumiDocument, filePath: string | null): Promise<void>;
   clearRecovery(): Promise<void>;
-  exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<
-    { path: string; pages: number; pdfx: boolean; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined
-  >;
+  exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
+  bookNew(): Promise<{ path: string; book: Book } | undefined>;
+  bookOpen(file?: string): Promise<{ path: string; book: Book } | { error: string } | undefined>;
+  bookSave(path: string, book: Book): Promise<void>;
+  bookChooseDocs(path: string): Promise<string[]>;
+  bookInfo(path: string, book: Book): Promise<BookInfo>;
+  bookExportPdf(path: string, book: Book): Promise<PdfResult>;
+  bookCombined(path: string, book: Book): Promise<{ text: string; settings: Settings; images: DocImage[]; filePath: null }>;
+  bookSync(path: string, book: Book): Promise<{ count: number } | { error: string }>;
+  bookDocPath(path: string, rel: string): Promise<string>;
   listIccProfiles(): Promise<{ path: string; name: string }[]>;
   coverPreview(settings: Settings, pageCount: number, images: DocImage[]): Promise<{
     page: DrawPage;
@@ -604,20 +617,46 @@ function exportPdf() {
     const check = await checkBeforeExport("pdf");
     if (!check.go) return setStatus("書き出しをやめました。");
     setStatus("PDF を書き出しています…");
-    const r = await api.exportPdf(source.value, settings, baseName(), imageManager.images);
-    if (!r) return setStatus("書き出しを取り消しました。");
-    if ("error" in r) {
-      setStatus(r.error);
-      alert(r.error);
-      return;
-    }
-    const note = check.notes.length > 0 ? `　※${check.notes.join(" ")}` : "";
-    const pdfx = r.standard === "x4" ? "PDF/X-4" : "PDF/X-1a";
-    if (!r.pdfx) setStatus(`PDF（${r.pages}枚）を保存しました：${r.path}${note}`);
-    else if (r.problems.length === 0) setStatus(`${pdfx} の検査に通りました（${r.pages}ページ）。保存先：${r.path}${note}`);
-    else setStatus(`保存しましたが、${pdfx} の条件を満たしていません（${r.problems.join("、")}）：${r.path}`);
+    reportPdf(await api.exportPdf(source.value, settings, baseName(), imageManager.images), check.notes);
   });
 }
+
+/** PDF の書き出しの結果を、状態の欄に出す。 */
+function reportPdf(r: PdfResult, notes: string[] = []) {
+  if (!r) return setStatus("書き出しを取り消しました。");
+  if ("error" in r) {
+    setStatus(r.error);
+    alert(r.error);
+    return;
+  }
+  const note = notes.length > 0 ? `　※${notes.join(" ")}` : "";
+  const pdfx = r.standard === "x4" ? "PDF/X-4" : "PDF/X-1a";
+  if (!r.pdfx) setStatus(`PDF（${r.pages}枚）を保存しました：${r.path}${note}`);
+  else if (r.problems.length === 0) setStatus(`${pdfx} の検査に通りました（${r.pages}ページ）。保存先：${r.path}${note}`);
+  else setStatus(`保存しましたが、${pdfx} の条件を満たしていません（${r.problems.join("、")}）：${r.path}`);
+}
+
+// ---- ブック ----
+
+const bookDialog = new BookDialog({
+  newBook: () => api.bookNew(),
+  openBook: (file) => api.bookOpen(file),
+  save: (path, book) => api.bookSave(path, book),
+  chooseDocs: (path) => api.bookChooseDocs(path),
+  info: (path, book) => api.bookInfo(path, book),
+  exportPdf: (path, book) =>
+    withBusy(async () => {
+      setStatus("ブックを PDF に書き出しています…");
+      reportPdf(await api.bookExportPdf(path, book));
+    }),
+  openCombined: async (path, book) => {
+    if (!confirmDiscard()) return;
+    loadOpened(await api.bookCombined(path, book));
+    setStatus("ブック全体をつないだ原稿を開きました（無題の文書）。直すときは、ブックの文書を開いて直してください。");
+  },
+  sync: (path, book) => api.bookSync(path, book),
+  openDocument: async (path, rel) => open(await api.bookDocPath(path, rel)),
+});
 
 function exportImages() {
   if (!result) return Promise.resolve();
@@ -708,6 +747,8 @@ async function runCommand(command: string) {
     case "new-from-template":
     case "templates":
       return templates.open();
+    case "book":
+      return bookDialog.open();
     case "open":
       return open();
     case "save":
@@ -796,7 +837,7 @@ stage.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => preview.show());
 api.onCommand((c) => void runCommand(c));
 // 起動中に、ほかから文書を開くよう頼まれたとき（文書のダブルクリックなど）。
-api.onOpenPath((file) => void open(file));
+api.onOpenPath((file) => void (file.toLowerCase().endsWith(".tgbook") ? bookDialog.open(file) : open(file)));
 api.onProgress((p) => {
   progress.hidden = false;
   progress.max = p.total;
@@ -811,6 +852,7 @@ panel.render(settings);
 void api.listFonts().then(({ list, defaultChoice }) => panel.setFonts(list, defaultChoice.name));
 
 if (init.opened && "error" in init.opened) alert(init.opened.error);
+if (init.book) void bookDialog.open(init.book);
 if (init.opened && !("error" in init.opened)) {
   loadOpened(init.opened);
 } else if (
