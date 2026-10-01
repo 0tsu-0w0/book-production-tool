@@ -56,6 +56,8 @@ export interface Line {
   end?: boolean;
   /** 原稿の行の番号（0始まり。原稿にない行は undefined）。 */
   srcLine?: number;
+  /** 表の行のとき：欄の境目（行の頭からの字数）と、表の行の最初・最後の行か（罫線を引くため）。 */
+  table?: { cols: number[]; rowStart: boolean; rowEnd: boolean };
 }
 
 /** 行の文字列（ルビは除き、割注は含む）。 */
@@ -274,6 +276,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   // ページごとのマスターページの名前（空なら標準）と、いま使っているマスター。
   let currentMaster = "";
   const masters: string[] = [""];
+  // ページごとの、字のないラベル（［＃ラベル：名前］だけの行）。
+  const anchors: string[][] = [[]];
+  let pendingAnchors: string[] | undefined;
   /** 本文を回り込ませている画像：このページの from〜to の行は chars 字だけ短くする。 */
   let wrap: { page: number; from: number; to: number; chars: number; top: boolean } | null = null;
   const newPage = (role: PageRole = flowRole) => {
@@ -281,6 +286,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     roles.push(role);
     images.push([]);
     masters.push(currentMaster);
+    anchors.push(pendingAnchors ?? []);
+    pendingAnchors = undefined;
     used = 0;
   };
   /** 今のページに何か入っていれば、次のページへ進む。 */
@@ -406,6 +413,10 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         breakPage();
         roles[roles.length - 1] = "blank";
         break;
+      case "anchor":
+        // 今のページが埋まっていれば、次の字の入る次のページ。
+        (used >= capacity - EPS ? (pendingAnchors ??= []) : anchors[anchors.length - 1]).push(block.name);
+        break;
       case "master":
         // 今のページにまだ何もなければ、このページから。あれば次のページから。
         currentMaster = block.name;
@@ -453,6 +464,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       case "image":
         placeImage(block);
         break;
+      case "table":
+        placeTable(block);
+        break;
     }
   }
   };
@@ -494,6 +508,54 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         used++;
       }
     }
+  }
+
+  /**
+   * 表を置く。欄の幅は中身の長さに合わせ、1行に入らなければ長い欄から縮めて折り返す。
+   * 表の1行は、欄の中で折り返した行の数だけ行を取る（途中で段やページをまたがない）。
+   */
+  function placeTable(t: Extract<Block, { kind: "table" }>) {
+    const count = Math.max(0, ...t.rows.map((r) => r.cells.length));
+    if (count === 0) return;
+    const pad = TABLE_PAD;
+    const natural = (atoms: Atom[]) => atoms.reduce((s, a) => s + atomWidth(a), 0);
+    let widths = Array.from({ length: count }, (_, c) => Math.max(1, ...t.rows.map((r) => (r.cells[c] ? natural(r.cells[c].atoms) : 0))));
+    const room = spec.charsPerLine - count * pad * 2;
+    const total = widths.reduce((s, w) => s + w, 0);
+    if (total > room) {
+      // 長い欄から縮める：どの欄も limit 字までにして、合計が1行に入る limit を求める（短い欄は折り返さない）。
+      const sorted = [...widths].sort((a, b) => a - b);
+      let limit = Math.max(2, room / count);
+      let before = 0;
+      for (let i = 0; i < sorted.length; i++) {
+        const l = (room - before) / (sorted.length - i);
+        if (sorted[i] >= l) {
+          limit = Math.max(2, l);
+          break;
+        }
+        before += sorted[i];
+      }
+      widths = widths.map((w) => Math.min(w, limit));
+    }
+    const cols = [0];
+    for (const w of widths) cols.push(cols[cols.length - 1] + w + pad * 2);
+    const spacer = (w: number): Atom => ({ cells: [{ text: "　", advance: w }] });
+    t.rows.forEach((row) => {
+      const cellLines = Array.from({ length: count }, (_, c) => (row.cells[c] ? breakLines(row.cells[c].atoms, widths[c], 0, { ...opts, justify: false }) : []));
+      const k = Math.max(1, ...cellLines.map((l) => l.length));
+      // 表の行は段の途中で分けない（段より長いときは分ける）。
+      const roomNow = roomInBand();
+      if (roomNow < k && roomNow < spec.linesPerPage) breakBand();
+      for (let i = 0; i < k; i++) {
+        const atoms: Atom[] = [];
+        cellLines.forEach((lines, c) => {
+          const l = lines[i];
+          const used = l ? natural(l.atoms) : 0;
+          atoms.push(spacer(pad), ...(l?.atoms ?? []), spacer(widths[c] - used + pad));
+        });
+        pushLine({ atoms, indent: 0, span: 1, align: "start", start: i === 0, end: i === k - 1, srcLine: row.line, table: { cols, rowStart: i === 0, rowEnd: i === k - 1 } });
+      }
+    });
   }
 
   /** キャプションを行に分ける（長さは perLine 字分。行は3行まで）。 */
@@ -566,10 +628,14 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     roles.pop();
     images.pop();
     masters.pop();
+    anchors.pop();
   }
   return pages.map((lines, i) => {
     const page = placePage(lines, i, spec, roles[i], images[i]);
     if (masters[i]) page.master = masters[i];
+    // ページのラベル：字のないラベルと、行の字に付いたラベル。
+    const labels = [...anchors[i], ...lines.flatMap((l) => (typeof l === "object" ? l.atoms.flatMap((a) => (a.label ? [a.label] : [])) : []))];
+    if (labels.length > 0) page.labels = labels;
     return page;
   });
 }
@@ -669,6 +735,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
       const x = right - size / 2 - col * pitch;
       const bandTop = top + band * (columnHeight + spec.columnGapPt);
       placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
+      if (line.table) tableRules(lineShapes, line.table, x, bandTop, size, pitch * span);
     }
     slot = snap(slot + span);
   }
@@ -884,6 +951,22 @@ function shiftImage(placed: { shape: Shape; visible: Frame }, block: ImageBlock,
   s.y += dy;
   if (s.clip) s.clip = { ...s.clip, x: s.clip.x + dx, y: s.clip.y + dy };
   placed.visible = { ...placed.visible, x: placed.visible.x + dx, y: placed.visible.y + dy };
+}
+
+/** 表の欄の中の、罫線と字の間（字数）。 */
+const TABLE_PAD = 0.5;
+
+/**
+ * 表の罫線。欄の境目には行に直交する短い線を、表の行の最初と最後の行には行に沿った線を引く。
+ * 隣の行の短い線とつながって、表の枠と欄の区切りになる。color が空なので文字の色で引く。
+ */
+function tableRules(shapes: Shape[], t: NonNullable<Line["table"]>, x: number, top: number, size: number, width: number) {
+  const half = width / 2;
+  const w = size * 0.05;
+  const end = top + t.cols[t.cols.length - 1] * size;
+  for (const b of t.cols) shapes.push({ kind: "line", x1: x - half, y1: top + b * size, x2: x + half, y2: top + b * size, width: w, color: "" });
+  if (t.rowStart) shapes.push({ kind: "line", x1: x + half, y1: top, x2: x + half, y2: end, width: w, color: "" });
+  if (t.rowEnd) shapes.push({ kind: "line", x1: x - half, y1: top, x2: x - half, y2: end, width: w, color: "" });
 }
 
 /** キャプションの行の間隔と、画像との間（本文の文字の大きさに対する割合）。 */

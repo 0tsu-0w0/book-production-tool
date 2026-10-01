@@ -8,7 +8,7 @@
 //   数式     $…$・\(…\) → ［＃数式］…［＃／数式］、\[…\]・$$…$$・equation などの環境 → ［＃別行数式］…［＃／別行数式］
 //   図       \begin{figure}…\includegraphics…\caption{…}…\end{figure} → ［＃画像：…　キャプション：…］
 //   マクロ   \newcommand・\renewcommand・\def（引数・省略時の値も）を展開してから置き換える
-//   参照     \label{…} は消し、\ref{…} はその見出しの題（「…」）にする（ページ番号の \pageref は ??）
+//   参照     \label{…} はラベル、\ref{…} はその見出しの題（「…」）、\pageref{…} はそのページ番号
 // 段落は LaTeX と同じく、空行で区切る（続く行は1つの段落につなぐ）。% から行末はコメント。
 // 知らない命令は、引数の中身だけを残して命令を消す。
 
@@ -216,6 +216,11 @@ export function convertInline(src: string): string {
         const star = env.endsWith("*") ? env : `${env}*`;
         const tex = env === "displaymath" ? body.trim() : `\\begin{${star}}${body.trim()}\\end{${star}}`;
         out += `\n［＃別行数式］${tex}［＃／別行数式］\n`;
+      } else if (base === "begin" && (env === "tabular" || env === "tabular*" || env === "tabularx")) {
+        // 表：列の指定（{l|c|r} など。tabular* と tabularx は幅も）を読み飛ばし、行を \\、欄を & で分ける。
+        if (env !== "tabular") r.group();
+        r.group();
+        out += tableMarkup(r.until(`\\end{${env}}`));
       } else if (env === "quote" || env === "quotation" || env === "center" || env === "flushright" || env === "flushleft" || env === "document") {
         out += "\n";
       }
@@ -254,14 +259,20 @@ export function convertInline(src: string): string {
       continue;
     }
     if (base === "label") {
-      r.group();
+      // ラベル：\pageref でページ番号を引けるようにする。
+      const key = (r.group() ?? "").trim().replace(/[［］]/g, "");
+      if (key) out += `［＃ラベル：${key}］`;
       continue;
     }
-    if (base === "ref" || base === "pageref" || base === "autoref" || base === "nameref") {
+    if (base === "pageref") {
+      const key = (r.group() ?? "").trim().replace(/[［］]/g, "");
+      out += `［＃ページ：${key}］`;
+      continue;
+    }
+    if (base === "ref" || base === "autoref" || base === "nameref") {
       const key = r.group() ?? "";
       const title = labels.get(key.trim());
-      // ページ番号は組んでみるまで分からないので、LaTeX の未解決と同じく ?? にする。
-      out += base === "pageref" || title === undefined ? "??" : `「${title}」`;
+      out += title === undefined ? "??" : `「${title}」`;
       continue;
     }
     if (WRAP1[base]) {
@@ -304,11 +315,33 @@ function joinLines(a: string, b: string): string {
   return /[A-Za-z0-9.,;:!?)]$/.test(a) && /^[A-Za-z0-9(]/.test(b) ? `${a} ${b}` : a + b;
 }
 
+/**
+ * tabular の中身を、tategumi の表の記法（［＃表］…［＃／表］）にする。
+ * 1行目のあとに \hline などの罫線があれば、1行目を見出しの行にする。罫線の命令は消す。
+ */
+function tableMarkup(body: string): string {
+  const RULES = /\\(?:hline|toprule|midrule|bottomrule|cline\s*\{[^}]*\})/g;
+  const rows = body.split(/\\\\(?:\s*\[[^\]]*\])?/);
+  const out: string[] = [];
+  let header = false;
+  for (const raw of rows) {
+    // 2行目の前に罫線があれば、1行目は見出し。
+    if (out.length === 1 && /\\(?:hline|midrule)/.test(raw)) header = true;
+    const text = raw.replace(RULES, "").trim();
+    if (!text) continue;
+    const cells = text.split(/(?<!\\)&/).map((c) => convertInline(c.trim()).replace(/\n/g, " ").replace(/[|｜]/g, "／").trim());
+    out.push(`| ${cells.join(" | ")} |`);
+  }
+  if (out.length === 0) return "";
+  if (header) out.splice(1, 0, `|${out[0].split(" | ").map(() => "---").join("|")}|`);
+  return `\n［＃表］\n${out.join("\n")}\n［＃／表］\n`;
+}
+
 /** 段落の頭を全角1字下げる（LaTeX の段落の字下げ）。会話文・見出し・記法の行・\noindent の段落は下げない。 */
 function indentParagraph(line: string): string {
   if (line.startsWith(NO_INDENT)) return line.replaceAll(NO_INDENT, "");
   line = line.replaceAll(NO_INDENT, "");
-  if (/^(＃|［＃|「|『|（|　|\u0002)/.test(line) || line === "") return line;
+  if (/^(＃|［＃|「|『|（|　|\||\u0002)/.test(line) || line === "") return line;
   return `　${line}`;
 }
 
@@ -498,6 +531,8 @@ export function texToMarkup(src: string): TexResult {
       return;
     }
     const converted = convertInline(para.trim())
+      // 見出しなどのあとの \label は、改行の次に来るので、前の行（見出し）に付ける。
+      .replace(/\n+(［＃ラベル[：:][^］]*］)/g, "$1\n")
       // 和文と数式の間の空白は、LaTeX と同じく無視する（和文と数式の間は詰める）。
       .replace(/(?<=[^\x00-\x7F]) +(?=［＃数式］)/g, "")
       .replace(/(?<=［＃／数式］) +(?=[^\x00-\x7F])/g, "")

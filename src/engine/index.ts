@@ -10,7 +10,7 @@ import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
 import { prepareSpacing } from "./spacing.js";
 import { applyStyles, type EngineStyles } from "./styles.js";
-import { hasToc, layoutWithToc } from "./toc.js";
+import { hasPageRefs, hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
 import { texToMarkup } from "./tex.js";
 import type { Block, DrawPage, ImageInfo, LineText, PageLayout } from "./types.js";
 import { textBlocks } from "./blocks.js";
@@ -123,10 +123,18 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   let layouts: PageLayout[];
   if (hasToc(source)) {
     // 目次があれば、見出しのページ番号が決まるまで組み直す（DTP-14）。
-    ({ blocks, pages: layouts } = layoutWithToc(source, settings.toc, spec.firstPageNumber, prepare, (bs) => layoutDocument(bs, spec, sourceLines)));
+    ({ blocks, pages: layouts } = layoutWithToc(source, settings.toc, spec.firstPageNumber, prepare, (bs) => layoutDocument(bs, spec, sourceLines), !!spec.horizontal));
   } else {
     prepare(blocks);
     layouts = layoutDocument(blocks, spec, sourceLines);
+  }
+  // ページ番号の参照（［＃ページ：名前］）：番号を入れて組み直し、番号が変わらなくなるまで繰り返す。
+  if (hasPageRefs(blocks)) {
+    for (let pass = 0; pass < 3; pass++) {
+      if (!resolvePageRefs(blocks, layouts, spec.firstPageNumber, settings.toc.numerals, !!spec.horizontal)) break;
+      prepare(blocks);
+      layouts = layoutDocument(blocks, spec, sourceLines);
+    }
   }
   const decor = toPageDecor(settings);
   // 柱に出す章題・節題は、そのページまでに出てきた最後の見出し。

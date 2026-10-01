@@ -14,6 +14,8 @@ export const TOC_TITLE_STYLE = "目次の題";
 export const DISPLAY_MATH_STYLE = "別行数式";
 export const CAPTION_STYLE = "キャプション";
 export const NOTE_STYLE = "注";
+export const TABLE_STYLE = "表";
+export const TABLE_HEADER_STYLE = "表の見出し";
 export const TOC_ENTRY_STYLES = ["目次の項目1", "目次の項目2"] as const;
 /** 消せない段落スタイル（書名・著者名・奥付は、扉と奥付のページで使う）。 */
 export const BUILTIN_PARAGRAPH_STYLES = [
@@ -28,6 +30,8 @@ export const BUILTIN_PARAGRAPH_STYLES = [
   DISPLAY_MATH_STYLE,
   CAPTION_STYLE,
   NOTE_STYLE,
+  TABLE_STYLE,
+  TABLE_HEADER_STYLE,
 ];
 
 export interface ParagraphStyle {
@@ -143,6 +147,9 @@ export const DEFAULT_STYLES: StyleSheet = {
     paragraph(CAPTION_STYLE, { scale: 0.8 }),
     // 注（章末・巻末）：本文より少し小さく。
     paragraph(NOTE_STYLE, { scale: 0.85, indent: 1 }),
+    // 表：欄の中の文字。見出しの行は太字。
+    paragraph(TABLE_STYLE, { scale: 0.9 }),
+    paragraph(TABLE_HEADER_STYLE, { scale: 0.9, bold: true }),
   ],
   character: [character("太字", { bold: true }), character("小さく", { scale: 0.8 })],
 };

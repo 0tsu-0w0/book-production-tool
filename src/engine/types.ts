@@ -49,6 +49,10 @@ export interface Atom {
   style?: string;
   /** リーダー（目次の点線）：行の残りを埋めるまで、この字を繰り返す。 */
   leader?: boolean;
+  /** この字のある場所の名前（［＃ラベル：名前］。［＃ページ：名前］でページ番号を引く）。 */
+  label?: string;
+  /** ページ番号の参照（［＃ページ：名前］）。cells は組むたびに、そのラベルのページ番号にする。 */
+  pageRef?: string;
   /** 注（［＃注：…］）の中身。cells は本文に入れる小さな注番号（「注」と番号。番号は組むたびに入れる）。 */
   note?: Atom[];
 }
@@ -88,10 +92,14 @@ export type Block =
   | { kind: "pad"; multiple: number; reserve: number }
   /** 目次を入れる場所（組版の前に、見出しから作った段落に置き換える）。 */
   | { kind: "toc" }
+  /** 行に字のないラベル（［＃ラベル：名前］だけの行）。次の字の入るページを指す。 */
+  | { kind: "anchor"; name: string }
   /** ここから使うマスターページ（名前。空なら標準のマスター）。DTP-05。 */
   | { kind: "master"; name: string }
   /** 画像（DTP-12）。 */
   | ImageBlock
+  /** 表。 */
+  | TableBlock
   /** 新しいページから始めて流し込み、終わったら改ページする段落のまとまり（目次）。そのページの種類は role。 */
   | { kind: "section"; role: PageRole; blocks: Block[] };
 
@@ -119,6 +127,23 @@ export interface ImageBlock {
   scale?: number;
   /** 位置の微調整（mm。仕上がりのページで右・下が正）。 */
   shift?: { x: number; y: number };
+}
+
+/** 表の行。cells は欄ごとの段落（段落スタイル「表」か「表の見出し」）。line は原稿の行。 */
+export interface TableRow {
+  cells: { kind: "para"; atoms: Atom[]; style?: string; format?: ParaFormat }[];
+  line?: number;
+}
+
+/**
+ * 表。縦組みでは表の行が縦の行（右から左へ並ぶ）、欄がその中の区切り（上から下へ）になり、
+ * 横組みではふつうの表（行が上から下、欄が左から右）になる。
+ */
+export interface TableBlock {
+  kind: "table";
+  rows: TableRow[];
+  /** 見出しの行の数（区切りの行「|---|」より前の行）。 */
+  header: number;
 }
 
 /** 画像の大きさ（ピクセル）。縦横の比を決めるのに使う。 */
@@ -252,6 +277,8 @@ export interface PageLayout {
   role: PageRole;
   /** このページのマスターページの名前（なければ標準のマスター）。 */
   master?: string;
+  /** このページにあるラベル（［＃ラベル：名前］）。 */
+  labels?: string[];
   /** このページで始まる見出し（柱に使う）。 */
   headings: { level: 1 | 2; text: string }[];
   /** このページの行の文字（ルビを除く）。段落の最初の行・最後の行か（校正の補助に使う）。 */

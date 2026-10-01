@@ -455,6 +455,7 @@ const assists: Record<string, () => void> = {
   },
   odd: () => insertLine("［＃改丁］"),
   blankpage: () => insertLine("［＃白ページ］"),
+  table: () => insertLine(["［＃表］", "| 見出し | 見出し |", "|---|---|", "| 中身 | 中身 |", "［＃／表］"].join(String.fromCharCode(10))),
   tobira: () => {
     // 選んだ行（なければ今の行）を［＃扉］…［＃／扉］で囲む。
     const start = lineStart();

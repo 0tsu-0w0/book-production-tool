@@ -140,13 +140,15 @@ describe("TeX：マクロ・参照・図", () => {
     assert.equal(out, "　太郎は｜漢字《かんじ》。「こんにちは、太郎」「やあ、太郎」ba");
   });
 
-  it("\ref は見出しの題、\pageref は ??。図の \caption は画像のキャプションに、幅は大きさに", async () => {
+  it("\\ref は見出しの題、\\label と \\pageref はラベルとページ番号の参照。図の \\caption は画像のキャプションに、幅は大きさに", async () => {
     const { texToMarkup } = await import("../engine/tex.js");
     const src = String.raw`\section{はじめに}\label{s:a}
 \ref{s:a}と\pageref{s:a}と\ref{nai}
 \begin{figure}\includegraphics[width=.5\linewidth]{img/cat.jpg}\caption{猫 [1]}\end{figure}`;
     const out = texToMarkup(src).text;
-    assert.match(out, /「はじめに」と\?\?と\?\?/);
+    // \label は見出しの行に付く。
+    assert.match(out, /^＃＃はじめに［＃ラベル：s:a］$/m);
+    assert.match(out, /「はじめに」と［＃ページ：s:a］と\?\?/);
     assert.match(out, /［＃画像：cat　大きさ：50%　キャプション：猫 \[1\]］/);
   });
 });

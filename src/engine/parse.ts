@@ -36,6 +36,11 @@ export function splitChars(s: string): string[] {
 
 const WARICHU = /^［＃割注］(.+?)［＃／割注］/;
 const INLINE_MATH = /^［＃数式］(.+?)［＃／数式］/;
+/** ラベルとページ番号の参照：［＃ラベル：名前］・［＃ページ：名前］。 */
+const LABEL = /^［＃ラベル[：:]([^［］]+)］/u;
+const PAGE_REF = /^［＃ページ[：:]([^［］]+)］/u;
+const LABEL_LINE = /^\s*［＃ラベル[：:]([^［］]+)］\s*$/u;
+
 /** 注：［＃注：中身］（中身は章末・巻末にまとめる）。 */
 const NOTE = /^［＃注[：:]([^［］]*)］/u;
 const DISPLAY_MATH = /^\s*［＃別行数式］(.+)［＃／別行数式］\s*$/;
@@ -153,7 +158,12 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     for (; styled < atoms.length; styled++) if (current && !atoms[styled].style) atoms[styled].style = current;
     styled = atoms.length;
   };
+  let pendingLabel: string | undefined;
   while (i < s.length) {
+    if (pendingLabel && atoms.length > 0) {
+      atoms[0].label = pendingLabel;
+      pendingLabel = undefined;
+    }
     markSrc();
     start = i;
     markStyled();
@@ -163,6 +173,19 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     if ((m = INLINE_MATH.exec(rest))) {
       // 数式は横倒しの欧文と同じく組む（字の長さは数式を組んでから決める）。
       atoms.push({ cells: [{ text: m[1], rotate: true, math: { display: false } }] });
+      i += m[0].length;
+      continue;
+    }
+    if ((m = LABEL.exec(rest))) {
+      // ラベルは前の字に付ける（行頭なら次の字に）。
+      if (atoms.length > 0) atoms[atoms.length - 1].label = m[1].trim();
+      else pendingLabel = m[1].trim();
+      i += m[0].length;
+      continue;
+    }
+    if ((m = PAGE_REF.exec(rest))) {
+      // 番号は組んでから入れる。それまでは仮に3桁分。
+      atoms.push({ cells: [{ text: "000", tcy: true }], pageRef: m[1].trim() });
       i += m[0].length;
       continue;
     }
@@ -326,6 +349,38 @@ export function parseImageOptions(name: string, options: string[]): ImageBlock {
 
 const toHalfWidthDigits = (s: string) => s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0));
 
+/** 表の始まりと終わり。 */
+const TABLE_OPEN = /^\s*［＃表］\s*$/u;
+const TABLE_CLOSE = /^\s*［＃／表］\s*$/u;
+/** 見出しの行と本体を分ける区切りの行：|---|---|（全角も可）。 */
+const TABLE_RULE = /^\s*[|｜]?\s*[-－ー―:：]{2,}\s*(?:[|｜]\s*[-－ー―:：]{2,}\s*)*[|｜]?\s*$/u;
+export const TABLE_STYLE = "表";
+export const TABLE_HEADER_STYLE = "表の見出し";
+
+/**
+ * 表の行を欄に分ける。区切りは「|」か「｜」。ただし「｜漢字《かんじ》」のようなルビの「｜」は区切りにしない。
+ * 返すのは、欄の文字と、行の中の位置。
+ */
+export function splitTableRow(line: string): { text: string; at: number }[] {
+  const cells: { text: string; at: number }[] = [];
+  let start = 0;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c !== "|" && c !== "｜") continue;
+    if (c === "｜" && /^｜[^｜|《]+《[^》]*》/u.test(line.slice(i))) continue;
+    cells.push({ text: line.slice(start, i), at: start });
+    start = i + 1;
+  }
+  cells.push({ text: line.slice(start), at: start });
+  // 行頭・行末の区切りの外側は欄ではない。
+  if (cells.length > 1 && cells[0].text.trim() === "") cells.shift();
+  if (cells.length > 1 && cells[cells.length - 1].text.trim() === "") cells.pop();
+  return cells.map((c) => {
+    const lead = c.text.length - c.text.trimStart().length;
+    return { text: c.text.trim(), at: c.at + lead };
+  });
+}
+
 /** マスターページの切り替え：［＃マスター：名前］（「標準」で元に戻す）。 */
 const MASTER = /^\s*［＃マスター[：:]\s*([^［］\s]+)\s*］\s*$/u;
 
@@ -340,6 +395,8 @@ function parseLine(line: string, opts: ParseOptions): Block | Marker {
     const at = line.indexOf("］") + 1;
     return { kind: "para", style: DISPLAY_MATH_STYLE, atoms: [{ cells: [{ text: dm[1], rotate: true, math: { display: true }, src: at }] }] };
   }
+  const label = LABEL_LINE.exec(line);
+  if (label) return { kind: "anchor", name: label[1].trim() };
   const ms = MASTER.exec(line);
   if (ms) return { kind: "master", name: ms[1] === "標準" ? "" : ms[1] };
   const img = IMAGE.exec(line);
@@ -398,6 +455,28 @@ export function parse(src: string, opts: ParseOptions = DEFAULT_PARSE_OPTIONS, l
   const rawLines = src.replace(/\r\n?/g, "\n").split("\n");
   for (let n = 0; n < rawLines.length; n++) {
     const line = rawLines[n];
+    if (TABLE_OPEN.test(line)) {
+      // 表：［＃／表］（なければ空行か原稿の終わり）までの行を、表の行にする。
+      const table: Block = { kind: "table", rows: [], header: 0 };
+      (group ?? blocks).push(table);
+      if (group) groupLines.push(sourceLine(n));
+      else lineOf?.push(sourceLine(n));
+      for (n++; n < rawLines.length && !TABLE_CLOSE.test(rawLines[n]) && rawLines[n].trim() !== ""; n++) {
+        const row = rawLines[n];
+        if (TABLE_RULE.test(row)) {
+          table.header = table.rows.length;
+          continue;
+        }
+        table.rows.push({
+          line: sourceLine(n),
+          cells: splitTableRow(row).map((c) => ({ kind: "para", style: TABLE_STYLE, atoms: parseInline(c.text, opts, c.at) })),
+        });
+      }
+      for (let r = 0; r < table.header; r++) for (const c of table.rows[r].cells) c.style = TABLE_HEADER_STYLE;
+      // 空行で終わったときは、その空行を段落の区切りとして残す。
+      if (n < rawLines.length && !TABLE_CLOSE.test(rawLines[n])) n--;
+      continue;
+    }
     let cached = cache.get(line);
     if (!cached) cache.set(line, (cached = parseLine(line, opts)));
     const block = cached;
