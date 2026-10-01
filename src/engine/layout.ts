@@ -205,7 +205,8 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
     let keep = cur.length;
     while (keep > 0) {
       const nextHead = keep < cur.length ? cur[keep] : a;
-      if (startProhibited(first(nextHead), opts) || endProhibited(last(cur[keep - 1]), opts)) {
+      // 注番号は、前の字から離して行頭に出さない。
+      if (startProhibited(first(nextHead), opts) || (opts.kinsoku !== "none" && !!nextHead.note) || endProhibited(last(cur[keep - 1]), opts)) {
         keep--;
       } else {
         break;
@@ -249,7 +250,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   const opts: BreakOptions = {
     kinsoku: spec.kinsoku,
     hanging: spec.hanging,
-    justify: jis,
+    // 横組みは、字の幅どおりの欧文が混ざっても行の終わりがそろうよう、両端揃えにする。
+    justify: jis || !!spec.horizontal,
     oikomi: jis && spec.typography.oikomi,
     lineHeadHalf: jis && spec.typography.lineHeadBracket === "half",
     extraStart: new Set([...(spec.kinsokuExtra?.start ?? "")]),
@@ -760,7 +762,12 @@ function placeLine(
   const adjust = line.adjust ?? 0;
   const totalCompress = compressible(line.atoms);
   const shrinkRatio = adjust < 0 && totalCompress > 0 ? Math.min(1, -adjust / totalCompress) : 0;
-  const extraPerGap = adjust > 0 && cells.length > 1 ? adjust / (cells.length - 1) : 0;
+  // 両端揃えの空きは、まず語間（半角の空白）に1つ0.5emまで配り、残りを字間に均等に配る（欧文の行が字間で広がりすぎないように）。
+  const spaces = adjust > 0 ? cells.filter((c) => c.text === " ").length : 0;
+  const spaceExtra = spaces > 0 ? Math.min(adjust / spaces, 0.5) : 0;
+  const rest = adjust - spaceExtra * spaces;
+  const extraPerGap = rest > EPS && cells.length > 1 ? rest / (cells.length - 1) : 0;
+  const gapAfter = (cell: Cell) => extraPerGap + (cell.text === " " ? spaceExtra : 0);
 
   let offset = line.indent - (line.headTrim ?? 0);
   if (line.align === "center" || line.align === "end") {
@@ -786,7 +793,7 @@ function placeLine(
       });
       for (const c of atom.cells) {
         offset += advance(c);
-        if (index < cells.length - 1) offset += extraPerGap;
+        if (index < cells.length - 1) offset += gapAfter(c);
         index++;
       }
       continue;
@@ -819,7 +826,7 @@ function placeLine(
       if (atom.sideline) sideRuns.push({ kind: atom.sideline, x: x + (size * scale) / 2, from: y, to: y + adv * size, color: cell.color ?? "", size });
       offset += adv;
       spanEnd = offset;
-      if (index < cells.length - 1) offset += extraPerGap;
+      if (index < cells.length - 1) offset += gapAfter(cell);
       index++;
     }
     if (atom.ruby) {

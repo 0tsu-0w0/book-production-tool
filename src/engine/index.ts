@@ -1,5 +1,5 @@
 import { placeNotes } from "./notes.js";
-import { toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
+import { horizontalPunctuation, toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { fontKey, type StyleSheet } from "../document/styles.js";
 import { bookPageBlocks } from "./book-pages.js";
 import { decoratePage } from "./decorate.js";
@@ -92,7 +92,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   // TeX の記法なら、先に tategumi の記法に置き換える（行の対応も覚えておく）。
   const tex = settings.format.markup === "tex" ? texToMarkup(text) : null;
   const format = formatText(tex ? tex.text : text, toFormatOptions(settings));
-  const formatted = format.text;
+  const formatted = horizontalPunctuation(format.text, settings);
   // 整形後の行の番号 → 元の原稿の行の番号（整形で消えた行を飛ばす）。
   const origin: number[] = [];
   format.lines.forEach((l, i) => {

@@ -87,6 +87,32 @@ export interface BookLayout {
   writingMode: "vertical" | "horizontal";
   topMm: number;
   gutterMm: number;
+  /** 横組みの句読点：「、。」「，。」「，．」。縦組みでは使わない。 */
+  punctuation: HorizontalPunctuation;
+}
+
+export type HorizontalPunctuation = "、。" | "，。" | "，．";
+export const HORIZONTAL_PUNCTUATION: HorizontalPunctuation[] = ["、。", "，。", "，．"];
+
+/**
+ * 組み方向を変えたとき、字数と行数を版面に収まるように決め直す（縦組みの字数のまま横組みにすると、
+ * 行がページからはみ出すため）。余白は天・ノドの指定を使い、地と小口はそれと同じくらい（最低 12mm）取る。
+ */
+export function fitBookToWritingMode(b: BookLayout): void {
+  const [w, h] = trimSize(b);
+  const size = b.fontSizePt / MM;
+  const pitch = size * (b.lineGapPercent / 100);
+  const centered = b.position === "center";
+  const top = centered ? 15 : b.topMm;
+  const inner = centered ? 15 : b.gutterMm;
+  const bottom = Math.max(12, top);
+  const outer = Math.max(12, inner * 0.8);
+  // 字の並ぶ向きの長さ（段を含む）と、行の並ぶ向きの長さ。
+  const along = b.writingMode === "horizontal" ? w - inner - outer : h - top - bottom;
+  const across = b.writingMode === "horizontal" ? h - top - bottom : w - inner - outer;
+  const gap = b.columns > 1 ? (b.columns - 1) * b.columnGapChars * size : 0;
+  b.charsPerLine = Math.max(5, Math.floor((along - gap) / b.columns / size + 1e-9));
+  b.linesPerPage = Math.max(1, Math.floor((across - size) / pitch + 1e-9) + 1);
 }
 
 /** 書誌（扉・奥付・柱の書名に使う）。 */
@@ -326,6 +352,7 @@ export const DEFAULT_SETTINGS: Settings = {
     columnGapChars: 2,
     position: "top-gutter",
     writingMode: "vertical",
+    punctuation: "、。",
     topMm: 14,
     gutterMm: 12,
   },
@@ -559,6 +586,7 @@ export function normalizeSettings(input: unknown): Settings {
   if (s.toc.levels !== 1) s.toc.levels = 2;
   if (s.toc.numerals !== "kanji") s.toc.numerals = "arabic";
   if (s.book.writingMode !== "horizontal") s.book.writingMode = "vertical";
+  if (!HORIZONTAL_PUNCTUATION.includes(s.book.punctuation)) s.book.punctuation = "、。";
   const o = s.output;
   if (o.color !== "gray") o.color = "auto";
   if (o.imposition !== "spread") o.imposition = "single";
@@ -614,7 +642,16 @@ export function toFormatOptions(s: Settings): FormatOptions {
 }
 
 export function toParseOptions(s: Settings): ParseOptions {
+  // 横組みでは、半角の英数字は半角のまま（字の幅どおり）に組み、数字を縦中横にしない。
+  if (leftBound(s)) return { tcyDigits: false, halfWidth: "rotate", pageBreakMark: s.format.pageBreakMark, tcyMaxDigits: s.advanced.tcyMaxDigits };
   return { tcyDigits: s.format.tcyDigits, halfWidth: s.format.halfWidth, pageBreakMark: s.format.pageBreakMark, tcyMaxDigits: s.advanced.tcyMaxDigits };
+}
+
+/** 横組みの句読点に置き換える（字数は変わらないので、原稿の位置はずれない）。 */
+export function horizontalPunctuation(text: string, s: Settings): string {
+  if (!leftBound(s) || s.book.punctuation === "、。") return text;
+  const out = text.replace(/、/g, "，");
+  return s.book.punctuation === "，．" ? out.replace(/。/g, "．") : out;
 }
 
 export function toPageDecor(s: Settings): PageDecor {

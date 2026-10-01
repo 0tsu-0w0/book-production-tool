@@ -125,10 +125,14 @@ function isPlainKanji(a: Atom): boolean {
   return a.cells.length === 1 && !a.ruby && !a.kenten && !a.sideline && !c.tcy && !c.rotate && KANJI.test(c.text);
 }
 
-/** 横倒しの文字列を、語と空白ごとの Atom にする（語の途中では改行しない）。 */
+/**
+ * 横倒しの文字列を、語と空白ごとの Atom にする（語の途中では改行しない）。
+ * URL やハイフンでつないだ語は、「/」（「//」の間は除く）と「-」のあとでも改行できるようにする。
+ */
 function rotatedAtoms(run: string): Atom[] {
   return run
     .split(/( +)/)
+    .flatMap((s) => (s.startsWith(" ") ? [s] : s.split(/(?<=\/)(?!\/)|(?<=[A-Za-z]-)(?=[A-Za-z])/)))
     .filter((s) => s !== "")
     .map((s) => ({ cells: [{ text: s, rotate: true }] }));
 }
@@ -246,6 +250,13 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
       const ch = m[0][0] === "…" ? "…" : "―";
       atoms.push({ cells: [{ text: ch }, { text: ch }] });
       i += m[0].length;
+      continue;
+    }
+
+    if (s[i] === " " && opts.halfWidth === "rotate") {
+      // 半角を半角のまま組むときは、和文と欧文の間などの半角の空白も、全角にせず字の幅のまま。
+      atoms.push({ cells: [{ text: " ", rotate: true }] });
+      i++;
       continue;
     }
 

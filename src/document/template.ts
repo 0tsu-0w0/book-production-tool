@@ -102,4 +102,19 @@ export const BUILTIN_TEMPLATES: Template[] = [
     // 同人誌の入稿は4の倍数のページ数が多い。
     s.pages.padTo = 4;
   }),
+  builtin("A5 横組みの本（35字×28行）", (s) => {
+    Object.assign(s.book, {
+      trim: "A5",
+      widthMm: 148,
+      heightMm: 210,
+      fontSizePt: 9,
+      charsPerLine: 35,
+      linesPerPage: 28,
+      lineGapPercent: 170,
+      writingMode: "horizontal",
+      punctuation: "、。",
+      topMm: 25,
+      gutterMm: 20,
+    });
+  }),
 ];

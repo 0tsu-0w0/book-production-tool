@@ -13,6 +13,7 @@ import {
   PRESETS,
   RECOMMENDED_FORMAT,
   TEXT_COLORS,
+  fitBookToWritingMode,
   customGrid,
   CUSTOM_PAPER,
   TOC_LEADERS,
@@ -130,6 +131,21 @@ function sections(): Section[] {
             ["horizontal", "横組み（左綴じ）"],
           ],
           when: isBook,
+        },
+        {
+          kind: "select",
+          path: "book.punctuation",
+          label: "句読点（横組み）",
+          options: [
+            ["、。", "、。（ふつう）"],
+            ["，。", "，。（公用文など）"],
+            ["，．", "，．（理工書など）"],
+          ],
+          when: (s) => isBook(s) && s.book.writingMode === "horizontal",
+        },
+        {
+          kind: "info",
+          render: (s) => (isBook(s) && s.book.writingMode === "horizontal" ? "横組みでは、半角の英数字は半角のまま組み、数字は縦中横にしません。" : null),
         },
         { kind: "number", path: "book.widthMm", label: "仕上がりの幅", min: 50, max: 400, step: 1, unit: "mm", when: (s) => isBook(s) && s.book.trim === FREE_TRIM },
         { kind: "number", path: "book.heightMm", label: "仕上がりの高さ", min: 50, max: 400, step: 1, unit: "mm", when: (s) => isBook(s) && s.book.trim === FREE_TRIM },
@@ -569,6 +585,11 @@ export class SettingsPanel {
 
   private changed(path: Path, value: unknown) {
     setPath(this.settings, path, value);
+    if (path === "book.writingMode") {
+      // 組み方向を変えたら、字数と行数を版面に収まるように決め直す（欄の数字も書き直す）。
+      fitBookToWritingMode(this.settings.book);
+      this.render(this.settings);
+    }
     this.refresh();
     this.onChange(this.settings);
   }
