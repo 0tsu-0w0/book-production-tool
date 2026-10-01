@@ -209,6 +209,8 @@ export interface OutputSettings {
   pdfStandard: "x1a" | "x4";
   /** PDF/X-4 に埋め込む印刷条件（CMYK の ICC プロファイル）のファイル。 */
   iccPath: string;
+  /** 入稿用 PDF で、文字をアウトライン化する（フォントを埋め込まない）。 */
+  outline: boolean;
 }
 
 /** 詳細設定：ふだんは既定のままでよい、細かな組版と書き出しの値。 */
@@ -428,7 +430,7 @@ export const DEFAULT_SETTINGS: Settings = {
   font: null,
   image: { format: "png", dpi: 350, jpegQuality: 0.92, range: "", snsGroups: false, credit: "" },
   pdfKind: "print",
-  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "" },
+  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "", outline: false },
 };
 
 /** 紙1枚の厚さ（mm）。 */

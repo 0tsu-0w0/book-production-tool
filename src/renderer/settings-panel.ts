@@ -406,6 +406,14 @@ function sections(): Section[] {
           when: (s) => s.pdfKind !== "screen" && s.output.pdfStandard === "x4",
         },
         { kind: "button", label: "ICC プロファイルのファイルを選ぶ…", action: "choose-icc", when: (s) => s.pdfKind !== "screen" && s.output.pdfStandard === "x4" },
+        { kind: "check", path: "output.outline", label: "文字をアウトライン化する（フォントを埋め込まない）", when: (s) => s.pdfKind !== "screen" },
+        {
+          kind: "info",
+          render: (s) =>
+            s.pdfKind !== "screen" && s.output.outline
+              ? "文字を図形にして書き出します。印刷所の指定があるときや、埋め込めないフォントを使うときに。PDF の中の文字は検索・コピーできなくなり、ファイルは大きくなります。"
+              : null,
+        },
         {
           kind: "info",
           tone: "warning",

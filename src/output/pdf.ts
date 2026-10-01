@@ -13,6 +13,7 @@ import {
   appendBezierCurve,
   closePath,
   fill,
+  fillAndStroke,
   lineTo,
   moveTo,
   popGraphicsState,
@@ -36,6 +37,7 @@ import {
   type PDFPage,
 } from "pdf-lib";
 import type { DrawItem, DrawPage, Shape } from "../engine/types.js";
+import { Face } from "../engine/face.js";
 import { embedCffFont, isCffFont } from "./cff-font.js";
 import { embedImages, imageKey, type PdfImageSource } from "./pdf-images.js";
 import { svgPathOps } from "./svg-path.js";
@@ -53,6 +55,8 @@ export interface PdfOptions {
   color: ColorMode;
   /** PDF/X として書き出す（standard の版で。既定は PDF/X-1a:2003）。 */
   pdfx: boolean;
+  /** 文字をアウトライン化する（字形の輪郭を塗りの図形にし、フォントを埋め込まない）。 */
+  outline?: boolean;
   /** PDF/X の版。x4 なら icc（印刷条件の CMYK の ICC プロファイル）が要る。 */
   standard?: PdfXStandard;
   icc?: Uint8Array;
@@ -105,12 +109,16 @@ export async function renderPdf(
 
   // フォントごと（本文・スタイルで指定した書体）に埋め込む。使っていないフォントは埋め込まない。
   const bytesList = Array.isArray(fontBytes) ? fontBytes : [fontBytes];
-  const faceFonts = await Promise.all(
-    bytesList.map((bytes, face) => {
-      const own = pages.map((p) => ({ ...p, items: p.items.filter((it) => it.face === face) }));
-      return own.some((p) => p.items.length > 0) ? embedFonts(doc, bytes, own) : Promise.resolve(undefined);
-    }),
-  );
+  // アウトライン化するときはフォントを埋め込まず、字形の輪郭を1度ずつ Form XObject にして使い回す。
+  const outlines = options.outline ? new GlyphForms(doc, bytesList) : undefined;
+  const faceFonts = outlines
+    ? []
+    : await Promise.all(
+        bytesList.map((bytes, face) => {
+          const own = pages.map((p) => ({ ...p, items: p.items.filter((it) => it.face === face) }));
+          return own.some((p) => p.items.length > 0) ? embedFonts(doc, bytes, own) : Promise.resolve(undefined);
+        }),
+      );
   const registration = options.marks ? registrationColorSpace(doc) : undefined;
   const imageRefs = await embedImages(doc, images, pages, options.color, options.imagePpi);
   const bleed = options.bleedMm * MM;
@@ -160,7 +168,7 @@ export async function renderPdf(
       if (ref) ops.push(...imageOps(shape, page.height, pdfPage.node.newXObject("Im", ref)));
       else ops.push(...missingImageOps(shape, page.height, options.color));
     }
-    ops.push(...textOps(page, fontsOf, options.color));
+    ops.push(...(outlines ? outlines.ops(page, pdfPage, options.color) : textOps(page, fontsOf, options.color)));
     ops.push(popGraphicsState());
     pdfPage.pushOperators(...ops);
     onProgress?.(page.index + 1, pages.length);
@@ -253,6 +261,69 @@ function textOps(page: DrawPage, fontsOf: (face: number) => { vert: FontPair; ho
   }
   ops.push(endText());
   return ops;
+}
+
+/**
+ * アウトライン化した文字。字形ごとに、輪郭を塗る Form XObject（擬似ボールドなら塗りと輪郭）を1度だけ作り、
+ * 字の位置と大きさの行列を掛けて置く。輪郭の座標はフォント単位（y 軸が上向き）。
+ */
+class GlyphForms {
+  private readonly faces: Face[] = [];
+  private readonly forms = new Map<string, PDFRef>();
+
+  constructor(
+    private readonly doc: PDFDocument,
+    private readonly bytes: Uint8Array[],
+  ) {}
+
+  private face(i: number): Face {
+    return (this.faces[i] ??= new Face(this.bytes[i] ?? this.bytes[0]));
+  }
+
+  private form(faceIndex: number, gid: number, bold: boolean): PDFRef | undefined {
+    const key = `${faceIndex}:${gid}:${bold ? 1 : 0}`;
+    let ref = this.forms.get(key);
+    if (ref) return ref;
+    const face = this.face(faceIndex);
+    const d = face.path(gid);
+    if (!d) return undefined;
+    const u = face.upem;
+    const body = svgPathOps(d);
+    // 色と（擬似ボールドの）線の太さは、置くときの描画の状態のものを使う。
+    const stream = this.doc.context.formXObject([...body, bold ? fillAndStroke() : fill()], { BBox: [-u * 2, -u * 2, u * 3, u * 3] });
+    ref = this.doc.context.register(stream);
+    this.forms.set(key, ref);
+    return ref;
+  }
+
+  ops(page: DrawPage, pdfPage: PDFPage, mode: ColorMode): PDFOperator[] {
+    const ops: PDFOperator[] = [];
+    const names = new Map<PDFRef, PDFNameType>();
+    let color: string | undefined;
+    for (const item of page.items) {
+      const face = this.face(item.face);
+      const s = item.size / face.upem;
+      if (item.color !== color) {
+        ops.push(fillColor(item.color, mode), strokeColor(item.color, mode));
+        color = item.color;
+      }
+      for (const g of item.glyphs) {
+        const ref = this.form(item.face, g.gid, !!item.bold);
+        if (!ref) continue;
+        let name = names.get(ref);
+        if (!name) names.set(ref, (name = pdfPage.node.newXObject("G", ref)));
+        // 画面の描き方（draw.ts）と同じ置き方。PDF は y 軸が上向きなので、ページの高さから引く。
+        const m = item.rotate
+          ? [0, -s, s, 0, item.x, page.height - (item.y + g.dx * s)]
+          : [s * item.sx, 0, 0, s, item.x + g.dx * s * item.sx, page.height - item.y];
+        ops.push(pushGraphicsState(), concatTransformationMatrix(m[0], m[1], m[2], m[3], m[4], m[5]));
+        // 擬似ボールドの線の太さ（字の大きさに対する割合）を、フォント単位にして指定する。
+        if (item.bold) ops.push(setLineWidth(BOLD_STROKE * face.upem));
+        ops.push(drawObject(name), popGraphicsState());
+      }
+    }
+    return ops;
+  }
 }
 
 /** 画像を置く。clip があれば、その範囲で切る（全面の画像を塗り足しの外で切る）。 */

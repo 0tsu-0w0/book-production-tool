@@ -54,5 +54,7 @@ export function pdfOptions(settings: Settings, title: string): PdfOptions {
     title,
     imagePpi: settings.advanced.imagePpi,
     standard: base.pdfx ? settings.output.pdfStandard : undefined,
+    // アウトライン化は入稿用だけ（閲覧用で文字を図形にすると、検索もコピーもできなくなるため）。
+    outline: base.pdfx && settings.output.outline,
   };
 }
