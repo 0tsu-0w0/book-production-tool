@@ -244,6 +244,7 @@ html.frameless body { grid-template-rows: auto auto 1fr auto; }
 .titlebar #tb-menu { font: 16px/1 system-ui, sans-serif; }
 .titlebar button:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
 .titlebar .tb-close:hover { background: #c42b1c; color: #fff; }
+.tb-icon { width: 18px; height: 18px; align-self: center; margin: 0 2px 0 4px; -webkit-app-region: drag; }
 .tb-title { flex: 1; align-self: center; padding: 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 透明な窓の縁（どこまでが窓かわかるように）。 */
 html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 25%, transparent); }
