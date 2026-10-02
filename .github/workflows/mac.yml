@@ -35,12 +35,12 @@ jobs:
 
       - name: 開発版で起動して、PDF と画像を書き出す
         run: |
-          npx electron . --snapshot=ci/dev-vertical --doc=ci/vertical.kolophon --export-pdf=ci/dev-vertical.pdf --export-images=ci/dev-vertical-images
-          npx electron . --snapshot=ci/dev-horizontal --doc=ci/horizontal.kolophon --export-pdf=ci/dev-horizontal.pdf
+          npx electron . --snapshot=ci/dev-vertical --doc=ci/vertical.kolo --export-pdf=ci/dev-vertical.pdf --export-images=ci/dev-vertical-images
+          npx electron . --snapshot=ci/dev-horizontal --doc=ci/horizontal.kolo --export-pdf=ci/dev-horizontal.pdf
           npx electron . --snapshot=ci/dev-tex --doc=ci/math.tex --export-pdf=ci/dev-tex.pdf
 
       - name: Mac のフォント（ヒラギノ）で PDF を書き出す
-        run: node dist/cli.js ci/hiragino.kolophon ci/cli-hiragino.pdf | tee ci/cli-hiragino.txt
+        run: node dist/cli.js ci/hiragino.kolo ci/cli-hiragino.pdf | tee ci/cli-hiragino.txt
 
       - name: .dmg を作る
         run: npm run dist:mac
@@ -51,7 +51,7 @@ jobs:
           echo "アプリ：$APP"
           codesign -dv --verbose=2 "$APP" 2>&1 | tee ci/codesign.txt || true
           lipo -archs "$APP/Contents/MacOS/Kolophon" | tee ci/archs.txt
-          "$APP/Contents/MacOS/Kolophon" --snapshot=ci/app-vertical --doc=ci/vertical.kolophon --export-pdf=ci/app-vertical.pdf
+          "$APP/Contents/MacOS/Kolophon" --snapshot=ci/app-vertical --doc=ci/vertical.kolo --export-pdf=ci/app-vertical.pdf
 
       - name: PDF/X-1a の検査
         run: node scripts/ci-check-pdf.mjs ci/dev-vertical.pdf ci/dev-horizontal.pdf ci/dev-tex.pdf ci/app-vertical.pdf ci/cli-hiragino.pdf

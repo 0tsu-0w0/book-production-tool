@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseBook, serializeBook, newBook } from "../document/book.js";
-import { FORMAT_ID, newDocument, parseDocument, serializeDocument } from "../document/document.js";
-import { parseTemplate, serializeTemplate } from "../document/template.js";
+import { BOOK_EXTENSION, LEGACY_BOOK_EXTENSIONS, parseBook, serializeBook, newBook } from "../document/book.js";
+import { FILE_EXTENSION, FORMAT_ID, LEGACY_EXTENSIONS, newDocument, parseDocument, serializeDocument } from "../document/document.js";
+import { LEGACY_TEMPLATE_EXTENSIONS, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate } from "../document/template.js";
 import { DEFAULT_SETTINGS } from "../document/settings.js";
 
 describe("名前の変更（tategumi → Kolophon）", () => {
@@ -20,5 +20,14 @@ describe("名前の変更（tategumi → Kolophon）", () => {
     assert.equal(book.documents[0].path, "ch1.tategumi");
     const t = parseTemplate(JSON.stringify({ format: "tategumi-template", version: 1, name: "昔のテンプレート" }));
     assert.equal(t.name, "昔のテンプレート");
+  });
+
+  it("拡張子は .kolo・.kolob・.kolo-template。前の .kolophon・.kolbook・.kolophon-template も読む", () => {
+    assert.equal(FILE_EXTENSION, "kolo");
+    assert.equal(BOOK_EXTENSION, "kolob");
+    assert.equal(TEMPLATE_EXTENSION, "kolo-template");
+    assert.deepEqual(LEGACY_EXTENSIONS, ["kolophon", "tategumi"]);
+    assert.deepEqual(LEGACY_BOOK_EXTENSIONS, ["kolbook", "tgbook"]);
+    assert.ok(LEGACY_TEMPLATE_EXTENSIONS.includes("kolophon-template"));
   });
 });

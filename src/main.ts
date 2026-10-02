@@ -3,15 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type KolophonDocument, LEGACY_EXTENSION } from "./document/document.js";
+import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type KolophonDocument, LEGACY_EXTENSIONS } from "./document/document.js";
 import { compositeFonts, type Settings } from "./document/settings.js";
-import { BUILTIN_TEMPLATES, LEGACY_TEMPLATE_EXTENSION, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
+import { BUILTIN_TEMPLATES, LEGACY_TEMPLATE_EXTENSIONS, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
 import { epubFonts } from "./output/epub-fonts.js";
-import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSION, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
+import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSIONS, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
 import { typesetCover } from "./engine/cover.js";
 import { checkPdfX } from "./output/check-pdfx.js";
 import { pdfOptions } from "./output/export-pdf.js";
@@ -63,7 +63,7 @@ const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`
 const snapshotDir = arg("snapshot");
 /** 文書をダブルクリックして起動したとき（Windows）は、コマンドラインにそのパスが来る。 */
 function fileFromArgv(argv: string[]): string | undefined {
-  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(kolophon|kolbook|tategumi|tgbook|txt|tex)$/i.test(a) && fs.existsSync(a));
+  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(kolo|kolob|kolophon|kolbook|tategumi|tgbook|txt|tex)$/i.test(a) && fs.existsSync(a));
 }
 let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 // 確認用：ダイアログを出さずに、指定した場所へ書き出す（--snapshot と一緒に使う）。
@@ -107,7 +107,7 @@ function readTextFile(file: string): string {
   }
 }
 
-/** 文書（.kolophon・旧 .tategumi）かテキスト（.txt）を開く。テキストは本文だけを返し、設定は今のものを使う。 */
+/** 文書（.kolo・前の .kolophon・.tategumi）かテキスト（.txt）を開く。テキストは本文だけを返し、設定は今のものを使う。 */
 function openFile(file: string): { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string } } {
   if (file.toLowerCase().endsWith(".txt")) return { text: readTextFile(file), filePath: null };
   if (file.toLowerCase().endsWith(".tex")) {
@@ -120,11 +120,11 @@ function openFile(file: string): { text: string; settings?: Settings; images?: D
   return { text: doc.text, settings: doc.settings, images: doc.images, filePath: file };
 }
 
-const isBookFile = (file: string) => [BOOK_EXTENSION, LEGACY_BOOK_EXTENSION].some((e) => file.toLowerCase().endsWith(`.${e}`));
+const isBookFile = (file: string) => [BOOK_EXTENSION, ...LEGACY_BOOK_EXTENSIONS].some((e) => file.toLowerCase().endsWith(`.${e}`));
 /** 文書（設定を持つファイル）か。 */
-const isDocFile = (file: string) => [FILE_EXTENSION, LEGACY_EXTENSION].some((e) => file.toLowerCase().endsWith(`.${e}`));
+const isDocFile = (file: string) => [FILE_EXTENSION, ...LEGACY_EXTENSIONS].some((e) => file.toLowerCase().endsWith(`.${e}`));
 /** 開くダイアログで選べる文書の拡張子。 */
-const DOC_EXTENSIONS = [FILE_EXTENSION, LEGACY_EXTENSION];
+const DOC_EXTENSIONS = [FILE_EXTENSION, ...LEGACY_EXTENSIONS];
 
 function openSafely(file: string) {
   try {
@@ -439,7 +439,7 @@ ipcMain.handle("templates:list", () => {
   }));
   let files: string[] = [];
   try {
-    files = fs.readdirSync(templatesDir()).filter((f) => f.endsWith(`.${TEMPLATE_EXTENSION}`) || f.endsWith(`.${LEGACY_TEMPLATE_EXTENSION}`));
+    files = fs.readdirSync(templatesDir()).filter((f) => [TEMPLATE_EXTENSION, ...LEGACY_TEMPLATE_EXTENSIONS].some((e) => f.endsWith(`.${e}`)));
   } catch {
     files = [];
   }
@@ -494,7 +494,7 @@ ipcMain.handle("templates:delete", (_e, id: string) => {
 /** ほかの PC で保存したテンプレートのファイルを取り込む。 */
 ipcMain.handle("templates:import", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
-    filters: [{ name: "Kolophon テンプレート", extensions: [TEMPLATE_EXTENSION, LEGACY_TEMPLATE_EXTENSION] }],
+    filters: [{ name: "Kolophon テンプレート", extensions: [TEMPLATE_EXTENSION, ...LEGACY_TEMPLATE_EXTENSIONS] }],
     properties: ["openFile"],
   });
   if (canceled || !filePaths[0]) return undefined;
@@ -645,9 +645,9 @@ function loadBookDocs(bookPath: string, book: Book): { docs: (BookDocument | und
   return { docs, errors };
 }
 
-const bookFilters = [{ name: "Kolophon ブック", extensions: [BOOK_EXTENSION, LEGACY_BOOK_EXTENSION] }];
+const bookFilters = [{ name: "Kolophon ブック", extensions: [BOOK_EXTENSION, ...LEGACY_BOOK_EXTENSIONS] }];
 /** ブックのファイル名から拡張子を除いた名前。 */
-const bookName = (bookPath: string) => path.basename(bookPath).replace(/\.(kolbook|tgbook)$/i, "");
+const bookName = (bookPath: string) => path.basename(bookPath).replace(/\.(kolob|kolbook|tgbook)$/i, "");
 
 ipcMain.handle("book:new", async () => {
   const { canceled, filePath } = await dialog.showSaveDialog(win!, { defaultPath: `新しいブック.${BOOK_EXTENSION}`, filters: [{ name: "Kolophon ブック", extensions: [BOOK_EXTENSION] }] });

@@ -203,8 +203,8 @@ describe("テンプレート（DTP-17）", () => {
   });
 
   it("ファイル名に使えない文字は置き換える", () => {
-    assert.equal(templateFileName('A5/二段:組?'), "A5_二段_組_.kolophon-template");
-    assert.equal(templateFileName("..."), "テンプレート.kolophon-template");
+    assert.equal(templateFileName('A5/二段:組?'), "A5_二段_組_.kolo-template");
+    assert.equal(templateFileName("..."), "テンプレート.kolo-template");
   });
 
   for (const t of BUILTIN_TEMPLATES) {

@@ -1,6 +1,6 @@
 {
   "name": "kolophon",
-  "version": "0.27.2",
+  "version": "0.28.0",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -78,16 +78,30 @@
     "asar": true,
     "fileAssociations": [
       {
-        "ext": "kolophon",
+        "ext": "kolo",
         "name": "Kolophon 文書",
         "description": "Kolophon 文書",
         "role": "Editor",
         "mimeType": "application/x-kolophon"
       },
       {
-        "ext": "kolbook",
+        "ext": "kolob",
         "name": "Kolophon ブック",
         "description": "Kolophon ブック",
+        "role": "Editor",
+        "mimeType": "application/x-kolophon-book"
+      },
+      {
+        "ext": "kolophon",
+        "name": "Kolophon 文書（前の拡張子）",
+        "description": "Kolophon 文書（前の拡張子）",
+        "role": "Editor",
+        "mimeType": "application/x-kolophon"
+      },
+      {
+        "ext": "kolbook",
+        "name": "Kolophon ブック（前の拡張子）",
+        "description": "Kolophon ブック（前の拡張子）",
         "role": "Editor",
         "mimeType": "application/x-kolophon-book"
       },

@@ -1,6 +1,6 @@
-// 確認用の文書（out/test.kolophon）を作る。MVP の機能をひととおり使う設定にしてある。
+// 確認用の文書（out/test.kolo）を作る。MVP の機能をひととおり使う設定にしてある。
 //   使い方: npm run build && node scripts/make-test-doc.mjs [--book]
-//   --book を付けると、同じ本文をくり返して文庫1冊分（約10万字）にした out/book.kolophon も作る。
+//   --book を付けると、同じ本文をくり返して文庫1冊分（約10万字）にした out/book.kolo も作る。
 import fs from "node:fs";
 import { newDocument, serializeDocument } from "../dist/document/document.js";
 import { SAMPLE_TEXT } from "../dist/sample.js";
@@ -42,14 +42,14 @@ if (ttc && fs.existsSync(ttc)) {
 }
 
 fs.mkdirSync("out", { recursive: true });
-fs.writeFileSync("out/test.kolophon", serializeDocument(doc));
-console.log("out/test.kolophon を作りました");
+fs.writeFileSync("out/test.kolo", serializeDocument(doc));
+console.log("out/test.kolo を作りました");
 
 if (process.argv.includes("--book")) {
   const chapter = SAMPLE_TEXT.replace(/＝＝＝\n/g, "");
   let text = web;
   for (let i = 1; [...text].length < 100_000; i++) text += `\n＝＝＝\n${chapter.replace("第一章", `第${i}章`)}`;
   const book = { ...doc, text };
-  fs.writeFileSync("out/book.kolophon", serializeDocument(book));
-  console.log(`out/book.kolophon を作りました（${[...text].length.toLocaleString()}字）`);
+  fs.writeFileSync("out/book.kolo", serializeDocument(book));
+  console.log(`out/book.kolo を作りました（${[...text].length.toLocaleString()}字）`);
 }

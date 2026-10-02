@@ -923,7 +923,7 @@ stage.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => preview.show());
 api.onCommand((c) => void runCommand(c));
 // 起動中に、ほかから文書を開くよう頼まれたとき（文書のダブルクリックなど）。
-api.onOpenPath((file) => void (/\.(kolbook|tgbook)$/i.test(file) ? bookDialog.open(file) : open(file)));
+api.onOpenPath((file) => void (/\.(kolob|kolbook|tgbook)$/i.test(file) ? bookDialog.open(file) : open(file)));
 api.onProgress((p) => {
   progress.hidden = false;
   progress.max = p.total;

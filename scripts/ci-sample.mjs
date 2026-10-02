@@ -1,8 +1,8 @@
 // CI（Mac など）で起動と書き出しを確かめるための文書を作る。
-//   vertical.kolophon   縦組みの文庫（本扉・目次・奥付、ルビ・圏点・傍線・割注・縦中横・画像・数式）
-//   horizontal.kolophon 横組みの A5
+//   vertical.kolo   縦組みの文庫（本扉・目次・奥付、ルビ・圏点・傍線・割注・縦中横・画像・数式）
+//   horizontal.kolo 横組みの A5
 //   math.tex            TeX の記法と数式
-//   hiragino.kolophon   その PC のヒラギノ明朝（なければ同梱のフォント）で組む文書
+//   hiragino.kolo   その PC のヒラギノ明朝（なければ同梱のフォント）で組む文書
 import fs from "node:fs";
 import path from "node:path";
 import { PNG } from "pngjs";
@@ -42,11 +42,11 @@ const body = [
 const vertical = structuredClone(BUILTIN_TEMPLATES[0].settings);
 vertical.bookInfo = info;
 vertical.pages = { front: [{ kind: "title", text: "" }, { kind: "toc", text: "" }], back: [{ kind: "colophon", text: "" }], padTo: 4 };
-fs.writeFileSync(path.join(out, "vertical.kolophon"), serializeDocument({ text: body, settings: vertical, images }));
+fs.writeFileSync(path.join(out, "vertical.kolo"), serializeDocument({ text: body, settings: vertical, images }));
 
 const horizontal = structuredClone(vertical);
 Object.assign(horizontal.book, { writingMode: "horizontal", trim: "A5", widthMm: 148, heightMm: 210, fontSizePt: 9.25, charsPerLine: 34, linesPerPage: 30, topMm: 22, gutterMm: 20 });
-fs.writeFileSync(path.join(out, "horizontal.kolophon"), serializeDocument({ text: body, settings: horizontal, images }));
+fs.writeFileSync(path.join(out, "horizontal.kolo"), serializeDocument({ text: body, settings: horizontal, images }));
 
 fs.writeFileSync(
   path.join(out, "math.tex"),
@@ -67,5 +67,5 @@ const hiragino = fonts.find((f) => /Hiragino ?Mincho|ヒラギノ明朝/i.test(`
 const withFont = structuredClone(vertical);
 if (hiragino) withFont.font = { name: hiragino.name, postscriptName: hiragino.postscriptName, path: hiragino.path, index: hiragino.index };
 withFont.pages = { front: [], back: [], padTo: 1 };
-fs.writeFileSync(path.join(out, "hiragino.kolophon"), serializeDocument({ text: body, settings: withFont, images }));
+fs.writeFileSync(path.join(out, "hiragino.kolo"), serializeDocument({ text: body, settings: withFont, images }));
 console.log(`確認用の文書を ${out} に作りました（ヒラギノ明朝：${hiragino ? `${hiragino.name}（${hiragino.cff ? "CFF" : "TrueType"}）` : "見つからないので同梱のフォント"}）。`);

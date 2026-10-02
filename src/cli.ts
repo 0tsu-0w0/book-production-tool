@@ -1,5 +1,5 @@
 // 画面を開かずに PDF を作る。
-//   使い方: node dist/cli.js [原稿.txt または 文書.kolophon] [出力.pdf] [--screen] [--no-marks]
+//   使い方: node dist/cli.js [原稿.txt または 文書.kolo] [出力.pdf] [--screen] [--no-marks]
 //   既定は入稿用（PDF/X-1a:2003・CMYK・トンボ付き）。--screen で閲覧用（RGB）。
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +16,7 @@ const [input, output = "out/sample.pdf"] = args.filter((a) => !a.startsWith("--"
 let text = SAMPLE_TEXT;
 let settings: Settings = structuredClone(DEFAULT_SETTINGS);
 let images: DocImage[] = [];
-if (input && /\.(kolophon|tategumi)$/i.test(input)) ({ text, settings, images } = parseDocument(fs.readFileSync(input, "utf8")));
+if (input && /\.(kolo|kolophon|tategumi)$/i.test(input)) ({ text, settings, images } = parseDocument(fs.readFileSync(input, "utf8")));
 else if (input) text = fs.readFileSync(input, "utf8");
 if (input?.endsWith(".tex")) settings.format.markup = "tex";
 settings.pdfKind = flags.has("--screen") ? "screen" : flags.has("--no-marks") ? "print-nomarks" : settings.pdfKind;

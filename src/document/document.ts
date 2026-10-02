@@ -1,12 +1,12 @@
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "./settings.js";
 
-// 文書ファイル（.kolophon）。中身は JSON で、形式の版番号を持つ（NF-07）。
+// 文書ファイル（.kolo）。中身は JSON で、形式の版番号を持つ（NF-07）。
 // 旧名（tategumi）のころの文書（.tategumi・形式 tategumi-document）もそのまま読める。
 
-export const FILE_EXTENSION = "kolophon";
+export const FILE_EXTENSION = "kolo";
 export const FORMAT_ID = "kolophon-document";
-/** 旧名（tategumi）のころの拡張子と形式。読むだけ。 */
-export const LEGACY_EXTENSION = "tategumi";
+/** 前の拡張子（0.16〜0.27 の .kolophon、旧名のころの .tategumi）。読むだけ。 */
+export const LEGACY_EXTENSIONS = ["kolophon", "tategumi"];
 const LEGACY_FORMAT_ID = "tategumi-document";
 export const FORMAT_VERSION = 1;
 

@@ -6,10 +6,10 @@ import { texToMarkup } from "../engine/tex.js";
 // 組むときは、文書をつないで1つの原稿にし、「スタイルの元」の文書の設定で組む。そのため、目次・注・
 // ページ番号の参照（ラベル）・柱は本全体で続き、扉・奥付などのページ構成はスタイルの元のものを使う。
 
-export const BOOK_EXTENSION = "kolbook";
+export const BOOK_EXTENSION = "kolob";
 const FORMAT = "kolophon-book";
-/** 旧名（tategumi）のころのブックの拡張子と形式。読むだけ。 */
-export const LEGACY_BOOK_EXTENSION = "tgbook";
+/** 前のブックの拡張子（0.16〜0.27 の .kolbook、旧名のころの .tgbook）。読むだけ。 */
+export const LEGACY_BOOK_EXTENSIONS = ["kolbook", "tgbook"];
 const LEGACY_FORMAT = "tategumi-book";
 
 export interface BookEntry {
@@ -58,7 +58,7 @@ export interface BookDocument {
   /** 表示用の名前（ファイル名）。 */
   name: string;
   text: string;
-  /** .kolophon（.tategumi）なら設定がある（.txt・.tex はない）。 */
+  /** .kolo（前の .kolophon・.tategumi）なら設定がある（.txt・.tex はない）。 */
   settings?: Settings;
   images: DocImage[];
   /** TeX の記法か（.tex、または設定の記法が TeX）。 */
