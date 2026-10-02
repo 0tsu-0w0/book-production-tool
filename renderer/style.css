@@ -209,3 +209,29 @@ textarea#source.tex { font-family: "Cascadia Mono", Consolas, Menlo, "Yu Gothic 
 .book-list .book-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .book-list .warning { color: var(--danger); }
 .book-actions { justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* 窓の背景（画像・動画・すりガラス）。背景の層をいちばん後ろに置き、欄を半透明にする。紙面（canvas）は不透明のまま。 */
+#app-backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+#app-backdrop video, #app-backdrop .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* 壁紙のすりガラス：ディスプレイ全体の大きさで敷き、窓の位置だけずらす。ぼかしの縁が透けないよう、少し大きくする。 */
+#app-backdrop .bg-wallpaper { position: absolute; background-size: cover; background-position: center; filter: blur(48px) saturate(1.3); transform: scale(1.08); transform-origin: center; }
+#app-backdrop .bg-image { background-position: center; background-repeat: no-repeat; background-size: cover; }
+#app-backdrop .bg-image[data-fit="contain"] { background-size: contain; }
+#app-backdrop .bg-image[data-fit="tile"] { background-size: auto; background-repeat: repeat; background-position: 0 0; }
+/* 背景を地の色で薄める（暗い画面なら暗く、明るい画面なら明るく）。 */
+#app-backdrop::after { content: ""; position: absolute; inset: 0; background: var(--bg); opacity: var(--bg-dim, 0); }
+html.bg-on, html.bg-on body { background: transparent; }
+html.bg-on .toolbar, html.bg-on .editor, html.bg-on .settings, html.bg-on .statusbar {
+  background: color-mix(in srgb, var(--panel) var(--glass-alpha, 80%), transparent);
+  backdrop-filter: blur(var(--glass-blur, 12px));
+}
+html.bg-on .pager { background: color-mix(in srgb, var(--panel) var(--glass-alpha, 80%), transparent); backdrop-filter: blur(var(--glass-blur, 12px)); }
+/* 欄の中の重なった地は透明に（重ねると濃くなるので）。 */
+html.bg-on .source-wrap, html.bg-on .find-bar { background: transparent; }
+.bg-dialog { width: min(520px, 92vw); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); padding: 16px; }
+.bg-dialog::backdrop { background: rgba(0,0,0,0.2); }
+.bg-dialog h2 { margin: 0 0 8px; font-size: 15px; }
+.bg-dialog .fields { display: grid; gap: 10px; }
+.bg-dialog input[type="range"] { flex: 1; }
+.bg-dialog output { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.bg-dialog select { width: 100%; }

@@ -1,4 +1,6 @@
 import type { KolophonDocument } from "../document/document.js";
+import type { Appearance, WindowGeometry } from "../appearance.js";
+import { Backdrop, BackgroundDialog } from "./background.js";
 import { applyTemplate } from "../document/template.js";
 import { imageInfos, type DocImage } from "../document/document.js";
 import type { ImageInfo } from "../engine/types.js";
@@ -111,6 +113,12 @@ interface Api extends TemplateApi {
   proof(text: string, settings: Settings, images: Record<string, ImageInfo>): Promise<ProofResult>;
   saveSnapshot(images: ArrayBuffer[]): Promise<void>;
   closeWindow(): Promise<void>;
+  getAppearance(): Promise<{ appearance: Appearance; platform: string; wallpaper: number }>;
+  wallpaper(): Promise<number>;
+  onWindowGeometry(fn: (g: WindowGeometry) => void): void;
+  onWallpaperVersion(fn: (v: number) => void): void;
+  setAppearance(a: Appearance): Promise<Appearance>;
+  chooseBackground(kind: "image" | "video"): Promise<{ file: string; label: string } | { error: string } | undefined>;
   onCommand(fn: (command: string) => void): void;
   onProgress(fn: (p: { label: string; done: number; total: number }) => void): void;
 }
@@ -788,6 +796,8 @@ async function runCommand(command: string) {
       return templates.open();
     case "book":
       return bookDialog.open();
+    case "background":
+      return backgroundDialog.open();
     case "find":
       return finder.open(false);
     case "replace":
@@ -891,6 +901,15 @@ api.onProgress((p) => {
 });
 
 // ---- 起動 ----
+
+const backdrop = new Backdrop();
+const backgroundDialog = new BackgroundDialog(
+  { get: () => api.getAppearance(), set: (a) => api.setAppearance(a), choose: (k) => api.chooseBackground(k), wallpaper: () => api.wallpaper() },
+  backdrop,
+);
+api.onWindowGeometry((g) => backdrop.setGeometry(g));
+api.onWallpaperVersion((v) => backdrop.setWallpaper(v));
+void backgroundDialog.load();
 
 const init = await api.init();
 panel.render(settings);

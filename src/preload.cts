@@ -50,6 +50,12 @@ contextBridge.exposeInMainWorld("api", {
   proof: invoke("proof"),
   saveSnapshot: invoke("snapshot:save"),
   closeWindow: invoke("window:close"),
+  getAppearance: invoke("appearance:get"),
+  setAppearance: invoke("appearance:set"),
+  chooseBackground: invoke("appearance:choose"),
+  wallpaper: invoke("appearance:wallpaper"),
+  onWindowGeometry: (fn: (g: unknown) => void) => ipcRenderer.on("window-geometry", (_e, g) => fn(g)),
+  onWallpaperVersion: (fn: (v: number) => void) => ipcRenderer.on("wallpaper-version", (_e, v: number) => fn(v)),
   onCommand: (fn: (command: string) => void) => ipcRenderer.on("command", (_e, command: string) => fn(command)),
   onProgress: (fn: (p: { label: string; done: number; total: number }) => void) =>
     ipcRenderer.on("progress", (_e, p: { label: string; done: number; total: number }) => fn(p)),

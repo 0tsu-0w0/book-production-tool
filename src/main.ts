@@ -1,7 +1,7 @@
-import { BrowserWindow, Menu, app, dialog, ipcMain, shell, type MenuItemConstructorOptions } from "electron";
+import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, net, protocol, screen, shell, type MenuItemConstructorOptions } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type KolophonDocument, LEGACY_EXTENSION } from "./document/document.js";
 import { compositeFonts, type Settings } from "./document/settings.js";
@@ -17,6 +17,7 @@ import { pdfOptions } from "./output/export-pdf.js";
 import { renderPdf } from "./output/pdf.js";
 import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js";
 import { checkLines, findVariants } from "./engine/proof.js";
+import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, type Appearance, type WindowGeometry } from "./appearance.js";
 import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
@@ -146,6 +147,100 @@ ipcMain.handle("init", () => {
     /** 確認用：--page=N で、スナップショットを N ページ目から撮る。 */
     startPage: Number(arg("page")) || 1,
   };
+});
+
+// 画面の見た目（窓の背景）。アプリの設定のフォルダに appearance.json と、取り込んだ画像・動画（backgrounds）を置く。
+const appearanceFile = () => path.join(app.getPath("userData"), "appearance.json");
+const backgroundsDir = () => path.join(app.getPath("userData"), "backgrounds");
+/** 確認用：--appearance=<JSON ファイル> で、保存してある見た目の代わりにそれを使う（保存はしない）。 */
+const appearanceArg = arg("appearance");
+
+function loadAppearance(): Appearance {
+  try {
+    return normalizeAppearance(JSON.parse(fs.readFileSync(appearanceArg ?? appearanceFile(), "utf8")));
+  } catch {
+    return normalizeAppearance({});
+  }
+}
+
+/** すりガラスは窓そのものの機能なので、ここで窓に当てる（画像・動画は画面の側で描く）。 */
+function applyWindowBackground(a: Appearance) {
+  if (!win) return;
+  const glass = a.kind === "glass";
+  if (process.platform === "win32") {
+    win.setBackgroundMaterial(glass ? a.material : "none");
+  } else if (process.platform === "darwin") {
+    win.setVibrancy(glass ? "under-window" : null);
+  }
+  // 窓の地を透明にしないと、すりガラスが見えない。それ以外は画面の地の色（描き始める前にちらつかないように）。
+  win.setBackgroundColor(glass ? "#00000000" : nativeTheme.shouldUseDarkColors ? "#1c1b19" : "#efece6");
+}
+
+/** デスクトップの壁紙のファイル（Windows：今の壁紙を Windows が写しておくファイル）。なければ undefined。 */
+function wallpaperFile(): string | undefined {
+  if (process.platform !== "win32") return undefined;
+  const f = path.join(app.getPath("appData"), "Microsoft", "Windows", "Themes", "TranscodedWallpaper");
+  return fs.existsSync(f) ? f : undefined;
+}
+/** 壁紙が変わったかを知るための値（ファイルの更新時刻）。壁紙がなければ 0。 */
+function wallpaperVersion(): number {
+  const f = wallpaperFile();
+  try {
+    return f ? Math.round(fs.statSync(f).mtimeMs) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 窓の中身がディスプレイのどこにあるかを画面に知らせる（壁紙を窓の位置に合わせて敷くため）。 */
+function sendGeometry() {
+  if (!win || win.isDestroyed()) return;
+  const c = win.getContentBounds();
+  const d = screen.getDisplayMatching(c).bounds;
+  const g: WindowGeometry = { x: c.x - d.x, y: c.y - d.y, width: d.width, height: d.height };
+  send("window-geometry", g);
+}
+
+ipcMain.handle("appearance:get", () => ({ appearance: loadAppearance(), platform: process.platform, wallpaper: wallpaperVersion() }));
+ipcMain.handle("appearance:wallpaper", () => {
+  sendGeometry();
+  return wallpaperVersion();
+});
+
+ipcMain.handle("appearance:set", (_e, value: unknown) => {
+  const a = normalizeAppearance(value);
+  applyWindowBackground(a);
+  if (appearanceArg) return a;
+  fs.mkdirSync(path.dirname(appearanceFile()), { recursive: true });
+  fs.writeFileSync(appearanceFile(), JSON.stringify(a, null, 2), "utf8");
+  // 使っていない背景のファイルは消す。
+  try {
+    for (const f of fs.readdirSync(backgroundsDir())) if (f !== a.file) fs.rmSync(path.join(backgroundsDir(), f), { force: true });
+  } catch {
+    // フォルダがなければ何もしない。
+  }
+  return a;
+});
+
+/** 背景にする画像・動画を選び、アプリの設定のフォルダに取り込む（元のファイルを動かしても消えないように）。 */
+ipcMain.handle("appearance:choose", async (_e, kind: "image" | "video") => {
+  const extensions = kind === "video" ? VIDEO_EXTENSIONS : IMAGE_EXTENSIONS;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
+    title: kind === "video" ? "背景にする動画を選ぶ" : "背景にする画像を選ぶ",
+    filters: [{ name: kind === "video" ? "動画" : "画像", extensions }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths[0]) return undefined;
+  const src = filePaths[0];
+  const ext = path.extname(src).toLowerCase();
+  const name = `${kind}-${Date.now()}${ext}`;
+  try {
+    fs.mkdirSync(backgroundsDir(), { recursive: true });
+    fs.copyFileSync(src, path.join(backgroundsDir(), name));
+  } catch (e) {
+    return { error: `ファイルを取り込めませんでした：${String(e)}` };
+  }
+  return { file: name, label: path.basename(src) };
 });
 
 ipcMain.handle("fonts:list", () => ({ list: fonts.list(), defaultChoice: fonts.defaultChoice() }));
@@ -783,12 +878,19 @@ function buildMenu() {
         { type: "separator" },
         cmd("校正の補助…", "proof", "CmdOrCtrl+K"),
         { type: "separator" },
+        cmd("背景…", "background"),
+        { type: "separator" },
         { role: "toggleDevTools", label: "開発者ツール" },
       ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// 取り込んだ背景の画像・動画を画面で読むための scheme（動画の頭出しのため stream を許す）。
+protocol.registerSchemesAsPrivileged([
+  { scheme: BACKGROUND_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
+]);
 
 // 同時に開くウィンドウは1つ。2つめの起動は、最初のウィンドウに文書を渡して終わる。
 if (!snapshotDir && !app.requestSingleInstanceLock()) app.quit();
@@ -805,6 +907,20 @@ app.on("open-file", (e, file) => {
 
 app.whenReady().then(() => {
   buildMenu();
+  protocol.handle(BACKGROUND_SCHEME, async (req) => {
+    if (new URL(req.url).host === "wallpaper") {
+      // 壁紙のファイルには拡張子がないので、中身から種類を決めて返す。
+      const f = wallpaperFile();
+      if (!f) return new Response(null, { status: 404 });
+      const bytes = await fs.promises.readFile(f);
+      const type = bytes[0] === 0x89 && bytes[1] === 0x50 ? "image/png" : "image/jpeg";
+      return new Response(bytes, { headers: { "content-type": type } });
+    }
+    const name = path.basename(decodeURIComponent(new URL(req.url).pathname));
+    // 背景のフォルダの中のファイルだけを返す。
+    const dir = appearanceArg ? path.dirname(path.resolve(appearanceArg)) : backgroundsDir();
+    return net.fetch(pathToFileURL(path.join(dir, name)).toString(), { headers: req.headers });
+  });
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -812,6 +928,8 @@ app.whenReady().then(() => {
     minHeight: 600,
     show: !snapshotDir,
     title: "Kolophon",
+    // すりガラスを使うときに窓の地が透けるよう、地は透明にしておく（画面の側でいつも地の色を塗る）。
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: path.join(root, "dist", "preload.cjs"),
       contextIsolation: true,
@@ -840,6 +958,10 @@ app.whenReady().then(() => {
     // 確認用の実行では、画面側の console.log を標準出力に流す。
     win.webContents.on("console-message", (e) => console.log(e.message));
   }
+  applyWindowBackground(loadAppearance());
+  for (const ev of ["move", "resize", "maximize", "unmaximize", "restore"] as const) win.on(ev as "move", sendGeometry);
+  // 窓に戻ってきたとき、壁紙が変わっていれば読み直させる。
+  win.on("focus", () => send("wallpaper-version", wallpaperVersion()));
   win.loadFile(path.join(root, "renderer", "index.html"));
 });
 
