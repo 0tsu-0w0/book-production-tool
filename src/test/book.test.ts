@@ -18,7 +18,7 @@ const doc = (name: string, text: string, over: (s: Settings) => void = () => {},
   return { name, text, settings, images, tex: settings.format.markup === "tex" };
 };
 const img = (name: string) => ({ name, mime: "image/png" as const, data: "", width: 10, height: 10 });
-const book = (n: number, over: Partial<Book> = {}): Book => ({ ...newBook(), documents: Array.from({ length: n }, (_, i) => ({ path: `ch${i + 1}.tategumi`, include: true })), ...over });
+const book = (n: number, over: Partial<Book> = {}): Book => ({ ...newBook(), documents: Array.from({ length: n }, (_, i) => ({ path: `ch${i + 1}.kolophon`, include: true })), ...over });
 
 describe("ブック", () => {
   it("書き出して読み直せる。壊れたもの・ほかの形式は読まない", () => {
@@ -40,18 +40,18 @@ describe("ブック", () => {
     assert.equal(combineBook({ ...b, startOdd: false }, [doc("a", "x"), doc("b", "y"), undefined]).text.includes("［＃改ページ］"), true);
   });
 
-  it("TeX の文書は tategumi の記法にしてからつなぐ", () => {
+  it("TeX の文書は Kolophon の記法にしてからつなぐ", () => {
     const c = combineBook(book(1), [doc("t", String.raw`\chapter{序}本文`, (s) => (s.format.markup = "tex"))]);
     assert.match(c.text, /＃序/);
     assert.equal(c.settings.format.markup, "standard");
   });
 
   it("名前の重なった画像は「文書名_名前」に付け替え、その文書の参照も書き換える", () => {
-    const c = combineBook(book(2), [doc("ch1.tategumi", "［＃画像：猫］", () => {}, [img("猫")]), doc("ch2.tategumi", "［＃画像：猫　全面］", () => {}, [img("猫")])]);
+    const c = combineBook(book(2), [doc("ch1.kolophon", "［＃画像：猫］", () => {}, [img("猫")]), doc("ch2.kolophon", "［＃画像：猫　全面］", () => {}, [img("猫")])]);
     assert.deepEqual(c.images.map((i) => i.name), ["猫", "ch2_猫"]);
     assert.match(c.text, /［＃画像：ch2_猫　全面］/);
     assert.match(c.text, /［＃画像：猫］/);
-    assert.deepEqual(c.renamed, [{ doc: "ch2.tategumi", from: "猫", to: "ch2_猫" }]);
+    assert.deepEqual(c.renamed, [{ doc: "ch2.kolophon", from: "猫", to: "ch2_猫" }]);
   });
 
   it("組むと、ページ番号は文書をまたいで続き、文書ごとの始まりのページが分かる。目次は本全体", { skip: !face && "フォントがない" }, () => {

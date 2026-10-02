@@ -90,10 +90,10 @@ export class FontService {
 
   /**
    * 既定のフォント（文書でフォントを選んでいないときに使う）。同梱の Noto Serif JP。
-   * 環境変数 TATEGUMI_FONT（.ttf / .otf のパス）があれば、そちらを優先する。
+   * 環境変数 KOLOPHON_FONT（.ttf / .otf のパス。旧名の TATEGUMI_FONT も可）があれば、そちらを優先する。
    */
   defaultChoice(): FontChoice {
-    const env = process.env.TATEGUMI_FONT;
+    const env = process.env.KOLOPHON_FONT ?? process.env.TATEGUMI_FONT;
     if (env && fs.existsSync(env)) return { name: env, postscriptName: "", path: env, index: 0 };
     // 同梱のフォントがあれば、PC のフォントを調べずに決める（起動を速くするため）。
     const bundled = BUNDLED_FONTS.find((f) => fs.existsSync(f.path));

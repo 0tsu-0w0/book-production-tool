@@ -92,7 +92,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   const fonts = fontsOrFace instanceof Face ? singleFont(fontsOrFace) : fontsOrFace;
   const { faces } = fonts;
   const spec = { ...toLayoutSpec(settings), images };
-  // TeX の記法なら、先に tategumi の記法に置き換える（行の対応も覚えておく）。
+  // TeX の記法なら、先に Kolophon の記法に置き換える（行の対応も覚えておく）。
   const tex = settings.format.markup === "tex" ? texToMarkup(text) : null;
   const format = formatText(tex ? tex.text : text, toFormatOptions(settings));
   const formatted = horizontalPunctuation(format.text, settings);

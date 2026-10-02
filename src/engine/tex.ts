@@ -1,4 +1,4 @@
-// TeX（LaTeX）の記法で書いた原稿を、tategumi の記法に置き換える。
+// TeX（LaTeX）の記法で書いた原稿を、Kolophon の記法に置き換える。
 //   見出し   \chapter{…} → ＃…、\section{…}・\subsection{…} → ＃＃…
 //   ルビ     \ruby{漢字}{かんじ}（pxrubrica の「か|ん|じ」も可）→ ｜漢字《かんじ》
 //   圏点     \kenten{…}・\bou{…}・\emph{…} → ｜…《圏》　傍線 \bousen{…}・\underline{…} → ｜…《傍線》
@@ -13,7 +13,7 @@
 // 知らない命令は、引数の中身だけを残して命令を消す。
 
 export interface TexResult {
-  /** tategumi の記法にした原稿。 */
+  /** Kolophon の記法にした原稿。 */
   text: string;
   /** 置き換えた原稿の行ごとの、元の原稿の行（0始まり）。紙面から原稿へ戻るのに使う。 */
   origin: number[];
@@ -316,7 +316,7 @@ function joinLines(a: string, b: string): string {
 }
 
 /**
- * tabular の中身を、tategumi の表の記法（［＃表］…［＃／表］）にする。
+ * tabular の中身を、Kolophon の表の記法（［＃表］…［＃／表］）にする。
  * 1行目のあとに \hline などの罫線があれば、1行目を見出しの行にする。罫線の命令は消す。
  */
 function tableMarkup(body: string, spec = ""): string {

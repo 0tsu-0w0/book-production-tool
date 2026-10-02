@@ -112,7 +112,7 @@ export interface NombreStyle {
 export const DEFAULT_NOMBRE_STYLE: NombreStyle = { front: "continue", numerals: "arabic", outerMm: 0, downMm: 0 };
 
 /** 本文の始まりに付けるラベル（前付けと本文の境目を知るため）。 */
-export const BODY_START_LABEL = "tategumi-body-start";
+export const BODY_START_LABEL = "kolophon-body-start";
 
 type Corner = "tl" | "tr" | "bl" | "br" | "bc";
 

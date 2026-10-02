@@ -1,5 +1,5 @@
 // 組版の各段階にかかる時間を測る。
-//   使い方: npm run build && node scripts/make-test-doc.mjs --book && node scripts/bench.mjs [文書.tategumi]
+//   使い方: npm run build && node scripts/make-test-doc.mjs --book && node scripts/bench.mjs [文書.kolophon]
 import fs from "node:fs";
 import { serialize } from "node:v8";
 import { parseDocument } from "../dist/document/document.js";
@@ -14,7 +14,7 @@ import { prepareSpacing } from "../dist/engine/spacing.js";
 import { applyStyles } from "../dist/engine/styles.js";
 import { FontService } from "../dist/fonts/service.js";
 
-const file = process.argv[2] ?? "out/book.tategumi";
+const file = process.argv[2] ?? "out/book.kolophon";
 const { text, settings, images } = parseDocument(fs.readFileSync(file, "utf8"));
 const service = new FontService();
 const { table } = service.loadTable(settings.font, settings.styles);

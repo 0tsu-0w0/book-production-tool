@@ -9,7 +9,7 @@ import { parse } from "../engine/parse.js";
 import { texToMarkup } from "../engine/tex.js";
 import type { Atom, Block, Cell, ImageBlock, TableBlock } from "../engine/types.js";
 
-// EPUB 3（リフロー型）の書き出し。原稿を tategumi の記法で読み、段落・見出し・ルビ・圏点・縦中横・注・表・画像・
+// EPUB 3（リフロー型）の書き出し。原稿を Kolophon の記法で読み、段落・見出し・ルビ・圏点・縦中横・注・表・画像・
 // 数式（SVG）を XHTML にする。縦組みの本は縦書き（右から左へめくる）、横組みの本は横書き。
 // 改ページ・改丁・大見出しで XHTML を分ける。目次は見出しから作る（nav）。書体は埋め込まない（読む側の書体）。
 

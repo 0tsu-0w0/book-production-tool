@@ -131,7 +131,7 @@ describe("文書ファイル", () => {
     assert.deepEqual(back, doc);
   });
 
-  it("tategumi の文書でないもの、新しすぎる版は読まない", () => {
+  it("Kolophon の文書でないもの、新しすぎる版は読まない", () => {
     assert.throws(() => parseDocument("{}"), DocumentFormatError);
     assert.throws(() => parseDocument("not json"), DocumentFormatError);
     assert.throws(() => parseDocument(JSON.stringify({ format: "tategumi-document", version: 99, text: "" })), DocumentFormatError);

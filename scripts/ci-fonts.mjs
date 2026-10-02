@@ -1,4 +1,4 @@
-// CI（Mac など）で、その PC のフォントを tategumi がどう見つけるかを書き出す。
+// CI（Mac など）で、その PC のフォントを Kolophon がどう見つけるかを書き出す。
 import { FontService } from "../dist/fonts/service.js";
 
 const service = new FontService();

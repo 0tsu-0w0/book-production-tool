@@ -22,7 +22,7 @@ const settings = (edit: (s: Settings) => void = () => {}): Settings => {
 const paths = (shapes: Shape[]) => shapes.filter((s): s is Extract<Shape, { kind: "path" }> => s.kind === "path");
 
 describe("TeX の文書の記法", () => {
-  it("見出し・ルビ・圏点・傍線・縦中横・割注・太字・改ページ・目次・画像を tategumi の記法にする", () => {
+  it("見出し・ルビ・圏点・傍線・縦中横・割注・太字・改ページ・目次・画像を Kolophon の記法にする", () => {
     const src = String.raw`\tableofcontents
 \chapter{第一章}
 \ruby{漢字}{かん|じ}と\kenten{点}と\bousen{線}、\tcy{12}月\warichu{注}\textbf{太}。

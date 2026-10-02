@@ -101,8 +101,8 @@ export async function renderPdf(
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   doc.setTitle(options.title, { showInWindowTitleBar: false });
-  doc.setCreator("tategumi");
-  doc.setProducer("tategumi (pdf-lib)");
+  doc.setCreator("Kolophon");
+  doc.setProducer("Kolophon (pdf-lib)");
   const now = new Date();
   doc.setCreationDate(now);
   doc.setModificationDate(now);
@@ -485,8 +485,8 @@ function applyPdfX4(doc: PDFDocument, icc: { bytes: Uint8Array; name: string }, 
 <xmp:CreateDate>${when}</xmp:CreateDate>
 <xmp:ModifyDate>${when}</xmp:ModifyDate>
 <xmp:MetadataDate>${when}</xmp:MetadataDate>
-<xmp:CreatorTool>tategumi</xmp:CreatorTool>
-<pdf:Producer>tategumi (pdf-lib)</pdf:Producer>
+<xmp:CreatorTool>Kolophon</xmp:CreatorTool>
+<pdf:Producer>Kolophon (pdf-lib)</pdf:Producer>
 <pdf:Trapped>False</pdf:Trapped>
 <xmpMM:DocumentID>uuid:${uuid}</xmpMM:DocumentID>
 <xmpMM:InstanceID>uuid:${uuid}</xmpMM:InstanceID>

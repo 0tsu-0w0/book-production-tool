@@ -23,7 +23,9 @@ export interface BookHost {
   openDocument(path: string, rel: string): Promise<void>;
 }
 
-const LAST_BOOK = "tategumi.lastBook";
+const LAST_BOOK = "kolophon.lastBook";
+/** 旧名（tategumi）のころに覚えたもの。 */
+const LEGACY_LAST_BOOK = "tategumi.lastBook";
 
 export class BookDialog {
   private readonly dialog = document.createElement("dialog");
@@ -49,7 +51,7 @@ export class BookDialog {
     if (!this.book) {
       let last: string | null = null;
       try {
-        last = localStorage.getItem(LAST_BOOK);
+        last = localStorage.getItem(LAST_BOOK) ?? localStorage.getItem(LEGACY_LAST_BOOK);
       } catch {
         last = null;
       }
@@ -212,7 +214,7 @@ export class BookDialog {
     if (book.documents.length === 0) {
       const p = document.createElement("p");
       p.className = "hint";
-      p.textContent = "「文書を追加…」で、章ごとの文書（tategumi 文書・テキスト・TeX）を入れてください。";
+      p.textContent = "「文書を追加…」で、章ごとの文書（Kolophon 文書・テキスト・TeX）を入れてください。";
       d.append(p);
     } else {
       d.append(list);
@@ -253,7 +255,7 @@ export class BookDialog {
       }, { disabled: !has }),
       this.button("設定を同期…", async () => {
         const name = this.book!.documents[this.book!.styleSource]?.path ?? "";
-        if (!confirm(`「${name}」の設定を、ほかの tategumi 文書に書き込みます（原稿は変えません）。よろしいですか？`)) return;
+        if (!confirm(`「${name}」の設定を、ほかの Kolophon 文書に書き込みます（原稿は変えません）。よろしいですか？`)) return;
         const r = await this.host.sync(this.path!, this.book!);
         alert("error" in r ? r.error : `${r.count}個の文書の設定を同期しました。`);
       }, { disabled: !any, title: "スタイルの元の設定（判型・スタイル・柱など）を、ほかの文書にも書き込む" }),

@@ -1,4 +1,4 @@
-import type { TategumiDocument } from "../document/document.js";
+import type { KolophonDocument } from "../document/document.js";
 import { applyTemplate } from "../document/template.js";
 import { imageInfos, type DocImage } from "../document/document.js";
 import type { ImageInfo } from "../engine/types.js";
@@ -58,7 +58,7 @@ type Opened =
 interface Api extends TemplateApi {
   init(): Promise<{
     sample: string;
-    recovery?: { doc: TategumiDocument; filePath: string | null; savedAt: string };
+    recovery?: { doc: KolophonDocument; filePath: string | null; savedAt: string };
     opened?: Opened;
     snapshot: boolean;
     /** 起動のときに開くよう頼まれたブックのファイル。 */
@@ -74,9 +74,9 @@ interface Api extends TemplateApi {
   openDocument(): Promise<Opened | undefined>;
   openPath(file: string): Promise<Opened>;
   onOpenPath(fn: (file: string) => void): void;
-  saveDocument(doc: TategumiDocument, filePath: string | null, saveAs: boolean): Promise<string | undefined>;
+  saveDocument(doc: KolophonDocument, filePath: string | null, saveAs: boolean): Promise<string | undefined>;
   setDocumentState(dirty: boolean, filePath: string | null): Promise<void>;
-  saveRecovery(doc: TategumiDocument, filePath: string | null): Promise<void>;
+  saveRecovery(doc: KolophonDocument, filePath: string | null): Promise<void>;
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
   exportEpub(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<EpubResult>;
@@ -265,7 +265,7 @@ let lastIpcMs = 0;
 
 // ---- 文書の状態 ----
 
-function currentDocument(): TategumiDocument {
+function currentDocument(): KolophonDocument {
   return { text: source.value, settings, images: imageManager.images };
 }
 
@@ -533,7 +533,7 @@ async function open(file?: string) {
     return;
   }
   loadOpened(opened);
-  setStatus(opened.filePath ? `開きました：${opened.filePath}` : "テキストを読み込みました。保存すると tategumi 文書になります。");
+  setStatus(opened.filePath ? `開きました：${opened.filePath}` : "テキストを読み込みました。保存すると Kolophon 文書になります。");
 }
 
 /**
@@ -882,7 +882,7 @@ stage.addEventListener("keydown", (e) => {
 window.addEventListener("resize", () => preview.show());
 api.onCommand((c) => void runCommand(c));
 // 起動中に、ほかから文書を開くよう頼まれたとき（文書のダブルクリックなど）。
-api.onOpenPath((file) => void (file.toLowerCase().endsWith(".tgbook") ? bookDialog.open(file) : open(file)));
+api.onOpenPath((file) => void (/\.(kolbook|tgbook)$/i.test(file) ? bookDialog.open(file) : open(file)));
 api.onProgress((p) => {
   progress.hidden = false;
   progress.max = p.total;

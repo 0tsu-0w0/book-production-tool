@@ -33,7 +33,7 @@ export interface FormatSettings {
   halfWidth: HalfWidth;
   /** IN-05 ＝＝＝ の行で改ページする。 */
   pageBreakMark: boolean;
-  /** 原稿の記法：tategumi の記法か、TeX（LaTeX）の記法か。 */
+  /** 原稿の記法：Kolophon の記法か、TeX（LaTeX）の記法か。 */
   markup: "standard" | "tex";
 }
 

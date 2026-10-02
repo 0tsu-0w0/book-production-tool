@@ -3,14 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type TategumiDocument } from "./document/document.js";
+import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type KolophonDocument, LEGACY_EXTENSION } from "./document/document.js";
 import { compositeFonts, type Settings } from "./document/settings.js";
-import { BUILTIN_TEMPLATES, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
+import { BUILTIN_TEMPLATES, LEGACY_TEMPLATE_EXTENSION, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
-import { BOOK_EXTENSION, BookFormatError, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
+import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSION, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
 import { typesetCover } from "./engine/cover.js";
 import { checkPdfX } from "./output/check-pdfx.js";
 import { pdfOptions } from "./output/export-pdf.js";
@@ -22,6 +22,24 @@ import { ZipWriter } from "./output/zip.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
 import { SAMPLE_TEXT } from "./sample.js";
 
+// 旧名（tategumi）のときの設定（テンプレート・既定のテンプレート・控え・最後に開いたブックなど）を、初めて起動したときに引き継ぐ。
+function migrateUserData() {
+  const dir = app.getPath("userData");
+  const old = path.join(app.getPath("appData"), "tategumi");
+  if (path.resolve(old).toLowerCase() === path.resolve(dir).toLowerCase() || !fs.existsSync(old)) return;
+  for (const name of ["templates", "default-template.json", "recovery.json", "font-cache.json", "Local Storage"]) {
+    const from = path.join(old, name);
+    const to = path.join(dir, name);
+    if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+    try {
+      fs.cpSync(from, to, { recursive: true });
+    } catch {
+      // 引き継げなくても使える。
+    }
+  }
+}
+migrateUserData();
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
 // PC のフォントを調べた結果は控えておき、次の起動では変わったファイルだけを調べる。
@@ -32,7 +50,7 @@ const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`
 const snapshotDir = arg("snapshot");
 /** 文書をダブルクリックして起動したとき（Windows）は、コマンドラインにそのパスが来る。 */
 function fileFromArgv(argv: string[]): string | undefined {
-  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(tategumi|txt|tex|tgbook)$/i.test(a) && fs.existsSync(a));
+  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(kolophon|kolbook|tategumi|tgbook|txt|tex)$/i.test(a) && fs.existsSync(a));
 }
 let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 // 確認用：ダイアログを出さずに、指定した場所へ書き出す（--snapshot と一緒に使う）。
@@ -51,7 +69,7 @@ const recoveryFile = () => path.join(app.getPath("userData"), "recovery.json");
 
 function updateTitle() {
   const name = currentPath ? path.basename(currentPath) : "無題";
-  win?.setTitle(`${name}${dirty ? " *" : ""} — tategumi`);
+  win?.setTitle(`${name}${dirty ? " *" : ""} — Kolophon`);
 }
 
 function send(channel: string, ...args: unknown[]) {
@@ -68,7 +86,7 @@ function readTextFile(file: string): string {
   }
 }
 
-/** 文書（.tategumi）かテキスト（.txt）を開く。テキストは本文だけを返し、設定は今のものを使う。 */
+/** 文書（.kolophon・旧 .tategumi）かテキスト（.txt）を開く。テキストは本文だけを返し、設定は今のものを使う。 */
 function openFile(file: string): { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string } } {
   if (file.toLowerCase().endsWith(".txt")) return { text: readTextFile(file), filePath: null };
   if (file.toLowerCase().endsWith(".tex")) {
@@ -81,7 +99,11 @@ function openFile(file: string): { text: string; settings?: Settings; images?: D
   return { text: doc.text, settings: doc.settings, images: doc.images, filePath: file };
 }
 
-const isBookFile = (file: string) => file.toLowerCase().endsWith(`.${BOOK_EXTENSION}`);
+const isBookFile = (file: string) => [BOOK_EXTENSION, LEGACY_BOOK_EXTENSION].some((e) => file.toLowerCase().endsWith(`.${e}`));
+/** 文書（設定を持つファイル）か。 */
+const isDocFile = (file: string) => [FILE_EXTENSION, LEGACY_EXTENSION].some((e) => file.toLowerCase().endsWith(`.${e}`));
+/** 開くダイアログで選べる文書の拡張子。 */
+const DOC_EXTENSIONS = [FILE_EXTENSION, LEGACY_EXTENSION];
 
 function openSafely(file: string) {
   try {
@@ -105,7 +127,7 @@ function requestOpen(file: string) {
 ipcMain.handle("doc:open-path", (_e, file: string) => openSafely(file));
 
 ipcMain.handle("init", () => {
-  let recovery: { doc: TategumiDocument; filePath: string | null; savedAt: string } | undefined;
+  let recovery: { doc: KolophonDocument; filePath: string | null; savedAt: string } | undefined;
   try {
     const data = JSON.parse(fs.readFileSync(recoveryFile(), "utf8"));
     recovery = { doc: parseDocument(data.document), filePath: data.filePath ?? null, savedAt: data.savedAt };
@@ -185,8 +207,8 @@ ipcMain.handle("pages", (_e, v: number, indices: number[]) => {
 ipcMain.handle("doc:open", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
     filters: [
-      { name: "tategumi 文書・テキスト・TeX", extensions: [FILE_EXTENSION, "txt", "tex"] },
-      { name: "tategumi 文書", extensions: [FILE_EXTENSION] },
+      { name: "Kolophon 文書・テキスト・TeX", extensions: [...DOC_EXTENSIONS, "txt", "tex"] },
+      { name: "Kolophon 文書", extensions: DOC_EXTENSIONS },
       { name: "テキスト", extensions: ["txt"] },
       { name: "TeX", extensions: ["tex"] },
     ],
@@ -200,12 +222,12 @@ ipcMain.handle("doc:open", async () => {
   }
 });
 
-ipcMain.handle("doc:save", async (_e, doc: TategumiDocument, filePath: string | null, saveAs: boolean) => {
+ipcMain.handle("doc:save", async (_e, doc: KolophonDocument, filePath: string | null, saveAs: boolean) => {
   let target = saveAs ? null : filePath;
   if (!target) {
     const { canceled, filePath: chosen } = await dialog.showSaveDialog(win!, {
       defaultPath: filePath ?? `無題.${FILE_EXTENSION}`,
-      filters: [{ name: "tategumi 文書", extensions: [FILE_EXTENSION] }],
+      filters: [{ name: "Kolophon 文書", extensions: [FILE_EXTENSION] }],
     });
     if (canceled || !chosen) return undefined;
     target = chosen;
@@ -223,7 +245,7 @@ ipcMain.handle("doc:state", (_e, isDirty: boolean, filePath: string | null) => {
   updateTitle();
 });
 
-ipcMain.handle("recovery:save", (_e, doc: TategumiDocument, filePath: string | null) => {
+ipcMain.handle("recovery:save", (_e, doc: KolophonDocument, filePath: string | null) => {
   const data = { document: serializeDocument(doc), filePath, savedAt: new Date().toISOString() };
   fs.mkdirSync(path.dirname(recoveryFile()), { recursive: true });
   fs.writeFileSync(recoveryFile(), JSON.stringify(data), "utf8");
@@ -281,7 +303,7 @@ ipcMain.handle("templates:list", () => {
   }));
   let files: string[] = [];
   try {
-    files = fs.readdirSync(templatesDir()).filter((f) => f.endsWith(`.${TEMPLATE_EXTENSION}`));
+    files = fs.readdirSync(templatesDir()).filter((f) => f.endsWith(`.${TEMPLATE_EXTENSION}`) || f.endsWith(`.${LEGACY_TEMPLATE_EXTENSION}`));
   } catch {
     files = [];
   }
@@ -336,7 +358,7 @@ ipcMain.handle("templates:delete", (_e, id: string) => {
 /** ほかの PC で保存したテンプレートのファイルを取り込む。 */
 ipcMain.handle("templates:import", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
-    filters: [{ name: "tategumi テンプレート", extensions: [TEMPLATE_EXTENSION] }],
+    filters: [{ name: "Kolophon テンプレート", extensions: [TEMPLATE_EXTENSION, LEGACY_TEMPLATE_EXTENSION] }],
     properties: ["openFile"],
   });
   if (canceled || !filePaths[0]) return undefined;
@@ -487,10 +509,12 @@ function loadBookDocs(bookPath: string, book: Book): { docs: (BookDocument | und
   return { docs, errors };
 }
 
-const bookFilters = [{ name: "tategumi ブック", extensions: [BOOK_EXTENSION] }];
+const bookFilters = [{ name: "Kolophon ブック", extensions: [BOOK_EXTENSION, LEGACY_BOOK_EXTENSION] }];
+/** ブックのファイル名から拡張子を除いた名前。 */
+const bookName = (bookPath: string) => path.basename(bookPath).replace(/\.(kolbook|tgbook)$/i, "");
 
 ipcMain.handle("book:new", async () => {
-  const { canceled, filePath } = await dialog.showSaveDialog(win!, { defaultPath: `新しいブック.${BOOK_EXTENSION}`, filters: bookFilters });
+  const { canceled, filePath } = await dialog.showSaveDialog(win!, { defaultPath: `新しいブック.${BOOK_EXTENSION}`, filters: [{ name: "Kolophon ブック", extensions: [BOOK_EXTENSION] }] });
   if (canceled || !filePath) return undefined;
   const book = newBook();
   fs.writeFileSync(filePath, serializeBook(book), "utf8");
@@ -520,7 +544,7 @@ ipcMain.handle("book:save", (_e, bookPath: string, book: Book) => {
 ipcMain.handle("book:choose-docs", async (_e, bookPath: string) => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
     title: "ブックに入れる文書を選ぶ",
-    filters: [{ name: "tategumi 文書・テキスト・TeX", extensions: [FILE_EXTENSION, "txt", "tex"] }],
+    filters: [{ name: "Kolophon 文書・テキスト・TeX", extensions: [...DOC_EXTENSIONS, "txt", "tex"] }],
     properties: ["openFile", "multiSelections"],
   });
   if (canceled) return [];
@@ -551,7 +575,7 @@ ipcMain.handle("book:export-pdf", (_e, bookPath: string, book: Book) => {
   if (missing.length > 0) return { error: `読めない文書があります。\n${missing.join("\n")}` };
   const combined = combineBook(book, docs);
   if (combined.included.length === 0) return { error: "書き出す文書がありません。" };
-  return exportPdfFile(combined.text, combined.settings, path.basename(bookPath, `.${BOOK_EXTENSION}`), combined.images);
+  return exportPdfFile(combined.text, combined.settings, bookName(bookPath), combined.images);
 });
 
 /** ブック全体をつないだ原稿を、新しい（無題の）文書として開く（画像の書き出しや全体の確認に）。 */
@@ -560,16 +584,16 @@ ipcMain.handle("book:combined", (_e, bookPath: string, book: Book) => {
   return { text: combined.text, settings: combined.settings, images: combined.images, filePath: null };
 });
 
-/** スタイルの元の文書の設定を、ほかの文書（tategumi 文書だけ）に書き込む。書き込んだ数を返す。 */
+/** スタイルの元の文書の設定を、ほかの文書（Kolophon 文書だけ）に書き込む。書き込んだ数を返す。 */
 ipcMain.handle("book:sync", (_e, bookPath: string, book: Book) => {
   const dir = path.dirname(bookPath);
   const { docs } = loadBookDocs(bookPath, book);
   const source = docs[book.styleSource]?.settings;
-  if (!source) return { error: "スタイルの元の文書に設定がありません（tategumi 文書を選んでください）。" };
+  if (!source) return { error: "スタイルの元の文書に設定がありません（Kolophon 文書を選んでください）。" };
   let count = 0;
   book.documents.forEach((entry, i) => {
     const doc = docs[i];
-    if (i === book.styleSource || !doc?.settings || !entry.path.toLowerCase().endsWith(`.${FILE_EXTENSION}`)) return;
+    if (i === book.styleSource || !doc?.settings || !isDocFile(entry.path)) return;
     const file = path.resolve(dir, entry.path);
     // 記法（標準・TeX）は文書ごとのまま。
     const settings = { ...structuredClone(source), format: { ...structuredClone(source.format), markup: doc.settings.format.markup } };
@@ -611,7 +635,7 @@ ipcMain.handle("book:export-epub", (_e, bookPath: string, book: Book) => {
   if (missing.length > 0) return { error: `読めない文書があります。\n${missing.join("\n")}` };
   const combined = combineBook(book, docs);
   if (combined.included.length === 0) return { error: "書き出す文書がありません。" };
-  return exportEpubFile(combined.text, combined.settings, path.basename(bookPath, `.${BOOK_EXTENSION}`), combined.images);
+  return exportEpubFile(combined.text, combined.settings, bookName(bookPath), combined.images);
 });
 
 /** 画像の書き出し先：フォルダか ZIP（OUT-05）。書き出しの間だけ持つ。 */
@@ -787,7 +811,7 @@ app.whenReady().then(() => {
     minWidth: 960,
     minHeight: 600,
     show: !snapshotDir,
-    title: "tategumi",
+    title: "Kolophon",
     webPreferences: {
       preload: path.join(root, "dist", "preload.cjs"),
       contextIsolation: true,

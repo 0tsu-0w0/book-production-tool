@@ -1,6 +1,6 @@
 {
-  "name": "tategumi",
-  "version": "0.15.0",
+  "name": "kolophon",
+  "version": "0.16.0",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -31,11 +31,11 @@
     "fast-xml-parser": "^5.11.2",
     "typescript": "^7.0.2"
   },
-  "author": "tategumi",
+  "author": "Kolophon",
   "build": {
-    "appId": "net.tategumi.app",
-    "productName": "tategumi",
-    "copyright": "tategumi",
+    "appId": "net.kolophon.app",
+    "productName": "Kolophon",
+    "copyright": "Kolophon",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -79,16 +79,30 @@
     "asar": true,
     "fileAssociations": [
       {
+        "ext": "kolophon",
+        "name": "Kolophon 文書",
+        "description": "Kolophon 文書",
+        "role": "Editor",
+        "mimeType": "application/x-kolophon"
+      },
+      {
+        "ext": "kolbook",
+        "name": "Kolophon ブック",
+        "description": "Kolophon ブック",
+        "role": "Editor",
+        "mimeType": "application/x-kolophon-book"
+      },
+      {
         "ext": "tategumi",
-        "name": "tategumi 文書",
-        "description": "tategumi 文書",
+        "name": "Kolophon 文書（旧 tategumi）",
+        "description": "Kolophon 文書（旧 tategumi）",
         "role": "Editor",
         "mimeType": "application/x-tategumi"
       },
       {
         "ext": "tgbook",
-        "name": "tategumi ブック",
-        "description": "tategumi ブック",
+        "name": "Kolophon ブック（旧 tategumi）",
+        "description": "Kolophon ブック（旧 tategumi）",
         "role": "Editor",
         "mimeType": "application/x-tategumi-book"
       }
@@ -102,14 +116,14 @@
           ]
         }
       ],
-      "artifactName": "tategumi-setup-${version}.${ext}"
+      "artifactName": "Kolophon-setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "tategumi"
+      "shortcutName": "Kolophon"
     },
     "mac": {
       "target": [
@@ -122,7 +136,7 @@
       ],
       "category": "public.app-category.productivity",
       "identity": "-",
-      "artifactName": "tategumi-${version}-mac.${ext}",
+      "artifactName": "Kolophon-${version}-mac.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
@@ -131,7 +145,7 @@
       "en-US"
     ],
     "dmg": {
-      "title": "tategumi ${version}"
+      "title": "Kolophon ${version}"
     },
     "publish": null
   }

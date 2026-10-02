@@ -199,12 +199,12 @@ describe("テンプレート（DTP-17）", () => {
 
   it("テンプレートでないファイルは読まない", () => {
     assert.throws(() => parseTemplate(JSON.stringify({ format: "tategumi-document", version: 1 })));
-    assert.throws(() => parseTemplate(JSON.stringify({ format: "tategumi-template", version: 99 })));
+    assert.throws(() => parseTemplate(JSON.stringify({ format: "kolophon-template", version: 99 })));
   });
 
   it("ファイル名に使えない文字は置き換える", () => {
-    assert.equal(templateFileName('A5/二段:組?'), "A5_二段_組_.tategumi-template");
-    assert.equal(templateFileName("..."), "テンプレート.tategumi-template");
+    assert.equal(templateFileName('A5/二段:組?'), "A5_二段_組_.kolophon-template");
+    assert.equal(templateFileName("..."), "テンプレート.kolophon-template");
   });
 
   for (const t of BUILTIN_TEMPLATES) {

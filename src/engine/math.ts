@@ -75,7 +75,7 @@ function load(): Jax {
   RegisterHTMLHandler(adaptor);
   const doc = mathjax.document("", {
     InputJax: new TeX({ packages: ["base", "ams", "newcommand", "boldsymbol"] }),
-    // 行の中の数式を MathJax で改行させない（tategumi の行分割に任せる）。
+    // 行の中の数式を MathJax で改行させない（Kolophon の行分割に任せる）。
     OutputJax: new SVG({ fontCache: "none", fontData: MathJaxNewcmFont, linebreaks: { inline: false } }),
   });
   doc.outputJax.font.loadDynamicFilesSync();

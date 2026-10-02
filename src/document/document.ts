@@ -1,9 +1,13 @@
 import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "./settings.js";
 
-// 文書ファイル（.tategumi）。中身は JSON で、形式の版番号を持つ（NF-07）。
+// 文書ファイル（.kolophon）。中身は JSON で、形式の版番号を持つ（NF-07）。
+// 旧名（tategumi）のころの文書（.tategumi・形式 tategumi-document）もそのまま読める。
 
-export const FILE_EXTENSION = "tategumi";
-export const FORMAT_ID = "tategumi-document";
+export const FILE_EXTENSION = "kolophon";
+export const FORMAT_ID = "kolophon-document";
+/** 旧名（tategumi）のころの拡張子と形式。読むだけ。 */
+export const LEGACY_EXTENSION = "tategumi";
+const LEGACY_FORMAT_ID = "tategumi-document";
 export const FORMAT_VERSION = 1;
 
 /** 文書に入れた画像（DTP-12・17）。中身は Base64 で文書ファイルに入れる。 */
@@ -18,7 +22,7 @@ export interface DocImage {
   height: number;
 }
 
-export interface TategumiDocument {
+export interface KolophonDocument {
   text: string;
   settings: Settings;
   images: DocImage[];
@@ -53,17 +57,17 @@ export function imageInfos(images: DocImage[]): Record<string, { width: number; 
   return Object.fromEntries(images.map((i) => [i.name, { width: i.width, height: i.height }]));
 }
 
-export function newDocument(text = ""): TategumiDocument {
+export function newDocument(text = ""): KolophonDocument {
   return { text, settings: structuredClone(DEFAULT_SETTINGS), images: [] };
 }
 
-export function serializeDocument(doc: TategumiDocument): string {
+export function serializeDocument(doc: KolophonDocument): string {
   return JSON.stringify({ format: FORMAT_ID, version: FORMAT_VERSION, text: doc.text, settings: doc.settings, images: doc.images }, null, 2);
 }
 
 export class DocumentFormatError extends Error {}
 
-export function parseDocument(json: string): TategumiDocument {
+export function parseDocument(json: string): KolophonDocument {
   let data: unknown;
   try {
     data = JSON.parse(json);
@@ -71,9 +75,9 @@ export function parseDocument(json: string): TategumiDocument {
     throw new DocumentFormatError("文書ファイルを読めません（JSON として壊れています）。");
   }
   const d = data as { format?: unknown; version?: unknown; text?: unknown; settings?: unknown; images?: unknown };
-  if (d?.format !== FORMAT_ID) throw new DocumentFormatError("tategumi の文書ファイルではありません。");
+  if (d?.format !== FORMAT_ID && d?.format !== LEGACY_FORMAT_ID) throw new DocumentFormatError("Kolophon の文書ファイルではありません。");
   if (typeof d.version !== "number" || d.version > FORMAT_VERSION) {
-    throw new DocumentFormatError("新しい版の tategumi で作られた文書です。tategumi を更新してください。");
+    throw new DocumentFormatError("新しい版の Kolophon で作られた文書です。Kolophon を更新してください。");
   }
   if (typeof d.text !== "string") throw new DocumentFormatError("文書ファイルに本文がありません。");
   return { text: d.text, settings: normalizeSettings(d.settings), images: normalizeImages(d.images) };

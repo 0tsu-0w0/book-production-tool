@@ -89,7 +89,7 @@ async function pageContent(bytes: Uint8Array): Promise<string> {
 
 describe("ZIP（OUT-05）", () => {
   it("書いた ZIP は、目次の件数・CRC・ファイル名（UTF-8）が合っている", () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "tategumi-")), "t.zip");
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "kolophon-")), "t.zip");
     const a = new Uint8Array([1, 2, 3]);
     const b = new TextEncoder().encode("縦書き");
     const zip = new ZipWriter(file);

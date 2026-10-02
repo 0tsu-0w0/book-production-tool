@@ -4,8 +4,10 @@ import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "./settings.j
 // テンプレート（DTP-17）：原稿を除いた設定一式（判型・版面・スタイル・柱・ページ構成・書き出し）。
 // 別の本に使い回すため、書名と著者名は保存しない。発行者・印刷所などはそのまま残す。
 
-export const TEMPLATE_EXTENSION = "tategumi-template";
-export const TEMPLATE_FORMAT_ID = "tategumi-template";
+export const TEMPLATE_EXTENSION = "kolophon-template";
+export const TEMPLATE_FORMAT_ID = "kolophon-template";
+/** 旧名（tategumi）のころのテンプレートの拡張子と形式。読むだけ。 */
+export const LEGACY_TEMPLATE_EXTENSION = "tategumi-template";
 export const TEMPLATE_FORMAT_VERSION = 1;
 
 export interface Template {
@@ -38,9 +40,9 @@ export function parseTemplate(json: string): Template {
     throw new DocumentFormatError("テンプレートを読めません（JSON として壊れています）。");
   }
   const d = data as { format?: unknown; version?: unknown; name?: unknown; settings?: unknown };
-  if (d?.format !== TEMPLATE_FORMAT_ID) throw new DocumentFormatError("tategumi のテンプレートではありません。");
+  if (d?.format !== TEMPLATE_FORMAT_ID && d?.format !== LEGACY_TEMPLATE_EXTENSION) throw new DocumentFormatError("Kolophon のテンプレートではありません。");
   if (typeof d.version !== "number" || d.version > TEMPLATE_FORMAT_VERSION) {
-    throw new DocumentFormatError("新しい版の tategumi で作られたテンプレートです。tategumi を更新してください。");
+    throw new DocumentFormatError("新しい版の Kolophon で作られたテンプレートです。Kolophon を更新してください。");
   }
   return { name: typeof d.name === "string" && d.name ? d.name : "名前のないテンプレート", settings: normalizeSettings(d.settings) };
 }

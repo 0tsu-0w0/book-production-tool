@@ -6,8 +6,11 @@ import { texToMarkup } from "../engine/tex.js";
 // 組むときは、文書をつないで1つの原稿にし、「スタイルの元」の文書の設定で組む。そのため、目次・注・
 // ページ番号の参照（ラベル）・柱は本全体で続き、扉・奥付などのページ構成はスタイルの元のものを使う。
 
-export const BOOK_EXTENSION = "tgbook";
-const FORMAT = "tategumi-book";
+export const BOOK_EXTENSION = "kolbook";
+const FORMAT = "kolophon-book";
+/** 旧名（tategumi）のころのブックの拡張子と形式。読むだけ。 */
+export const LEGACY_BOOK_EXTENSION = "tgbook";
+const LEGACY_FORMAT = "tategumi-book";
 
 export interface BookEntry {
   /** 文書のパス（ブックのファイルからの相対パス。区切りは /）。 */
@@ -42,7 +45,7 @@ export function parseBook(json: string): Book {
     throw new BookFormatError("ブックのファイルを読めません（壊れているか、ブックではありません）。");
   }
   const d = data as Partial<Book> & { format?: string };
-  if (!d || d.format !== FORMAT) throw new BookFormatError("tategumi のブックではありません。");
+  if (!d || (d.format !== FORMAT && d.format !== LEGACY_FORMAT)) throw new BookFormatError("Kolophon のブックではありません。");
   const documents = (Array.isArray(d.documents) ? d.documents : [])
     .filter((e): e is BookEntry => !!e && typeof (e as BookEntry).path === "string")
     .map((e) => ({ path: e.path, include: e.include !== false }));
@@ -55,7 +58,7 @@ export interface BookDocument {
   /** 表示用の名前（ファイル名）。 */
   name: string;
   text: string;
-  /** .tategumi なら設定がある（.txt・.tex はない）。 */
+  /** .kolophon（.tategumi）なら設定がある（.txt・.tex はない）。 */
   settings?: Settings;
   images: DocImage[];
   /** TeX の記法か（.tex、または設定の記法が TeX）。 */
@@ -63,7 +66,7 @@ export interface BookDocument {
 }
 
 /** つないだ原稿の中で、文書の始まりに付けるラベル。 */
-export const docLabel = (i: number) => `tategumi-book-${i}`;
+export const docLabel = (i: number) => `kolophon-book-${i}`;
 
 export interface CombinedBook {
   text: string;
@@ -79,12 +82,12 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * 文書をつないで1つの原稿にする。文書の間は改丁（または改ページ）。文書の頭に、ページを調べるためのラベルを付ける。
- * TeX の文書は tategumi の記法にしてからつなぐ。画像は1つにまとめ、名前が重なれば「文書名_名前」に付け替える。
+ * TeX の文書は Kolophon の記法にしてからつなぐ。画像は1つにまとめ、名前が重なれば「文書名_名前」に付け替える。
  */
 export function combineBook(book: Book, docs: (BookDocument | undefined)[]): CombinedBook {
   const source = docs[book.styleSource] ?? docs.find((d) => d?.settings);
   const settings = normalizeSettings(structuredClone(source?.settings ?? {}));
-  // つないだ原稿は tategumi の記法で書く。
+  // つないだ原稿は Kolophon の記法で書く。
   settings.format.markup = "standard";
   const parts: string[] = [];
   const images: DocImage[] = [];

@@ -215,7 +215,7 @@ function sections(): Section[] {
           path: "format.markup",
           label: "原稿の記法",
           options: [
-            ["standard", "tategumi の記法（｜漢字《かんじ》・＃見出し など）"],
+            ["standard", "Kolophon の記法（｜漢字《かんじ》・＃見出し など）"],
             ["tex", "TeX の記法（\\ruby・\\section・$数式$ など）"],
           ],
         },
@@ -449,7 +449,7 @@ function sections(): Section[] {
         { kind: "check", path: "output.zipImages", label: "画像を1つの ZIP にまとめる" },
         { kind: "text", path: "image.range", label: "書き出すページ（画像。空なら全ページ）", placeholder: "例：1-10, 15, 20-" },
         { kind: "check", path: "image.snsGroups", label: "SNS 向けに4枚ずつの組（フォルダ）に分ける" },
-        { kind: "text", path: "image.credit", label: "画像にだけ入れるクレジット（下の余白に小さく）", placeholder: "例：© 山田花子／tategumi" },
+        { kind: "text", path: "image.credit", label: "画像にだけ入れるクレジット（下の余白に小さく）", placeholder: "例：© 山田花子／Kolophon" },
         { kind: "select", path: "output.paper", label: "本文用紙（背幅の計算）", options: [...Object.keys(PAPERS).map((k): Opt => [k, `${k}（1枚 ${PAPERS[k]}mm）`]), [CUSTOM_PAPER, CUSTOM_PAPER]] },
         { kind: "number", path: "output.paperThicknessMm", label: "紙1枚の厚さ", min: 0.03, max: 0.5, step: 0.005, unit: "mm", when: (s) => s.output.paper === CUSTOM_PAPER },
         {
