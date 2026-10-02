@@ -87,7 +87,8 @@ export function tocBlocks(headings: Extract<TextBlock, { kind: "heading" }>[], n
     out.push({
       kind: "para",
       style: TOC_ENTRY_STYLES[h.level - 1],
-      atoms: [...copyAtoms(h.atoms), { cells: [{ text: t.leader || "…" }], leader: true }, ...numberAtoms(numbers[i] ?? 0, t.numerals, horizontal)],
+      // 項目全体（見出し・リーダー・番号）を、その見出しのページへのリンクにする。
+      atoms: [...copyAtoms(h.atoms), { cells: [{ text: t.leader || "…" }], leader: true }, ...numberAtoms(numbers[i] ?? 0, t.numerals, horizontal)].map((a) => ({ ...a, link: `h:${i}` })),
     });
   });
   return out;

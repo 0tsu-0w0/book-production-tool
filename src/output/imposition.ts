@@ -32,6 +32,8 @@ function shiftShape(s: Shape, dx: number): Shape {
       return { ...s, cx: s.cx + dx };
     case "image":
       return { ...s, x: s.x + dx, ...(s.clip ? { clip: { ...s.clip, x: s.clip.x + dx } } : {}) };
+    case "link":
+      return { ...s, x: s.x + dx };
     case "path":
       return { ...s, m: [s.m[0], s.m[1], s.m[2], s.m[3], s.m[4] + dx, s.m[5]] };
   }
@@ -42,7 +44,8 @@ export function combineSpread(right: DrawPage | null, left: DrawPage | null, ind
   const base = (right ?? left)!;
   const w = base.width;
   const placed = (page: DrawPage | null, dx: number) =>
-    page ? { items: page.items.map((it) => ({ ...it, x: it.x + dx })), shapes: page.shapes.map((s) => shiftShape(s, dx)) } : { items: [], shapes: [] };
+    // 面付けしたページでは、リンクの飛び先（元のページ）がずれるので、リンクは外す。
+    page ? { items: page.items.map((it) => ({ ...it, x: it.x + dx })), shapes: page.shapes.filter((s) => s.kind !== "link").map((s) => shiftShape(s, dx)) } : { items: [], shapes: [] };
   const l = placed(left, 0);
   const r = placed(right, w);
   return { index, width: w * 2, height: base.height, paper: base.paper, items: [...l.items, ...r.items], shapes: [...l.shapes, ...r.shapes] };

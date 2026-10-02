@@ -195,6 +195,9 @@ function drawShape(ctx: Ctx, shape: Shape): void {
       ctx.arc(shape.cx, shape.cy, shape.r, 0, Math.PI * 2);
       ctx.fill();
       break;
+    case "link":
+      // リンクの範囲は描かない（閲覧用 PDF でだけ使う）。
+      break;
     case "diamond":
       ctx.fillStyle = shape.fill;
       ctx.beginPath();

@@ -60,6 +60,8 @@ export function pdfOptions(settings: Settings, title: string): PdfOptions {
     standard: base.pdfx ? settings.output.pdfStandard : undefined,
     // アウトライン化は入稿用だけ（閲覧用で文字を図形にすると、検索もコピーもできなくなるため）。
     outline: base.pdfx && settings.output.outline,
+    // リンクは閲覧用だけ（PDF/X では仕上がりの中に注釈を置けない）。しおりはどちらにも付く。
+    links: !base.pdfx,
     // 特色とノセは入稿用だけ（CMYK のとき。グレースケールでは画面の色をグレーにする）。
     ...(base.pdfx ? { spots: settings.output.spotColors, overprintBlack: settings.output.overprintBlack } : {}),
   };

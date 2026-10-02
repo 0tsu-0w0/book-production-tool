@@ -926,6 +926,7 @@ function toHorizontal(p: PageLayout): PageLayout {
         case "image":
           return { ...s, ...rect(s), ...(s.clip ? { clip: rect(s.clip) } : {}) };
         case "rect":
+        case "link":
           return { ...s, ...rect(s) };
         case "circle":
         case "diamond":
@@ -1030,6 +1031,19 @@ function placeLine(
       spanEnd = offset;
       if (index < cells.length - 1) offset += gapAfter(cell);
       index++;
+    }
+    // リンク（目次の項目・ページ番号の参照・注番号）：字の範囲を四角にして残す。続く字が同じ飛び先なら1つにまとめる。
+    const target = atom.link ?? (atom.pageRef ? `l:${atom.pageRef}` : undefined);
+    if (target && spanEnd > spanStart) {
+      const w = size * Math.max(...atom.cells.map((c) => c.scale ?? 1));
+      const top = bandTop + spanStart * size;
+      const bottom = bandTop + spanEnd * size;
+      const last = shapes[shapes.length - 1];
+      if (last?.kind === "link" && last.target === target && Math.abs(last.x - (x - w / 2)) < 0.5 && top - (last.y + last.h) < size) {
+        last.h = bottom - last.y;
+      } else {
+        shapes.push({ kind: "link", x: x - w / 2, y: top, w, h: bottom - top, target });
+      }
     }
     if (atom.ruby) {
       const first = atom.cells[0];

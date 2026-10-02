@@ -66,6 +66,11 @@ export interface Atom {
   note?: Atom[];
   /** 箇条書き・番号付きの項目の印（「・」「（1）」など）。段落の2行目以降は、この幅だけ下げる（ぶら下げ）。 */
   listMark?: boolean;
+  /**
+   * リンクの飛び先（閲覧用 PDF）。「l:名前」はそのラベルのページ、「h:番号」は原稿の何番目（0始まり）の見出しのページ。
+   * ページ番号の参照（pageRef）は、書かなくてもそのラベルへ飛ぶ。
+   */
+  link?: string;
 }
 
 export type SideLine = "single" | "double" | "wave" | "dotted" | "dashed";
@@ -257,6 +262,8 @@ export type Shape =
   | { kind: "rect"; x: number; y: number; w: number; h: number; fill?: string; stroke?: { width: number; color: string } }
   | { kind: "circle"; cx: number; cy: number; r: number; fill: string }
   | { kind: "diamond"; cx: number; cy: number; r: number; fill: string }
+  /** リンクの範囲（描かない。閲覧用 PDF でクリックできる所。target は Atom.link と同じ書き方）。 */
+  | { kind: "link"; x: number; y: number; w: number; h: number; target: string }
   /** 塗りの輪郭（数式）。m は d の座標をページの座標に写す行列 [a, b, c, d, e, f]。 */
   | { kind: "path"; d: string; m: [number, number, number, number, number, number]; color: string }
   /** 画像。clip があれば、その範囲だけを見せる（全面の画像を塗り足しの外で切る）。画像がなければ枠だけ描く。 */
@@ -339,6 +346,10 @@ export interface DrawPage {
   width: number;
   height: number;
   paper: string;
+  /** このページにあるラベル（リンクの飛び先を探すのに使う）。 */
+  labels?: string[];
+  /** このページで始まる見出し（PDF のしおりに使う）。 */
+  headings?: { level: 1 | 2; text: string }[];
   items: DrawItem[];
   shapes: Shape[];
 }

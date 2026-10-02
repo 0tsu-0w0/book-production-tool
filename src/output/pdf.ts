@@ -69,6 +69,11 @@ export interface PdfOptions {
   spots?: SpotColor[];
   /** スミ（K100%）の文字・罫をノセ（オーバープリント）にする（入稿用の CMYK のときだけ）。 */
   overprintBlack?: boolean;
+  /**
+   * 目次・ページ番号の参照・注番号をクリックできるリンクにする（閲覧用だけ。PDF/X では仕上がりの中に注釈を置けない）。
+   * しおり（見出しの一覧）はどちらにも付ける。
+   */
+  links?: boolean;
 }
 
 export type PdfXStandard = "x1a" | "x4";
@@ -130,10 +135,12 @@ export async function renderPdf(
   const imageRefs = await embedImages(doc, images, pages, options.color, options.imagePpi);
   const bleed = options.bleedMm * MM;
 
+  const pdfPages: { page: PDFPage; margin: number }[] = [];
   for (const page of pages) {
     // 仕上がりの外側に、トンボ（または塗り足し）の分の余白を取る。
     const margin = options.marks ? marksMargin(bleed) : bleed;
     const pdfPage = doc.addPage([page.width + margin * 2, page.height + margin * 2]);
+    pdfPages.push({ page: pdfPage, margin });
     const trim = { x0: margin, y0: margin, x1: margin + page.width, y1: margin + page.height };
     pdfPage.setTrimBox(trim.x0, trim.y0, page.width, page.height);
     pdfPage.setBleedBox(trim.x0 - bleed, trim.y0 - bleed, page.width + bleed * 2, page.height + bleed * 2);
@@ -181,6 +188,9 @@ export async function renderPdf(
     pdfPage.pushOperators(...ops);
     onProgress?.(page.index + 1, pages.length);
   }
+
+  addOutline(doc, pages, pdfPages.map((p) => p.page));
+  if (options.links) addLinks(doc, pages, pdfPages);
 
   if (!options.pdfx) return doc.save();
 
@@ -423,6 +433,9 @@ function shapeOps(shape: Shape, pageHeight: number, paint: Paint): PDFOperator[]
     case "image":
       // 画像は imageOps で描く（XObject の名前が要るため）。
       return [];
+    case "link":
+      // リンクは描かない（注釈として付ける）。
+      return [];
   }
 }
 
@@ -535,4 +548,74 @@ function applyPdfX1a(doc: PDFDocument) {
   context.trailerInfo.ID = PDFArray.withContext(context);
   (context.trailerInfo.ID as PDFArray).push(id);
   (context.trailerInfo.ID as PDFArray).push(id);
+}
+
+/** ページの頭へ飛ぶ行き先（ページ全体を見せる）。 */
+const fitDest = (doc: PDFDocument, page: PDFPage) => doc.context.obj([page.ref, PDFName.of("Fit")]);
+
+/**
+ * しおり（PDF の目次の欄）：見出しを出てくる順に並べ、中見出しは直前の大見出しの下に入れる。押すとそのページへ飛ぶ。
+ */
+function addOutline(doc: PDFDocument, pages: DrawPage[], pdfPages: PDFPage[]): void {
+  type Node = { title: string; page: PDFPage; children: Node[] };
+  const top: Node[] = [];
+  pages.forEach((p, i) => {
+    for (const h of p.headings ?? []) {
+      const title = h.text.trim();
+      if (!title) continue;
+      const node: Node = { title, page: pdfPages[i], children: [] };
+      const parent = h.level === 2 ? top[top.length - 1] : undefined;
+      (parent ? parent.children : top).push(node);
+    }
+  });
+  if (top.length === 0) return;
+  const ctx = doc.context;
+  const rootRef = ctx.nextRef();
+  /** 兄弟の並びを辞書にして、最初と最後の参照と、開いたときに見える数を返す。 */
+  const build = (nodes: Node[], parent: PDFRef): { first: PDFRef; last: PDFRef; count: number } => {
+    const refs = nodes.map(() => ctx.nextRef());
+    let count = 0;
+    nodes.forEach((n, i) => {
+      const dict: Record<string, unknown> = { Title: PDFHexString.fromText(n.title), Parent: parent, Dest: fitDest(doc, n.page) };
+      if (i > 0) dict.Prev = refs[i - 1];
+      if (i < nodes.length - 1) dict.Next = refs[i + 1];
+      if (n.children.length > 0) {
+        const sub = build(n.children, refs[i]);
+        dict.First = sub.first;
+        dict.Last = sub.last;
+        dict.Count = sub.count;
+        count += sub.count;
+      }
+      ctx.assign(refs[i], ctx.obj(dict as never));
+      count++;
+    });
+    return { first: refs[0], last: refs[refs.length - 1], count };
+  };
+  const root = build(top, rootRef);
+  ctx.assign(rootRef, ctx.obj({ Type: "Outlines", First: root.first, Last: root.last, Count: root.count }));
+  doc.catalog.set(PDFName.of("Outlines"), rootRef);
+  // 開いたときに、しおりの欄を見せる。
+  doc.catalog.set(PDFName.of("PageMode"), PDFName.of("UseOutlines"));
+}
+
+/** リンク：紙面のリンクの範囲（Shape の link）に、飛び先のページへの注釈を付ける。 */
+function addLinks(doc: PDFDocument, pages: DrawPage[], pdfPages: { page: PDFPage; margin: number }[]): void {
+  const labelPage = new Map<string, number>();
+  pages.forEach((p, i) => {
+    for (const l of p.labels ?? []) if (!labelPage.has(l)) labelPage.set(l, i);
+  });
+  const headingPage = pages.flatMap((p, i) => (p.headings ?? []).map(() => i));
+  const targetOf = (t: string): number | undefined => (t.startsWith("h:") ? headingPage[Number(t.slice(2))] : t.startsWith("l:") ? labelPage.get(t.slice(2)) : undefined);
+  pages.forEach((p, i) => {
+    const { page, margin } = pdfPages[i];
+    const annots: PDFRef[] = [];
+    for (const s of p.shapes) {
+      if (s.kind !== "link") continue;
+      const to = targetOf(s.target);
+      if (to === undefined || !pdfPages[to]) continue;
+      const rect = [margin + s.x, margin + p.height - (s.y + s.h), margin + s.x + s.w, margin + p.height - s.y];
+      annots.push(doc.context.register(doc.context.obj({ Type: "Annot", Subtype: "Link", Rect: rect, Border: [0, 0, 0], Dest: fitDest(doc, pdfPages[to].page) })));
+    }
+    if (annots.length > 0) page.node.set(PDFName.of("Annots"), doc.context.obj(annots));
+  });
 }

@@ -10,10 +10,19 @@ export const NOTE_MARK_SCALE = 0.6;
 /** 注を置く場所：章の終わり・本の終わり・そのページの終わり（横組みではページの下、縦組みではページの左端）。 */
 export type NotePlacement = "chapter" | "end" | "page";
 
-/** 注の段落：「注1　中身」。 */
-function noteParagraph(n: number, atoms: Atom[]): { kind: "para"; style: string; atoms: Atom[] } {
-  return { kind: "para", style: NOTE_STYLE, atoms: [{ cells: [{ text: "注" }] }, { cells: [numberCell(n)] }, { cells: [{ text: "　" }] }, ...atoms] };
+/** 注の段落：「注1　中身」。seq は本全体での注の通し番号（本文の注番号と行き来するリンクに使う）。 */
+function noteParagraph(n: number, atoms: Atom[], seq: number): { kind: "para"; style: string; atoms: Atom[] } {
+  const back = `l:${NOTE_REF_LABEL}${seq}`;
+  return {
+    kind: "para",
+    style: NOTE_STYLE,
+    atoms: [{ cells: [{ text: "注" }], label: `${NOTE_LABEL}${seq}`, link: back }, { cells: [numberCell(n)], link: back }, { cells: [{ text: "　" }] }, ...atoms],
+  };
 }
+
+/** 注の中身と本文の注番号に付けるラベル（閲覧用 PDF で行き来するリンクの飛び先）。 */
+const NOTE_LABEL = "kolophon-note-";
+const NOTE_REF_LABEL = "kolophon-noteref-";
 
 /** 注番号の数字のマス（3桁までは縦中横）。 */
 const numberCell = (n: number) => ({ text: String(n), tcy: n < 1000 });
@@ -26,8 +35,9 @@ export function placeNotes(blocks: Block[], lines: (number | undefined)[], place
   if (!blocks.some((b) => (b.kind === "para" || b.kind === "heading") && b.atoms.some((a) => a.note))) return { blocks, lines };
   const out: Block[] = [];
   const outLines: (number | undefined)[] = [];
-  let pending: { n: number; atoms: Atom[] }[] = [];
+  let pending: { n: number; atoms: Atom[]; seq: number }[] = [];
   let n = 0;
+  let seq = 0;
   const flush = () => {
     if (pending.length === 0) return;
     const push = (b: Block) => {
@@ -36,7 +46,7 @@ export function placeNotes(blocks: Block[], lines: (number | undefined)[], place
     };
     push({ kind: "blank" });
     push({ kind: "para", style: NOTE_STYLE, atoms: [{ cells: [{ text: "注" }] }] });
-    for (const note of pending) push(noteParagraph(note.n, note.atoms));
+    for (const note of pending) push(noteParagraph(note.n, note.atoms, note.seq));
     pending = [];
   };
   blocks.forEach((block, i) => {
@@ -48,15 +58,19 @@ export function placeNotes(blocks: Block[], lines: (number | undefined)[], place
       for (const atom of block.atoms) {
         if (!atom.note) continue;
         n++;
+        seq++;
         atom.cells[0].text = "注";
         Object.assign(atom.cells[1], numberCell(n));
+        // 本文の注番号から注の中身へ、注の中身から本文の注番号へ飛べるようにする。
+        atom.label = `${NOTE_REF_LABEL}${seq}`;
+        atom.link = `l:${NOTE_LABEL}${seq}`;
         if (placement === "page") {
           // ページごと：注の段落は組むときにそのページの終わりへ置く。番号は章ごと。
-          atom.noteBlock = noteParagraph(n, atom.note);
+          atom.noteBlock = noteParagraph(n, atom.note, seq);
           continue;
         }
         atom.noteBlock = undefined;
-        pending.push({ n, atoms: atom.note });
+        pending.push({ n, atoms: atom.note, seq });
       }
     }
     out.push(block);
