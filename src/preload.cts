@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld("api", {
   getDefaultTemplate: invoke("templates:get-default"),
   setDefaultTemplate: invoke("templates:set-default"),
   exportPdf: invoke("pdf:export"),
+  exportEpub: invoke("epub:export"),
+  bookExportEpub: invoke("book:export-epub"),
   listIccProfiles: invoke("icc:list"),
   bookNew: invoke("book:new"),
   bookOpen: invoke("book:open"),

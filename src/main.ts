@@ -9,6 +9,7 @@ import { BUILTIN_TEMPLATES, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
+import { buildEpub, writeEpub } from "./output/epub.js";
 import { BOOK_EXTENSION, BookFormatError, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
 import { typesetCover } from "./engine/cover.js";
 import { checkPdfX } from "./output/check-pdfx.js";
@@ -37,6 +38,7 @@ let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 // 確認用：ダイアログを出さずに、指定した場所へ書き出す（--snapshot と一緒に使う）。
 const autoPdf = snapshotDir ? arg("export-pdf") : undefined;
 const autoImages = snapshotDir ? arg("export-images") : undefined;
+const autoEpub = snapshotDir ? arg("export-epub") : undefined;
 // 確認用：--bench を付けると、原稿の途中を何度か書き換えて組み直しの時間を測り、標準出力に書く。
 const bench = !!snapshotDir && process.argv.includes("--bench");
 
@@ -117,7 +119,7 @@ ipcMain.handle("init", () => {
     opened: startupDoc && !isBookFile(startupDoc) ? openSafely(startupDoc) : undefined,
     book: startupDoc && isBookFile(startupDoc) ? startupDoc : undefined,
     snapshot: !!snapshotDir,
-    autoExport: !!(autoPdf || autoImages),
+    autoExport: !!(autoPdf || autoImages || autoEpub),
     bench,
     /** 確認用：--page=N で、スナップショットを N ページ目から撮る。 */
     startPage: Number(arg("page")) || 1,
@@ -582,6 +584,36 @@ ipcMain.handle("book:sync", (_e, bookPath: string, book: Book) => {
 /** ブックの文書の場所（開くため）。 */
 ipcMain.handle("book:doc-path", (_e, bookPath: string, rel: string) => path.resolve(path.dirname(bookPath), rel));
 
+/** EPUB を書き出す（保存先を聞いて）。 */
+async function exportEpubFile(text: string, settings: Settings, baseName: string, images: DocImage[]) {
+  if (snapshotDir && !autoEpub) return undefined;
+  const { canceled, filePath } = autoEpub
+    ? { canceled: false, filePath: path.resolve(autoEpub) }
+    : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.epub`, filters: [{ name: "EPUB（電子書籍）", extensions: ["epub"] }] });
+  if (canceled || !filePath) return undefined;
+  try {
+    const files = buildEpub(text, settings, images);
+    const zip = new ZipWriter(filePath);
+    writeEpub(files, (name, data) => zip.add(name, data));
+    zip.close();
+    return { path: filePath, files: files.length };
+  } catch (e) {
+    return { error: `EPUB を書き出せませんでした：${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+ipcMain.handle("epub:export", (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = []) => exportEpubFile(text, settings, baseName, images));
+
+/** ブック全体を1つの EPUB に書き出す。 */
+ipcMain.handle("book:export-epub", (_e, bookPath: string, book: Book) => {
+  const { docs, errors } = loadBookDocs(bookPath, book);
+  const missing = errors.flatMap((e, i) => (e && book.documents[i].include ? [`${book.documents[i].path}：${e}`] : []));
+  if (missing.length > 0) return { error: `読めない文書があります。\n${missing.join("\n")}` };
+  const combined = combineBook(book, docs);
+  if (combined.included.length === 0) return { error: "書き出す文書がありません。" };
+  return exportEpubFile(combined.text, combined.settings, path.basename(bookPath, `.${BOOK_EXTENSION}`), combined.images);
+});
+
 /** 画像の書き出し先：フォルダか ZIP（OUT-05）。書き出しの間だけ持つ。 */
 let imageTarget: { kind: "dir"; dir: string } | { kind: "zip"; zip: ZipWriter } | undefined;
 
@@ -698,6 +730,7 @@ function buildMenu() {
         { type: "separator" },
         cmd("PDF を書き出す…", "export-pdf", "CmdOrCtrl+E"),
         cmd("画像を書き出す…", "export-images", "CmdOrCtrl+Shift+E"),
+        cmd("EPUB（電子書籍）を書き出す…", "export-epub"),
         { type: "separator" },
         process.platform === "darwin" ? { role: "close", label: "閉じる" } : { role: "quit", label: "終了" },
       ],

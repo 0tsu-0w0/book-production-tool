@@ -1,6 +1,6 @@
 {
   "name": "tategumi",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -28,6 +28,7 @@
     "@types/pngjs": "^6.0.5",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
+    "fast-xml-parser": "^5.11.2",
     "typescript": "^7.0.2"
   },
   "author": "tategumi",

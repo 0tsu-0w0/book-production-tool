@@ -47,6 +47,8 @@ interface TypesetResult {
   caretPage?: number;
 }
 
+type EpubResult = { path: string; files: number } | { error: string } | undefined;
+
 type PdfResult = { path: string; pages: number; pdfx: boolean; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined;
 
 type Opened =
@@ -77,6 +79,8 @@ interface Api extends TemplateApi {
   saveRecovery(doc: TategumiDocument, filePath: string | null): Promise<void>;
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
+  exportEpub(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<EpubResult>;
+  bookExportEpub(path: string, book: Book): Promise<EpubResult>;
   bookNew(): Promise<{ path: string; book: Book } | undefined>;
   bookOpen(file?: string): Promise<{ path: string; book: Book } | { error: string } | undefined>;
   bookSave(path: string, book: Book): Promise<void>;
@@ -633,6 +637,24 @@ function exportPdf() {
   });
 }
 
+/** EPUB の書き出しの結果を、状態の欄に出す。 */
+function reportEpub(r: EpubResult) {
+  if (!r) return setStatus("書き出しを取り消しました。");
+  if ("error" in r) {
+    setStatus(r.error);
+    alert(r.error);
+    return;
+  }
+  setStatus(`EPUB を保存しました：${r.path}`);
+}
+
+function exportEpub() {
+  return withBusy(async () => {
+    setStatus("EPUB を書き出しています…");
+    reportEpub(await api.exportEpub(source.value, settings, baseName(), imageManager.images));
+  });
+}
+
 /** PDF の書き出しの結果を、状態の欄に出す。 */
 function reportPdf(r: PdfResult, notes: string[] = []) {
   if (!r) return setStatus("書き出しを取り消しました。");
@@ -660,6 +682,11 @@ const bookDialog = new BookDialog({
     withBusy(async () => {
       setStatus("ブックを PDF に書き出しています…");
       reportPdf(await api.bookExportPdf(path, book));
+    }),
+  exportEpub: (path, book) =>
+    withBusy(async () => {
+      setStatus("ブックを EPUB に書き出しています…");
+      reportEpub(await api.bookExportEpub(path, book));
     }),
   openCombined: async (path, book) => {
     if (!confirmDiscard()) return;
@@ -778,6 +805,8 @@ async function runCommand(command: string) {
       return;
     case "export-pdf":
       return exportPdf();
+    case "export-epub":
+      return exportEpub();
     case "export-images":
       return exportImages();
     case "view-single":
@@ -925,6 +954,7 @@ if (init.snapshot) {
   if (init.autoExport) {
     await exportPdf();
     await exportImages();
+    await exportEpub();
     console.log(`[snapshot] ${status.textContent}`);
   }
   await api.saveSnapshot(shots);
