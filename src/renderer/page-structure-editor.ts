@@ -8,6 +8,7 @@ const KIND_LABELS: Record<PageItemKind, string> = {
   colophon: "奥付",
   free: "自由なページ（献辞など）",
   toc: "目次（見出しから作る）",
+  index: "索引（［＃索引］の語から作る）",
 };
 
 export class PageStructureEditor {

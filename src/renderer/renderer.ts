@@ -501,6 +501,12 @@ const assists: Record<string, () => void> = {
     if (base) insert(`｜${base}《圏》`);
     else insert("｜《圏》", 1);
   },
+  index: () => {
+    // 選んだ語を索引に入れる（読みはルビから。ルビがなければ、あとで［＃索引：語（よみ）］で読みを書く）。
+    const base = selectedText();
+    if (base) insert(`［＃索引］${base}［＃／索引］`);
+    else insert("［＃索引：（）］", 6);
+  },
   dash: () => insert("――"),
   ellipsis: () => insert("……"),
   heading: () => {

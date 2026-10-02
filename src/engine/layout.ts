@@ -305,7 +305,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   // 流し込むページの種類（目次の中なら toc）。
   let flowRole: PageRole = "body";
   /** 扉・奥付・白ページなど、1ページで終わるページか（続きの行は次のページへ）。 */
-  const fixed = (role: PageRole) => role !== "body" && role !== "toc";
+  const fixed = (role: PageRole) => role !== "body" && role !== "toc" && role !== "index";
   const current = () => pages[pages.length - 1];
   /** ページごとの画像（置く場所は placePage で決める）。 */
   const images: ImagePlacement[][] = [[]];
@@ -540,7 +540,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
         break;
       }
       case "toc":
-        // 目次を作る前の置き場所（組版の前に置き換える）。
+      case "indexpage":
+        // 目次・索引を作る前の置き場所（組版の前に置き換える）。
         break;
       case "image":
         placeImage(block);
@@ -763,7 +764,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const page = placePage(lines, i, spec, roles[i], images[i]);
     if (masters[i]) page.master = masters[i];
     // ページのラベル：字のないラベルと、行の字に付いたラベル。
-    const labels = [...anchors[i], ...lines.flatMap((l) => (typeof l === "object" ? l.atoms.flatMap((a) => (a.label ? [a.label] : [])) : []))];
+    // 索引の語のある場所も、ラベルとして数える（索引のページ番号を引くため）。
+    const labels = [
+      ...anchors[i],
+      ...lines.flatMap((l) => (typeof l === "object" ? l.atoms.flatMap((a) => [...(a.label ? [a.label] : []), ...(a.index ?? []).flatMap((e) => (e.id ? [e.id] : []))]) : [])),
+    ];
     if (labels.length > 0) page.labels = labels;
     return page;
   });

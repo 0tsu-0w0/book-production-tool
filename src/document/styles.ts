@@ -17,6 +17,8 @@ export const NOTE_STYLE = "注";
 export const TABLE_STYLE = "表";
 export const TABLE_HEADER_STYLE = "表の見出し";
 export const TOC_ENTRY_STYLES = ["目次の項目1", "目次の項目2"] as const;
+export const INDEX_HEADING_STYLE = "索引の見出し";
+export const INDEX_ENTRY_STYLE = "索引の項目";
 /** 消せない段落スタイル（書名・著者名・奥付は、扉と奥付のページで使う）。 */
 export const BUILTIN_PARAGRAPH_STYLES = [
   BODY_STYLE,
@@ -32,6 +34,8 @@ export const BUILTIN_PARAGRAPH_STYLES = [
   NOTE_STYLE,
   TABLE_STYLE,
   TABLE_HEADER_STYLE,
+  INDEX_HEADING_STYLE,
+  INDEX_ENTRY_STYLE,
 ];
 
 export interface ParagraphStyle {
@@ -171,6 +175,9 @@ export const DEFAULT_STYLES: StyleSheet = {
     // 表：欄の中の文字。見出しの行は太字。
     paragraph(TABLE_STYLE, { scale: 0.9 }),
     paragraph(TABLE_HEADER_STYLE, { scale: 0.9, bold: true }),
+    // 索引：行の見出し（あ・か…）は太字で前を1行空け、項目は少し小さく1字下げる。
+    paragraph(INDEX_HEADING_STYLE, { bold: true, spaceBefore: 1, keepWithNext: true }),
+    paragraph(INDEX_ENTRY_STYLE, { scale: 0.9, indent: 1 }),
   ],
   character: [character("太字", { bold: true }), character("小さく", { scale: 0.8 })],
 };

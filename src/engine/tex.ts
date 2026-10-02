@@ -62,6 +62,7 @@ const WORDS: Record<string, string> = {
   pagebreak: "\n［＃改ページ］\n",
   cleardoublepage: "\n［＃改丁］\n",
   tableofcontents: "\n［＃目次］\n",
+  printindex: "\n［＃索引ページ］\n",
   par: "\n",
   bigskip: BLANK,
   medskip: BLANK,
@@ -262,6 +263,15 @@ export function convertInline(src: string): string {
       // ラベル：\pageref でページ番号を引けるようにする。
       const key = (r.group() ?? "").trim().replace(/[［］]/g, "");
       if (key) out += `［＃ラベル：${key}］`;
+      continue;
+    }
+    if (base === "index") {
+      // \index{よみ@語} は makeindex の書き方（@ の前が並べる読み、後が表記）。
+      const arg = (r.group() ?? "").replace(/[［］]/g, "").split("!")[0];
+      const at = arg.indexOf("@");
+      const term = at >= 0 ? arg.slice(at + 1) : arg;
+      const reading = at >= 0 ? arg.slice(0, at) : arg;
+      if (term.trim()) out += `［＃索引：${term.trim()}（${reading.trim()}）］`;
       continue;
     }
     if (base === "pageref") {

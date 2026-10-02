@@ -43,6 +43,8 @@ function itemBlocks(item: PageItem, info: BookInfo, opts: ParseOptions): Block[]
       return [{ kind: "pagegroup", role: "colophon", place: "end", blocks: parse(colophonText(info), opts) }];
     case "toc":
       return [{ kind: "toc" }];
+    case "index":
+      return [{ kind: "indexpage" }];
     case "free":
       return [{ kind: "pagegroup", role: "free", place: "center", blocks: parse(item.text, opts) }];
   }

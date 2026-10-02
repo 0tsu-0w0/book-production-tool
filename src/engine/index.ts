@@ -9,6 +9,7 @@ import { layoutDocument } from "./layout.js";
 import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
 import { applyDeform, prepareSpacing } from "./spacing.js";
+import { collectIndex, expandIndex, hasIndexPage, indexBlocks, replaceIndexContent } from "./indexing.js";
 import { applyStyles, type EngineStyles } from "./styles.js";
 import { hasPageRefs, hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
 import { texToMarkup } from "./tex.js";
@@ -113,7 +114,11 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   const noted = placeNotes(body, lineOf, settings.notes.placement);
   // 前付けのあとに、本文の始まりの印（前付けと本文でノンブルを分けるため）。
   const bodyMark: Block[] = book.front.length > 0 ? [{ kind: "anchor", name: BODY_START_LABEL }] : [];
-  const source = [...book.front, ...bodyMark, ...noted.blocks, ...book.back];
+  let source = [...book.front, ...bodyMark, ...noted.blocks, ...book.back];
+  // 索引：語を集め（語のある場所にラベルを付け）、［＃索引ページ］の場所に、仮の番号で索引を入れる。
+  const indexEntries = collectIndex(source);
+  const withIndex = indexEntries.length > 0 && hasIndexPage(source);
+  if (hasIndexPage(source)) source = expandIndex(source, withIndex ? indexBlocks(indexEntries, parseOpts) : []);
   const sourceLines = [...book.front.map(() => -1), ...bodyMark.map(() => -1), ...noted.lines.map((n) => n ?? -1), ...book.back.map(() => -1)].map((n) => (n < 0 ? undefined : n)) as number[];
   // 目次・ページ番号の参照に入れる番号（前付けを別の番号にするときは、本文の始まりから数える）。
   const decor = toPageDecor(settings);
@@ -140,13 +145,25 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     prepare(blocks);
     layouts = layoutDocument(blocks, spec, sourceLines);
   }
-  // ページ番号の参照（［＃ページ：名前］）：番号を入れて組み直し、番号が変わらなくなるまで繰り返す。
-  if (hasPageRefs(blocks)) {
+  // ページ番号の参照（［＃ページ：名前］・索引の番号）：番号を入れて組み直し、番号が変わらなくなるまで繰り返す。
+  const resolveRefs = () => {
+    if (!hasPageRefs(blocks)) return;
     for (let pass = 0; pass < 3; pass++) {
       if (!resolvePageRefs(blocks, layouts, spec.firstPageNumber, settings.toc.numerals, !!spec.horizontal, numberOf)) break;
       prepare(blocks);
       layouts = layoutDocument(blocks, spec, sourceLines);
     }
+  };
+  resolveRefs();
+  if (withIndex) {
+    // 索引：語のページが分かったので、同じページに何度出た語の番号を1つにまとめて作り直す。
+    const where = new Map<string, number>();
+    for (const p of layouts) for (const l of p.labels ?? []) if (!where.has(l)) where.set(l, p.index);
+    const content = indexBlocks(indexEntries, parseOpts, (id) => where.get(id));
+    replaceIndexContent(blocks, content);
+    prepare(content);
+    layouts = layoutDocument(blocks, spec, sourceLines);
+    resolveRefs();
   }
   decor.bodyStart = bodyStartOf(layouts);
   // 柱に出す章題・節題は、そのページまでに出てきた最後の見出し。

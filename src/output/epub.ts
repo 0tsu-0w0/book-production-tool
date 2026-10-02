@@ -200,6 +200,9 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
           labels.set(b.name, currentFile());
           html += `<span id="lb-${labelId(b.name)}"></span>`;
           break;
+        case "indexpage":
+          // 索引（ページ番号を引くもの）は、ページのない EPUB には入れない。
+          break;
         case "toc":
           // 目次のページ：nav の XHTML を本文の流れのこの場所に置く。
           flush();

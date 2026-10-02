@@ -71,6 +71,8 @@ export interface Atom {
    * ページ番号の参照（pageRef）は、書かなくてもそのラベルへ飛ぶ。
    */
   link?: string;
+  /** 索引の語（［＃索引］…［＃／索引］・［＃索引：語（よみ）］）。id は組むたびに付ける、この場所のラベル。 */
+  index?: { term: string; reading: string; id?: string }[];
 }
 
 export type SideLine = "single" | "double" | "wave" | "dotted" | "dashed";
@@ -108,6 +110,8 @@ export type Block =
   | { kind: "pad"; multiple: number; reserve: number }
   /** 目次を入れる場所（組版の前に、見出しから作った段落に置き換える）。 */
   | { kind: "toc" }
+  /** 索引のページの置き場所（［＃索引ページ］。組む前に索引の段落に置き換える）。 */
+  | { kind: "indexpage" }
   /** 行に字のないラベル（［＃ラベル：名前］だけの行）。次の字の入るページを指す。 */
   | { kind: "anchor"; name: string }
   /** ここから使うマスターページ（名前。空なら標準のマスター）。DTP-05。 */
@@ -175,7 +179,7 @@ export interface ImageInfo {
 }
 
 /** ページの種類。本文以外（扉・奥付など）には柱とノンブルを付けない（隠しノンブル）。 */
-export type PageRole = "body" | "blank" | "tobira" | "title" | "colophon" | "free" | "toc" | "image";
+export type PageRole = "body" | "blank" | "tobira" | "title" | "colophon" | "free" | "toc" | "index" | "image";
 
 export type Kinsoku = "strong" | "weak" | "none";
 

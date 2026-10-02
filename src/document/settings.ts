@@ -130,7 +130,7 @@ export interface BookInfo {
 }
 
 /** 本文の前後に入れるページ：本扉・白ページ・奥付・自由なページ（献辞など。原稿と同じ記法）。 */
-export type PageItemKind = "title" | "blank" | "colophon" | "free" | "toc";
+export type PageItemKind = "title" | "blank" | "colophon" | "free" | "toc" | "index";
 export interface PageItem {
   kind: PageItemKind;
   /** 自由なページの中身。 */
@@ -145,7 +145,7 @@ export interface PageStructure {
   padTo: number;
 }
 
-export const PAGE_ITEM_KINDS: PageItemKind[] = ["title", "blank", "colophon", "free", "toc"];
+export const PAGE_ITEM_KINDS: PageItemKind[] = ["title", "blank", "colophon", "free", "toc", "index"];
 
 /** 表紙。画像は文書の画像の名前（空なら使わない）。 */
 export interface CoverSettings {

@@ -41,6 +41,17 @@ const LABEL = /^［＃ラベル[：:]([^［］]+)］/u;
 const PAGE_REF = /^［＃ページ[：:]([^［］]+)］/u;
 const LABEL_LINE = /^\s*［＃ラベル[：:]([^［］]+)］\s*$/u;
 
+/** 索引：［＃索引］語［＃／索引］（その語を）・［＃索引：語（よみ）］（印だけ。前の字に付ける）。 */
+const INDEX_OPEN = /^［＃索引］/u;
+const INDEX_CLOSE = /^［＃／索引］/u;
+const INDEX_MARK = /^［＃索引[：:]([^［］]+)］/u;
+
+/** 「語（よみ）」「語｜よみ」を、表記と読みに分ける。読みがなければ表記を読みにする。 */
+export function splitIndexTerm(s: string): { term: string; reading: string } {
+  const m = /^(.+?)\s*[（(]\s*([^）)]+?)\s*[）)]\s*$/u.exec(s.trim()) ?? /^(.+?)\s*[|｜]\s*(.+?)\s*$/u.exec(s.trim());
+  return m ? { term: m[1].trim(), reading: m[2].trim() } : { term: s.trim(), reading: s.trim() };
+}
+
 /** 注：［＃注：中身］（中身は章末・巻末にまとめる）。 */
 const NOTE = /^［＃注[：:]([^［］]*)］/u;
 const DISPLAY_MATH = /^\s*［＃別行数式］(.+)［＃／別行数式］\s*$/;
@@ -159,10 +170,17 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     styled = atoms.length;
   };
   let pendingLabel: string | undefined;
+  let pendingIndex: { term: string; reading: string }[] = [];
+  /** ［＃索引］の始まりの位置（Atom の数）。 */
+  const indexStarts: number[] = [];
   while (i < s.length) {
     if (pendingLabel && atoms.length > 0) {
       atoms[0].label = pendingLabel;
       pendingLabel = undefined;
+    }
+    if (pendingIndex.length > 0 && atoms.length > 0) {
+      (atoms[0].index ??= []).push(...pendingIndex);
+      pendingIndex = [];
     }
     markSrc();
     start = i;
@@ -173,6 +191,31 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     if ((m = INLINE_MATH.exec(rest))) {
       // 数式は横倒しの欧文と同じく組む（字の長さは数式を組んでから決める）。
       atoms.push({ cells: [{ text: m[1], rotate: true, math: { display: false } }] });
+      i += m[0].length;
+      continue;
+    }
+    if ((m = INDEX_MARK.exec(rest))) {
+      // 索引の印は前の字に付ける（行頭なら次の字に）。
+      const e = splitIndexTerm(m[1]);
+      if (atoms.length > 0) (atoms[atoms.length - 1].index ??= []).push(e);
+      else pendingIndex.push(e);
+      i += m[0].length;
+      continue;
+    }
+    if ((m = INDEX_OPEN.exec(rest))) {
+      indexStarts.push(atoms.length);
+      i += m[0].length;
+      continue;
+    }
+    if ((m = INDEX_CLOSE.exec(rest))) {
+      // 囲んだ字を索引の語にする。読みはルビ（なければ字のまま）。
+      const from = indexStarts.pop();
+      if (from !== undefined && from < atoms.length) {
+        const range = atoms.slice(from);
+        const term = range.map((a) => a.cells.map((c) => c.text).join("")).join("");
+        const reading = range.map((a) => a.ruby?.replace(/[|｜]/g, "") ?? a.cells.map((c) => c.text).join("")).join("");
+        (atoms[from].index ??= []).push({ term, reading });
+      }
       i += m[0].length;
       continue;
     }
@@ -296,8 +339,8 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
 }
 
 /** ページ操作の命令。スタイルの名前には使えない。 */
-export const PAGE_COMMANDS = ["改ページ", "改丁", "白ページ", "扉", "目次", "画像", "数式", "マスター"];
-const COMMAND = /^\s*［＃(／?)(改ページ|改丁|白ページ|扉|目次)］\s*$/;
+export const PAGE_COMMANDS = ["改ページ", "改丁", "白ページ", "扉", "目次", "画像", "数式", "マスター", "索引", "索引ページ"];
+const COMMAND = /^\s*［＃(／?)(改ページ|改丁|白ページ|扉|目次|索引ページ)］\s*$/;
 
 /** 画像：［＃画像：名前］。名前のあとに全角か半角の空白で区切って、置き方を書ける。 */
 const IMAGE = /^\s*［＃画像[：:]\s*([^［］\s]+)((?:\s+[^［］\s]+)*)\s*］\s*$/u;
@@ -450,6 +493,7 @@ function parseLine(line: string, opts: ParseOptions): Block | Marker {
   if (c) {
     if (c[2] === "扉") return { kind: c[1] ? "tobira-close" : "tobira-open" };
     if (!c[1] && c[2] === "目次") return { kind: "toc" };
+    if (!c[1] && c[2] === "索引ページ") return { kind: "indexpage" };
     if (!c[1]) return c[2] === "白ページ" ? { kind: "blankpage" } : { kind: "pagebreak", odd: c[2] === "改丁" };
   }
   // 行頭の［＃名前］で、同じ行に［＃／名前］がなければ、その行の段落スタイル。
