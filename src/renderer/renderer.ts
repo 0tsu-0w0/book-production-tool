@@ -476,6 +476,18 @@ ${line}
 `);
 }
 
+/** 選んだ行（なければ今の行）を［＃名前］…［＃／名前］で囲む（扉・箇条書き・番号付き）。 */
+function wrapLines(name: string) {
+  const start = lineStart();
+  const last = source.selectionEnd > source.selectionStart ? source.selectionEnd - 1 : source.selectionEnd;
+  const endBreak = source.value.indexOf("\n", Math.max(last, start));
+  const end = endBreak < 0 ? source.value.length : endBreak;
+  const body = source.value.slice(start, end);
+  const open = `［＃${name}］`;
+  source.setSelectionRange(start, end);
+  insert(`${open}\n${body}\n［＃／${name}］`, open.length + 1, open.length + 1 + body.length);
+}
+
 const assists: Record<string, () => void> = {
   ruby: () => {
     const base = selectedText();
@@ -500,16 +512,9 @@ const assists: Record<string, () => void> = {
   odd: () => insertLine("［＃改丁］"),
   blankpage: () => insertLine("［＃白ページ］"),
   table: () => insertLine(["［＃表］", "| 見出し | 見出し |", "|---|---|", "| 中身 | 中身 |", "［＃／表］"].join(String.fromCharCode(10))),
-  tobira: () => {
-    // 選んだ行（なければ今の行）を［＃扉］…［＃／扉］で囲む。
-    const start = lineStart();
-    const last = source.selectionEnd > source.selectionStart ? source.selectionEnd - 1 : source.selectionEnd;
-    const endBreak = source.value.indexOf("\n", Math.max(last, start));
-    const end = endBreak < 0 ? source.value.length : endBreak;
-    const body = source.value.slice(start, end);
-    source.setSelectionRange(start, end);
-    insert(`［＃扉］\n${body}\n［＃／扉］`, 5, 5 + body.length);
-  },
+  tobira: () => wrapLines("扉"),
+  list: () => wrapLines("箇条書き"),
+  numbered: () => wrapLines("番号付き"),
   end: () => {
     source.focus();
     source.setSelectionRange(source.value.length, source.value.length);

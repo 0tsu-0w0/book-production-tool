@@ -62,6 +62,8 @@ export interface Atom {
   noteBlock?: { kind: "para"; atoms: Atom[]; style?: string; format?: ParaFormat };
   /** 注（［＃注：…］）の中身。cells は本文に入れる小さな注番号（「注」と番号。番号は組むたびに入れる）。 */
   note?: Atom[];
+  /** 箇条書き・番号付きの項目の印（「・」「（1）」など）。段落の2行目以降は、この幅だけ下げる（ぶら下げ）。 */
+  listMark?: boolean;
 }
 
 export type SideLine = "single" | "double" | "wave" | "dotted" | "dashed";

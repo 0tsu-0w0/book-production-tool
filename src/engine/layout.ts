@@ -104,6 +104,16 @@ function atomWidth(a: Atom): number {
   return a.cells.reduce((sum, c) => sum + advance(c), 0);
 }
 
+/** 箇条書きの項目の印の幅（em）。 */
+function listMarkWidth(atoms: Atom[]): number {
+  let w = 0;
+  for (const a of atoms) {
+    if (!a.listMark) break;
+    w += atomWidth(a);
+  }
+  return w;
+}
+
 function first(a: Atom): string {
   return a.cells[0].text;
 }
@@ -124,10 +134,12 @@ function last(a: Atom): string {
  * 3. それもできなければ、禁則に触れない位置まで戻って改行する（追い出し）。
  * opts.justify のときは、追い出しで短くなった行を字数に合わせて広げる（両端揃え）。
  */
-export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) => number), indent: number, opts: BreakOptions): Line[] {
+export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) => number), firstIndent: number, opts: BreakOptions, hang = 0): Line[] {
   const lines: Line[] = [];
   const queue = [...atoms];
   let cur: Atom[] = [];
+  // 箇条書きの項目は、2行目以降を印の幅だけ下げる（ぶら下げ）。
+  let indent = firstIndent;
   let used = indent;
   let headTrim = 0;
   // 行の字数。画像の回り込みでは、行ごとに短くなる。
@@ -137,6 +149,7 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
   const push = (adjust: number) => {
     lines.push({ atoms: cur, indent, adjust, headTrim, limit: perLine });
     cur = [];
+    indent = firstIndent + hang;
     used = indent;
     headTrim = 0;
     perLine = widthAt(lines.length);
@@ -416,7 +429,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const align = centerStart && f.align === "start" ? "center" : f.align;
     // 中央・地付きの行は、両端揃えにしない。
     const lineOpts = align === "start" ? breakOpts : { ...breakOpts, justify: false };
-    const broken = breakLines(block.atoms, w ? widthAt : spec.charsPerLine, align !== f.align ? 0 : f.indent, lineOpts);
+    // 箇条書きの項目：印の幅だけ、2行目以降を下げる。
+    const hang = block.atoms[0]?.listMark ? listMarkWidth(block.atoms) : 0;
+    const broken = breakLines(block.atoms, w ? widthAt : spec.charsPerLine, align !== f.align ? 0 : f.indent, lineOpts, hang);
     const count = broken.length;
     broken.forEach((line, i) => {
       if (w?.top && inWrap(i)) line.offset = w.chars;

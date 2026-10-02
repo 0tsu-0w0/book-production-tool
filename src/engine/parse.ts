@@ -381,6 +381,41 @@ export function splitTableRow(line: string): { text: string; at: number }[] {
   });
 }
 
+/**
+ * 箇条書き・番号付き：［＃箇条書き］…［＃／箇条書き］・［＃番号付き］…［＃／番号付き］の間の行を、1行ずつ項目にする。
+ * 印は「：」のあとに書ける（箇条書き：［＃箇条書き：●］。番号付き：数の所を 1・１・一・① で書く。例 ［＃番号付き：1．］）。
+ * 項目の2行目以降は、印の幅だけ下げる（ぶら下げ）。
+ */
+const LIST_OPEN = /^\s*［＃(箇条書き|番号付き)(?:[：:]([^［］]*))?］\s*$/u;
+const LIST_CLOSE = /^\s*［＃／(箇条書き|番号付き)］\s*$/u;
+const KANJI_NUM = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳";
+
+/** 漢数字（1〜99）。十・二十のように書く。 */
+function kanjiNumber(n: number): string {
+  if (n < 10) return KANJI_NUM[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return `${tens > 1 ? KANJI_NUM[tens] : ""}十${ones ? KANJI_NUM[ones] : ""}`;
+}
+
+/** 番号付きの印：書式の数の所（1・１・一・①）を n にする。数の所がなければ「（n）」。 */
+export function listNumber(format: string, n: number): string {
+  // 印のあとの全角の空白は残す（項目の字と離すため）。
+  const f = format.trim() ? format : "（1）";
+  if (/1/.test(f)) return f.replace("1", String(n));
+  if (/１/.test(f)) return f.replace("１", String(n));
+  if (/一/.test(f)) return f.replace("一", kanjiNumber(n));
+  if (/①/.test(f)) return f.replace("①", n <= 20 ? CIRCLED[n - 1] : `(${n})`);
+  return `${f}${n}`;
+}
+
+/** 項目の段落：印を頭に足した新しい段落（読み取り結果は使い回すので、元の段落は変えない）。 */
+function listItem(block: Extract<Block, { kind: "para" }>, mark: string, opts: ParseOptions): Block {
+  const marks = parseInline(mark, opts, 0).map((a) => ({ ...a, listMark: true, cells: a.cells.map((c) => ({ ...c, src: undefined })) }));
+  return { ...block, atoms: [...marks, ...block.atoms] };
+}
+
 /** マスターページの切り替え：［＃マスター：名前］（「標準」で元に戻す）。 */
 const MASTER = /^\s*［＃マスター[：:]\s*([^［］\s]+)\s*］\s*$/u;
 
@@ -453,8 +488,19 @@ export function parse(src: string, opts: ParseOptions = DEFAULT_PARSE_OPTIONS, l
   let group: Block[] | null = null;
   let groupLines: number[] = [];
   const rawLines = src.replace(/\r\n?/g, "\n").split("\n");
+  // 箇条書き・番号付きの中なら、その印の書き方と、次の番号。
+  let list: { numbered: boolean; format: string; next: number } | null = null;
   for (let n = 0; n < rawLines.length; n++) {
     const line = rawLines[n];
+    const listOpen = LIST_OPEN.exec(line);
+    if (listOpen) {
+      list = { numbered: listOpen[1] === "番号付き", format: (listOpen[2] ?? "").replace(/^[ 	]+|[ 	]+$/g, ""), next: 1 };
+      continue;
+    }
+    if (LIST_CLOSE.test(line)) {
+      list = null;
+      continue;
+    }
     const tableOpen = TABLE_OPEN.exec(line);
     if (tableOpen) {
       // 表：［＃／表］（なければ空行か原稿の終わり）までの行を、表の行にする。
@@ -493,7 +539,11 @@ export function parse(src: string, opts: ParseOptions = DEFAULT_PARSE_OPTIONS, l
     }
     let cached = cache.get(line);
     if (!cached) cache.set(line, (cached = parseLine(line, opts)));
-    const block = cached;
+    let block = cached;
+    if (list && block.kind === "para" && block.atoms.length > 0) {
+      const mark = list.numbered ? listNumber(list.format, list.next++) : list.format.trim() ? list.format : "・";
+      block = listItem(block, mark, opts);
+    }
     if (block.kind === "tobira-open") {
       blocks.push({ kind: "pagegroup", role: "tobira", place: "center", blocks: (group = []), lines: (groupLines = []) });
       lineOf?.push(sourceLine(n));
