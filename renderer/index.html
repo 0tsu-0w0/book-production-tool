@@ -7,6 +7,13 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="titlebar" id="titlebar" hidden>
+    <button type="button" id="tb-menu" title="メニュー（ファイル・編集・表示）" aria-label="メニュー">☰</button>
+    <span class="tb-title" id="tb-title">Kolophon</span>
+    <button type="button" id="tb-min" title="最小化" aria-label="最小化">&#xE921;</button>
+    <button type="button" id="tb-max" title="最大化" aria-label="最大化">&#xE922;</button>
+    <button type="button" id="tb-close" class="tb-close" title="閉じる" aria-label="閉じる">&#xE8BB;</button>
+  </div>
   <header class="toolbar">
     <div class="group">
       <button data-command="new" title="新規（Ctrl+N）">新規</button>

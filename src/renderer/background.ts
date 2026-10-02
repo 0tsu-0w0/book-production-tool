@@ -1,10 +1,12 @@
-import { backgroundUrl, normalizeAppearance, wallpaperUrl, type Appearance, type BackgroundKind, type WindowGeometry } from "../appearance.js";
+import { backgroundUrl, normalizeAppearance, wallpaperUrl, wantsTransparentWindow, type Appearance, type BackgroundKind, type WindowGeometry } from "../appearance.js";
 
 // 窓の背景（画像・動画・すりガラス）。背景の層を画面のいちばん後ろに置き、ツールバー・原稿・設定の欄を半透明にする。
 // 紙面（canvas）はいつも不透明。すりガラスは窓の機能なので、本体（main）が窓に当てる。
 
 export interface BackgroundHost {
-  get(): Promise<{ appearance: Appearance; platform: string; wallpaper: number }>;
+  get(): Promise<{ appearance: Appearance; platform: string; wallpaper: number; transparentWindow: boolean }>;
+  /** アプリを起動し直す（完全な透明の切り替え）。 */
+  relaunch(): Promise<void>;
   /** 壁紙の版（なければ 0）を聞き、窓の位置も知らせてもらう。 */
   wallpaper(): Promise<number>;
   set(a: Appearance): Promise<Appearance>;
@@ -109,6 +111,7 @@ const KINDS: [BackgroundKind, string][] = [
   ["video", "動画（音なしでくり返す）"],
   ["wallpaper", "壁紙のすりガラス（デスクトップの壁紙がぼけて透けて見える）"],
   ["glass", "Windows のすりガラス（後ろの窓が透ける。PC によっては単色になる）"],
+  ["transparent", "完全な透明（後ろの窓やデスクトップがくっきり見える。再起動して切り替え）"],
 ];
 
 /** 「表示 > 背景…」の画面。変えるとその場で当てて、保存する。 */
@@ -116,6 +119,8 @@ export class BackgroundDialog {
   private readonly dialog = document.createElement("dialog");
   private a: Appearance = normalizeAppearance({});
   private platform = "";
+  /** 今の窓が透明な窓として作られているか（起動したときに決まる）。 */
+  private transparentWindow = false;
 
   constructor(
     private readonly host: BackgroundHost,
@@ -131,6 +136,7 @@ export class BackgroundDialog {
     const r = await this.host.get();
     this.a = r.appearance;
     this.platform = r.platform;
+    this.transparentWindow = r.transparentWindow;
     this.backdrop.setWallpaper(r.wallpaper);
     this.backdrop.apply(this.a);
     // 窓の位置を知らせてもらう（壁紙の位置合わせ）。
@@ -147,6 +153,15 @@ export class BackgroundDialog {
     this.backdrop.apply(this.a);
     this.render();
     this.a = await this.host.set(this.a);
+    if ("kind" in change) this.offerRelaunch();
+  }
+
+  /** 完全な透明に切り替える・やめるときは、起動し直すかを聞く。 */
+  private offerRelaunch() {
+    if (wantsTransparentWindow(this.a) === this.transparentWindow) return;
+    const what = wantsTransparentWindow(this.a) ? "完全な透明にする" : "完全な透明をやめる";
+    const msg = `${what}には、Kolophon を起動し直します。今すぐ起動し直しますか？\n（保存していない変更があれば、先に聞きます）`;
+    if (confirm(msg)) void this.host.relaunch();
   }
 
   private async chooseFile(kind: "image" | "video") {
@@ -188,6 +203,8 @@ export class BackgroundDialog {
       const k = kind.value as BackgroundKind;
       // 画像・動画は、まだ選んでいなければファイルを選ぶ。
       if ((k === "image" || k === "video") && !(a.file && a.file.startsWith(`${k}-`))) void this.chooseFile(k).then(() => this.render());
+      // 完全な透明では後ろの窓の字がくっきり透けるので、欄は濃いめから始める（あとで薄くできる）。
+      else if (k === "transparent") void this.update({ kind: k, panelOpacity: Math.max(this.a.panelOpacity, 92) });
       else void this.update({ kind: k });
     });
 
@@ -204,6 +221,14 @@ export class BackgroundDialog {
     }
     if (a.kind === "wallpaper") {
       body.push(el("p", { className: "hint" }, "今のデスクトップの壁紙を、窓の位置に合わせてぼかして敷きます。窓を動かすと、壁紙も一緒にずれて、窓の後ろが透けて見えるようになります。壁紙を変えたら、Kolophon の窓に戻ったときに読み直します。"));
+    }
+    if (a.kind === "transparent") {
+      body.push(el("p", { className: "hint" }, "窓そのものを透明にし、後ろの窓（ターミナルなど）やデスクトップをそのまま見せます。透けるのは見えるだけで、クリックは Kolophon に届きます。Windows では窓の枠の代わりに、上に題名の欄（メニュー・最小化・最大化・閉じる）を出します。欄をつかむと窓が動き、ダブルクリックで最大化します。Alt キーでもメニューが開きます。"));
+    }
+    if (wantsTransparentWindow(a) !== this.transparentWindow) {
+      const restart = el("button", { type: "button", className: "primary" }, "今すぐ起動し直す");
+      restart.addEventListener("click", () => void this.host.relaunch());
+      body.push(el("div", { className: "warning row" }, el("span", {}, wantsTransparentWindow(a) ? "完全な透明は、起動し直すと始まります。" : "完全な透明は、起動し直すと終わります。"), restart));
     }
     if (a.kind === "glass") {
       if (this.platform === "win32") {

@@ -1,7 +1,7 @@
 // 画面の見た目（アプリの設定。文書には入れない）：窓の背景に画像・動画・すりガラスを使う。
 // 紙面はいつも不透明のまま。背景が見えるのは紙の周りと、半透明にした欄の後ろだけ。
 
-export type BackgroundKind = "none" | "image" | "video" | "wallpaper" | "glass";
+export type BackgroundKind = "none" | "image" | "video" | "wallpaper" | "glass" | "transparent";
 /** すりガラスの種類（Windows 11）。Mac ではどれも vibrancy になる。 */
 export type GlassMaterial = "acrylic" | "mica" | "tabbed";
 export type BackgroundFit = "cover" | "contain" | "tile";
@@ -42,7 +42,7 @@ export function normalizeAppearance(v: unknown): Appearance {
   const a = (v && typeof v === "object" ? v : {}) as Partial<Appearance>;
   const d = DEFAULT_APPEARANCE;
   const file = typeof a.file === "string" && a.file && !/[\\/]/.test(a.file) ? a.file : null;
-  let kind = oneOf(a.kind, ["none", "image", "video", "wallpaper", "glass"] as const, d.kind);
+  let kind = oneOf(a.kind, ["none", "image", "video", "wallpaper", "glass", "transparent"] as const, d.kind);
   // 画像・動画なのにファイルがなければ、背景なしにする。
   if ((kind === "image" || kind === "video") && !file) kind = "none";
   return {
@@ -56,6 +56,12 @@ export function normalizeAppearance(v: unknown): Appearance {
     dim: clamp(a.dim, 0, 90, d.dim),
   };
 }
+
+/**
+ * 窓そのものを透明にするか（「完全な透明」）。透明な窓は作るときにしか決められないので、
+ * これが変わる切り替えは、アプリを再起動して当てる。
+ */
+export const wantsTransparentWindow = (a: Appearance) => a.kind === "transparent";
 
 /** 背景に使えるファイルの拡張子。 */
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "avif", "bmp"];

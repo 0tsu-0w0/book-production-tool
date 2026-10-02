@@ -17,7 +17,7 @@ import { pdfOptions } from "./output/export-pdf.js";
 import { renderPdf } from "./output/pdf.js";
 import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js";
 import { checkLines, findVariants } from "./engine/proof.js";
-import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, type Appearance, type WindowGeometry } from "./appearance.js";
+import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, wantsTransparentWindow, type Appearance, type WindowGeometry } from "./appearance.js";
 import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
@@ -28,7 +28,12 @@ function migrateUserData() {
   const dir = app.getPath("userData");
   const old = path.join(app.getPath("appData"), "tategumi");
   if (path.resolve(old).toLowerCase() === path.resolve(dir).toLowerCase() || !fs.existsSync(old)) return;
-  for (const name of ["templates", "default-template.json", "recovery.json", "font-cache.json", "Local Storage"]) {
+  // 引き継ぐのは一度だけ（復元を断って控えを消したあとに、また古い控えを写さないように）。
+  const done = path.join(dir, "migrated-from-tategumi");
+  if (fs.existsSync(done)) return;
+  // 0.16.0・0.17.0 ですでに引き継いだ PC（印はまだない）は、印だけ残す。
+  const already = fs.existsSync(path.join(dir, "Local Storage"));
+  for (const name of already ? [] : ["templates", "default-template.json", "recovery.json", "font-cache.json", "Local Storage"]) {
     const from = path.join(old, name);
     const to = path.join(dir, name);
     if (!fs.existsSync(from) || fs.existsSync(to)) continue;
@@ -37,6 +42,12 @@ function migrateUserData() {
     } catch {
       // 引き継げなくても使える。
     }
+  }
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(done, new Date().toISOString(), "utf8");
+  } catch {
+    // 印を残せなくても使える。
   }
 }
 migrateUserData();
@@ -65,12 +76,20 @@ let win: BrowserWindow | undefined;
 let dirty = false;
 let currentPath: string | null = null;
 let forceClose = false;
+/** 閉じ終わったら起動し直す（「完全な透明」の切り替え）。 */
+let relaunchAfterClose = false;
+/** この窓を透明な窓（完全な透明）として作ったか。作ったあとは変えられない。 */
+let transparentWindow = false;
+/** 透明な窓では Windows の枠を使わず、画面の側で題名の欄（メニュー・最小化・最大化・閉じる）を出す。Mac は枠を残す。 */
+const framelessFor = (transparent: boolean) => transparent && process.platform !== "darwin";
 
 const recoveryFile = () => path.join(app.getPath("userData"), "recovery.json");
 
 function updateTitle() {
   const name = currentPath ? path.basename(currentPath) : "無題";
-  win?.setTitle(`${name}${dirty ? " *" : ""} — Kolophon`);
+  const title = `${name}${dirty ? " *" : ""} — Kolophon`;
+  win?.setTitle(title);
+  send("window-title", title);
 }
 
 function send(channel: string, ...args: unknown[]) {
@@ -166,6 +185,8 @@ function loadAppearance(): Appearance {
 /** すりガラスは窓そのものの機能なので、ここで窓に当てる（画像・動画は画面の側で描く）。 */
 function applyWindowBackground(a: Appearance) {
   if (!win) return;
+  // 透明な窓は、地も透明のまま（すりガラスなどは重ねない）。
+  if (transparentWindow) return;
   const glass = a.kind === "glass";
   if (process.platform === "win32") {
     win.setBackgroundMaterial(glass ? a.material : "none");
@@ -201,7 +222,33 @@ function sendGeometry() {
   send("window-geometry", g);
 }
 
-ipcMain.handle("appearance:get", () => ({ appearance: loadAppearance(), platform: process.platform, wallpaper: wallpaperVersion() }));
+ipcMain.handle("appearance:get", () => ({
+  appearance: loadAppearance(),
+  platform: process.platform,
+  wallpaper: wallpaperVersion(),
+  transparentWindow,
+  frameless: framelessFor(transparentWindow),
+  maximized: !!win?.isMaximized(),
+}));
+
+/** 「完全な透明」に切り替える・やめるときに、アプリを起動し直す（保存していなければ、いつもどおり聞く）。 */
+ipcMain.handle("app:relaunch", () => {
+  relaunchAfterClose = true;
+  win?.close();
+});
+
+// 透明な窓の題名の欄から使う：最小化・最大化・メニュー。
+ipcMain.handle("window:minimize", () => win?.minimize());
+/** 閉じる（保存していなければ、いつもどおり聞く）。 */
+ipcMain.handle("window:request-close", () => win?.close());
+ipcMain.handle("window:toggle-maximize", () => {
+  if (!win) return;
+  if (win.isMaximized()) win.unmaximize();
+  else win.maximize();
+});
+ipcMain.handle("window:menu", (_e, x: number, y: number) => {
+  Menu.getApplicationMenu()?.popup({ window: win, x: Math.round(x), y: Math.round(y) });
+});
 ipcMain.handle("appearance:wallpaper", () => {
   sendGeometry();
   return wallpaperVersion();
@@ -921,7 +968,9 @@ app.whenReady().then(() => {
     const dir = appearanceArg ? path.dirname(path.resolve(appearanceArg)) : backgroundsDir();
     return net.fetch(pathToFileURL(path.join(dir, name)).toString(), { headers: req.headers });
   });
+  transparentWindow = wantsTransparentWindow(loadAppearance());
   win = new BrowserWindow({
+    ...(transparentWindow ? { transparent: true, frame: !framelessFor(true) } : {}),
     width: 1440,
     height: 900,
     minWidth: 960,
@@ -947,6 +996,7 @@ app.whenReady().then(() => {
       message: "変更を保存しますか？",
       detail: "保存しないと、最後に保存したあとの変更は失われます。",
     });
+    if (choice === 2) relaunchAfterClose = false;
     if (choice === 0) send("command", "save-and-close");
     else if (choice === 1) {
       fs.rmSync(recoveryFile(), { force: true });
@@ -960,9 +1010,15 @@ app.whenReady().then(() => {
   }
   applyWindowBackground(loadAppearance());
   for (const ev of ["move", "resize", "maximize", "unmaximize", "restore"] as const) win.on(ev as "move", sendGeometry);
+  // 題名の欄の最大化のボタンを、窓の状態に合わせる。
+  win.on("maximize", () => send("window-maximized", true));
+  win.on("unmaximize", () => send("window-maximized", false));
   // 窓に戻ってきたとき、壁紙が変わっていれば読み直させる。
   win.on("focus", () => send("wallpaper-version", wallpaperVersion()));
   win.loadFile(path.join(root, "renderer", "index.html"));
 });
 
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => {
+  if (relaunchAfterClose) app.relaunch();
+  app.quit();
+});

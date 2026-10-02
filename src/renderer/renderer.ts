@@ -1,6 +1,7 @@
 import type { KolophonDocument } from "../document/document.js";
 import type { Appearance, WindowGeometry } from "../appearance.js";
 import { Backdrop, BackgroundDialog } from "./background.js";
+import { setupTitlebar } from "./titlebar.js";
 import { applyTemplate } from "../document/template.js";
 import { imageInfos, type DocImage } from "../document/document.js";
 import type { ImageInfo } from "../engine/types.js";
@@ -113,7 +114,14 @@ interface Api extends TemplateApi {
   proof(text: string, settings: Settings, images: Record<string, ImageInfo>): Promise<ProofResult>;
   saveSnapshot(images: ArrayBuffer[]): Promise<void>;
   closeWindow(): Promise<void>;
-  getAppearance(): Promise<{ appearance: Appearance; platform: string; wallpaper: number }>;
+  getAppearance(): Promise<{ appearance: Appearance; platform: string; wallpaper: number; transparentWindow: boolean; frameless: boolean; maximized: boolean }>;
+  relaunch(): Promise<void>;
+  minimizeWindow(): Promise<void>;
+  requestClose(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  popupMenu(x: number, y: number): Promise<void>;
+  onWindowTitle(fn: (t: string) => void): void;
+  onWindowMaximized(fn: (m: boolean) => void): void;
   wallpaper(): Promise<number>;
   onWindowGeometry(fn: (g: WindowGeometry) => void): void;
   onWallpaperVersion(fn: (v: number) => void): void;
@@ -904,12 +912,27 @@ api.onProgress((p) => {
 
 const backdrop = new Backdrop();
 const backgroundDialog = new BackgroundDialog(
-  { get: () => api.getAppearance(), set: (a) => api.setAppearance(a), choose: (k) => api.chooseBackground(k), wallpaper: () => api.wallpaper() },
+  { get: () => api.getAppearance(), set: (a) => api.setAppearance(a), choose: (k) => api.chooseBackground(k), wallpaper: () => api.wallpaper(), relaunch: () => api.relaunch() },
   backdrop,
 );
 api.onWindowGeometry((g) => backdrop.setGeometry(g));
 api.onWallpaperVersion((v) => backdrop.setWallpaper(v));
 void backgroundDialog.load();
+// 完全な透明（Windows）では、窓の枠の代わりに題名の欄を出す。
+void api.getAppearance().then((r) => {
+  if (!r.frameless) return;
+  setupTitlebar(
+    {
+      minimize: () => api.minimizeWindow(),
+      toggleMaximize: () => api.toggleMaximize(),
+      close: () => void api.requestClose(),
+      popupMenu: (x, y) => api.popupMenu(x, y),
+      onTitle: (fn) => api.onWindowTitle(fn),
+      onMaximized: (fn) => api.onWindowMaximized(fn),
+    },
+    r.maximized,
+  );
+});
 
 const init = await api.init();
 panel.render(settings);

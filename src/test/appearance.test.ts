@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_APPEARANCE, backgroundUrl, normalizeAppearance, wallpaperUrl } from "../appearance.js";
+import { DEFAULT_APPEARANCE, backgroundUrl, normalizeAppearance, wallpaperUrl, wantsTransparentWindow } from "../appearance.js";
 
 describe("窓の背景（見た目の設定）", () => {
   it("保存がなければ既定（背景なし）", () => {
@@ -31,5 +31,10 @@ describe("窓の背景（見た目の設定）", () => {
   it("画面で読む URL", () => {
     assert.equal(backgroundUrl("image-1.jpg"), "kolophon-bg://media/image-1.jpg");
     assert.equal(wallpaperUrl(12), "kolophon-bg://wallpaper/current?v=12");
+  });
+
+  it("完全な透明だけが、透明な窓（起動し直して切り替え）を使う", () => {
+    assert.equal(wantsTransparentWindow(normalizeAppearance({ kind: "transparent" })), true);
+    for (const kind of ["none", "image", "wallpaper", "glass"]) assert.equal(wantsTransparentWindow(normalizeAppearance({ kind, file: "image-1.png" })), false);
   });
 });

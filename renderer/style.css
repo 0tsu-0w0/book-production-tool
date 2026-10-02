@@ -235,3 +235,15 @@ html.bg-on .source-wrap, html.bg-on .find-bar { background: transparent; }
 .bg-dialog input[type="range"] { flex: 1; }
 .bg-dialog output { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .bg-dialog select { width: 100%; }
+
+/* 完全な透明：Windows の枠の代わりの題名の欄（つかんで動かす。ダブルクリックで最大化）。 */
+html.frameless body { grid-template-rows: auto auto 1fr auto; }
+.titlebar { display: flex; align-items: stretch; height: 34px; -webkit-app-region: drag; user-select: none;
+  background: color-mix(in srgb, var(--panel) var(--glass-alpha, 80%), transparent); backdrop-filter: blur(var(--glass-blur, 12px)); border-bottom: 1px solid var(--line); }
+.titlebar button { -webkit-app-region: no-drag; border: 0; border-radius: 0; background: transparent; width: 46px; padding: 0; font: 10px/1 "Segoe Fluent Icons", "Segoe MDL2 Assets", system-ui, sans-serif; color: var(--ink); }
+.titlebar #tb-menu { font: 16px/1 system-ui, sans-serif; }
+.titlebar button:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.titlebar .tb-close:hover { background: #c42b1c; color: #fff; }
+.tb-title { flex: 1; align-self: center; padding: 0 8px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 透明な窓の縁（どこまでが窓かわかるように）。 */
+html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 25%, transparent); }
