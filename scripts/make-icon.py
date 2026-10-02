@@ -33,7 +33,7 @@ def make(out: str, bg: str, fg: str, font_path: str, text: str = "Ko") -> None:
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "build/icon.png"
-    bg = sys.argv[2] if len(sys.argv) > 2 else "#141a3a"
-    fg = sys.argv[3] if len(sys.argv) > 3 else "#e9b949"
+    bg = sys.argv[2] if len(sys.argv) > 2 else "#0e2a24"
+    fg = sys.argv[3] if len(sys.argv) > 3 else "#5fe3b5"
     font = sys.argv[4] if len(sys.argv) > 4 else "C:/Windows/Fonts/seguisb.ttf"
     make(out, bg, fg, font)
