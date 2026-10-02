@@ -54,7 +54,6 @@ contextBridge.exposeInMainWorld("api", {
   setAppearance: invoke("appearance:set"),
   chooseBackground: invoke("appearance:choose"),
   wallpaper: invoke("appearance:wallpaper"),
-  relaunch: invoke("app:relaunch"),
   minimizeWindow: invoke("window:minimize"),
   requestClose: invoke("window:request-close"),
   toggleMaximize: invoke("window:toggle-maximize"),

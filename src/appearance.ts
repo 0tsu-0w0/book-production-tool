@@ -61,10 +61,7 @@ export function normalizeAppearance(v: unknown): Appearance {
   };
 }
 
-/**
- * 窓そのものを透明にするか（「完全な透明」）。透明な窓は作るときにしか決められないので、
- * これが変わる切り替えは、アプリを再起動して当てる。
- */
+/** 窓の地を塗らずに、後ろをそのまま見せるか（「完全な透明」。窓はいつも透明にできる作りなので、その場で切り替わる）。 */
 export const wantsTransparentWindow = (a: Appearance) => a.kind === "transparent";
 
 /** 背景に使えるファイルの拡張子。 */

@@ -115,7 +115,6 @@ interface Api extends TemplateApi {
   saveSnapshot(images: ArrayBuffer[]): Promise<void>;
   closeWindow(): Promise<void>;
   getAppearance(): Promise<{ appearance: Appearance; platform: string; wallpaper: number; transparentWindow: boolean; frameless: boolean; maximized: boolean }>;
-  relaunch(): Promise<void>;
   minimizeWindow(): Promise<void>;
   requestClose(): Promise<void>;
   toggleMaximize(): Promise<void>;
@@ -912,7 +911,7 @@ api.onProgress((p) => {
 
 const backdrop = new Backdrop();
 const backgroundDialog = new BackgroundDialog(
-  { get: () => api.getAppearance(), set: (a) => api.setAppearance(a), choose: (k) => api.chooseBackground(k), wallpaper: () => api.wallpaper(), relaunch: () => api.relaunch() },
+  { get: () => api.getAppearance(), set: (a) => api.setAppearance(a), choose: (k) => api.chooseBackground(k), wallpaper: () => api.wallpaper() },
   backdrop,
 );
 api.onWindowGeometry((g) => backdrop.setGeometry(g));

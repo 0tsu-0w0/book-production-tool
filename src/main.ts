@@ -17,7 +17,7 @@ import { pdfOptions } from "./output/export-pdf.js";
 import { renderPdf } from "./output/pdf.js";
 import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js";
 import { checkLines, findVariants } from "./engine/proof.js";
-import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, wantsTransparentWindow, type Appearance, type WindowGeometry } from "./appearance.js";
+import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, type Appearance, type WindowGeometry } from "./appearance.js";
 import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
@@ -76,12 +76,12 @@ let win: BrowserWindow | undefined;
 let dirty = false;
 let currentPath: string | null = null;
 let forceClose = false;
-/** 閉じ終わったら起動し直す（「完全な透明」の切り替え）。 */
-let relaunchAfterClose = false;
-/** この窓を透明な窓（完全な透明）として作ったか。作ったあとは変えられない。 */
-let transparentWindow = false;
-/** 透明な窓では Windows の枠を使わず、画面の側で題名の欄（メニュー・最小化・最大化・閉じる）を出す。Mac は枠を残す。 */
-const framelessFor = (transparent: boolean) => transparent && process.platform !== "darwin";
+/**
+ * 窓はいつも透明にできる作りにする（Windows・Mac）。背景はすべて画面の側で描くので、どの背景にも起動し直さずに切り替えられる。
+ * 透明な窓では Windows の枠が使えないので、Windows では画面の側で題名の欄（メニュー・最小化・最大化・閉じる）を出す。Mac は枠を残す。
+ */
+const TRANSPARENT_WINDOW = process.platform === "win32" || process.platform === "darwin";
+const FRAMELESS = process.platform === "win32";
 
 const recoveryFile = () => path.join(app.getPath("userData"), "recovery.json");
 
@@ -188,16 +188,10 @@ function applyWindowBackground(a: Appearance) {
   // 後ろの窓のすりガラス：画面を取り込むとき、Kolophon 自身は写らないようにする（窓の中に窓が映り続けないように）。
   // その間は、スクリーンショットや画面共有にも Kolophon が写らない。
   win.setContentProtection(a.kind === "behind");
-  // 透明な窓は、地も透明のまま（すりガラスなどは重ねない）。
-  if (transparentWindow) return;
-  const glass = a.kind === "glass";
-  if (process.platform === "win32") {
-    win.setBackgroundMaterial(glass ? a.material : "none");
-  } else if (process.platform === "darwin") {
-    win.setVibrancy(glass ? "under-window" : null);
-  }
-  // 窓の地を透明にしないと、すりガラスが見えない。それ以外は画面の地の色（描き始める前にちらつかないように）。
-  win.setBackgroundColor(glass ? "#00000000" : nativeTheme.shouldUseDarkColors ? "#1c1b19" : "#efece6");
+  // Mac のすりガラス（vibrancy）。Windows のすりガラス（アクリル・マイカ）は透明な窓では効かないので使わない。
+  if (process.platform === "darwin") win.setVibrancy(a.kind === "glass" ? "under-window" : null);
+  // 透明にできない窓（Linux）は、画面の地の色にしておく（描き始める前にちらつかないように）。
+  if (!TRANSPARENT_WINDOW) win.setBackgroundColor(nativeTheme.shouldUseDarkColors ? "#1c1b19" : "#efece6");
 }
 
 /** デスクトップの壁紙のファイル（Windows：今の壁紙を Windows が写しておくファイル）。なければ undefined。 */
@@ -230,16 +224,10 @@ ipcMain.handle("appearance:get", () => ({
   appearance: loadAppearance(),
   platform: process.platform,
   wallpaper: wallpaperVersion(),
-  transparentWindow,
-  frameless: framelessFor(transparentWindow),
+  transparentWindow: TRANSPARENT_WINDOW,
+  frameless: FRAMELESS,
   maximized: !!win?.isMaximized(),
 }));
-
-/** 「完全な透明」に切り替える・やめるときに、アプリを起動し直す（保存していなければ、いつもどおり聞く）。 */
-ipcMain.handle("app:relaunch", () => {
-  relaunchAfterClose = true;
-  win?.close();
-});
 
 // 透明な窓の題名の欄から使う：最小化・最大化・メニュー。
 ipcMain.handle("window:minimize", () => win?.minimize());
@@ -972,7 +960,6 @@ app.whenReady().then(() => {
     const dir = appearanceArg ? path.dirname(path.resolve(appearanceArg)) : backgroundsDir();
     return net.fetch(pathToFileURL(path.join(dir, name)).toString(), { headers: req.headers });
   });
-  transparentWindow = wantsTransparentWindow(loadAppearance());
   // 後ろの窓のすりガラス：画面の取り込み（getDisplayMedia）を頼まれたら、窓のあるディスプレイを選ぶ（選ぶ画面は出さない）。
   // ほかの使い方では取り込ませない。
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
@@ -983,7 +970,7 @@ app.whenReady().then(() => {
     callback(source ? { video: source } : {});
   });
   win = new BrowserWindow({
-    ...(transparentWindow ? { transparent: true, frame: !framelessFor(true) } : {}),
+    ...(TRANSPARENT_WINDOW ? { transparent: true, frame: !FRAMELESS } : {}),
     width: 1440,
     height: 900,
     minWidth: 960,
@@ -1009,7 +996,6 @@ app.whenReady().then(() => {
       message: "変更を保存しますか？",
       detail: "保存しないと、最後に保存したあとの変更は失われます。",
     });
-    if (choice === 2) relaunchAfterClose = false;
     if (choice === 0) send("command", "save-and-close");
     else if (choice === 1) {
       fs.rmSync(recoveryFile(), { force: true });
@@ -1031,7 +1017,4 @@ app.whenReady().then(() => {
   win.loadFile(path.join(root, "renderer", "index.html"));
 });
 
-app.on("window-all-closed", () => {
-  if (relaunchAfterClose) app.relaunch();
-  app.quit();
-});
+app.on("window-all-closed", () => app.quit());

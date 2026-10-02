@@ -33,7 +33,7 @@ describe("窓の背景（見た目の設定）", () => {
     assert.equal(wallpaperUrl(12), "kolophon-bg://wallpaper/current?v=12");
   });
 
-  it("完全な透明だけが、透明な窓（起動し直して切り替え）を使う", () => {
+  it("完全な透明だけが、窓の地を塗らない", () => {
     assert.equal(wantsTransparentWindow(normalizeAppearance({ kind: "transparent" })), true);
     for (const kind of ["none", "image", "wallpaper", "glass"]) assert.equal(wantsTransparentWindow(normalizeAppearance({ kind, file: "image-1.png" })), false);
   });
