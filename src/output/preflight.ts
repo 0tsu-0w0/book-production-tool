@@ -71,6 +71,12 @@ export function preflight(input: PreflightInput): Finding[] {
   for (let i = 0; i < pageCount; i++) {
     const page = input.page(i);
     for (const sh of page.shapes) {
+      // 罫・飾りの色も、特色を使ったかを調べるために数える。
+      if (sh.kind === "line" || sh.kind === "path") colored.add(sh.color.toLowerCase());
+      else if (sh.kind === "rect") {
+        if (sh.fill) colored.add(sh.fill.toLowerCase());
+        if (sh.stroke) colored.add(sh.stroke.color.toLowerCase());
+      } else if (sh.kind === "circle" || sh.kind === "diamond") colored.add(sh.fill.toLowerCase());
       if (sh.kind !== "image") continue;
       const info = input.images?.[sh.name];
       if (!info) {
@@ -104,8 +110,27 @@ export function preflight(input: PreflightInput): Finding[] {
     });
   }
 
-  // 色：入稿用で色の付いた文字は、CMYK の掛け合わせになる。グレースケールでは濃淡になる。
-  const chromatic = [...colored].filter((c) => hexToCmyk(c).slice(0, 3).some((v) => v > 0));
+  // 特色：使った特色は版が増える。登録したのに使っていない特色も知らせる。
+  const spots = s.output.spotColors ?? [];
+  const spotColors = new Set(spots.map((sp) => sp.color));
+  const usedSpots = spots.filter((sp) => colored.has(sp.color));
+  if (target === "pdf" && usedSpots.length > 0) {
+    if (print && !gray) {
+      out.push({
+        level: "info",
+        message: `特色（${usedSpots.map((sp) => sp.name).join("・")}）の版を作ります。印刷所に、特色を使うことと色の名前を伝えてください。`,
+      });
+    } else {
+      out.push({ level: "info", message: `特色（${usedSpots.map((sp) => sp.name).join("・")}）は、${gray ? "グレースケールではグレーの濃淡" : "閲覧用 PDF では画面の色"}で書き出します。` });
+    }
+  }
+  const unusedSpots = spots.filter((sp) => !colored.has(sp.color));
+  if (print && unusedSpots.length > 0) {
+    out.push({ level: "info", message: `登録した特色（${unusedSpots.map((sp) => sp.name).join("・")}）は、どこにも使っていません。` });
+  }
+
+  // 色：入稿用で色の付いた文字は、CMYK の掛け合わせになる（特色は除く）。グレースケールでは濃淡になる。
+  const chromatic = [...colored].filter((c) => !(print && !gray && spotColors.has(c)) && hexToCmyk(c).slice(0, 3).some((v) => v > 0));
   if (gray && chromatic.length > 0) {
     out.push({ level: "info", message: "色の付いた文字は、グレーの濃淡になります。" });
   } else if (print && chromatic.length > 0) {

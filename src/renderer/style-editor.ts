@@ -1,4 +1,5 @@
 import type { FontChoice } from "../document/settings.js";
+import { SPOT_LIST_ID } from "./spot-editor.js";
 import { PAGE_COMMANDS } from "../engine/parse.js";
 import {
   BUILTIN_PARAGRAPH_STYLES,
@@ -137,6 +138,8 @@ export class StyleEditor {
     useColor.checked = style.color !== null;
     const picker = document.createElement("input");
     picker.type = "color";
+    // 登録した特色を候補に出す。
+    picker.setAttribute("list", SPOT_LIST_ID);
     picker.value = style.color ?? "#9e3d3f";
     picker.disabled = !useColor.checked;
     useColor.addEventListener("change", () => {

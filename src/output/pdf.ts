@@ -41,6 +41,8 @@ import { Face } from "../engine/face.js";
 import { embedCffFont, isCffFont } from "./cff-font.js";
 import { embedImages, imageKey, type PdfImageSource } from "./pdf-images.js";
 import { svgPathOps } from "./svg-path.js";
+import { Inks, addResource, type Paint } from "./inks.js";
+import type { SpotColor } from "../document/settings.js";
 import { fillColor, strokeColor, type ColorMode } from "./color.js";
 import { japaneseTrimMarks, marksMargin } from "./marks.js";
 import { iccProblem, outputConditionId, readIcc } from "./icc.js";
@@ -63,6 +65,10 @@ export interface PdfOptions {
   /** 日本式トンボを付ける。 */
   marks: boolean;
   bleedMm: number;
+  /** 特色（入稿用の CMYK のときだけ、その色で描いた所を特色の版で刷る）。 */
+  spots?: SpotColor[];
+  /** スミ（K100%）の文字・罫をノセ（オーバープリント）にする（入稿用の CMYK のときだけ）。 */
+  overprintBlack?: boolean;
 }
 
 export type PdfXStandard = "x1a" | "x4";
@@ -120,6 +126,7 @@ export async function renderPdf(
         }),
       );
   const registration = options.marks ? registrationColorSpace(doc) : undefined;
+  const inks = new Inks(doc, options.color, { spots: options.spots, overprintBlack: options.overprintBlack });
   const imageRefs = await embedImages(doc, images, pages, options.color, options.imagePpi);
   const bleed = options.bleedMm * MM;
 
@@ -146,6 +153,7 @@ export async function renderPdf(
     };
 
     const ops: PDFOperator[] = [];
+    const paint = inks.forPage(pdfPage);
     if (registration) {
       const key = setColorSpace(pdfPage, "Reg", registration);
       ops.push(...japaneseTrimMarks(trim, bleed, key));
@@ -160,15 +168,15 @@ export async function renderPdf(
     // 図形は並びの順に描く（画面と同じ。本文のページでは画像が先頭なので、文字や飾りの下になる）。
     for (const shape of page.shapes) {
       if (shape.kind !== "image") {
-        ops.push(...shapeOps(shape, page.height, options.color));
+        ops.push(...shapeOps(shape, page.height, paint));
         continue;
       }
       // 閲覧用（RGB）は透明のまま入れるので、下の色で分けない。
       const ref = imageRefs.get(options.color === "rgb" ? shape.name : imageKey(shape.name, shape.matte));
       if (ref) ops.push(...imageOps(shape, page.height, pdfPage.node.newXObject("Im", ref)));
-      else ops.push(...missingImageOps(shape, page.height, options.color));
+      else ops.push(...missingImageOps(shape, page.height, paint));
     }
-    ops.push(...(outlines ? outlines.ops(page, pdfPage, options.color) : textOps(page, fontsOf, options.color)));
+    ops.push(...(outlines ? outlines.ops(page, pdfPage, paint) : textOps(page, fontsOf, paint)));
     ops.push(popGraphicsState());
     pdfPage.pushOperators(...ops);
     onProgress?.(page.index + 1, pages.length);
@@ -237,14 +245,14 @@ async function embedFonts(doc: PDFDocument, fontBytes: Uint8Array, pages: DrawPa
 /** 擬似ボールドの輪郭の太さ（文字サイズに対する割合）。 */
 const BOLD_STROKE = 0.035;
 
-function textOps(page: DrawPage, fontsOf: (face: number) => { vert: FontPair; horiz: FontPair }, mode: ColorMode): PDFOperator[] {
+function textOps(page: DrawPage, fontsOf: (face: number) => { vert: FontPair; horiz: FontPair }, paint: Paint): PDFOperator[] {
   const ops: PDFOperator[] = [beginText()];
   let color: string | undefined;
   let bold = false;
   for (const item of page.items) {
     const [font, key] = fontsOf(item.face)[item.font];
     if (item.color !== color) {
-      ops.push(fillColor(item.color, mode), strokeColor(item.color, mode));
+      ops.push(...paint.fill(item.color), ...paint.stroke(item.color));
       color = item.color;
     }
     // 擬似ボールド：塗りに加えて、同じ色で輪郭を描く（文字描画モード 2）。
@@ -296,7 +304,7 @@ class GlyphForms {
     return ref;
   }
 
-  ops(page: DrawPage, pdfPage: PDFPage, mode: ColorMode): PDFOperator[] {
+  ops(page: DrawPage, pdfPage: PDFPage, paint: Paint): PDFOperator[] {
     const ops: PDFOperator[] = [];
     const names = new Map<PDFRef, PDFNameType>();
     let color: string | undefined;
@@ -304,7 +312,7 @@ class GlyphForms {
       const face = this.face(item.face);
       const s = item.size / face.upem;
       if (item.color !== color) {
-        ops.push(fillColor(item.color, mode), strokeColor(item.color, mode));
+        ops.push(...paint.fill(item.color), ...paint.stroke(item.color));
         color = item.color;
       }
       for (const g of item.glyphs) {
@@ -335,11 +343,11 @@ function imageOps(shape: Extract<Shape, { kind: "image" }>, pageHeight: number, 
 }
 
 /** 文書にない画像：置き場所が分かるよう、灰色の枠と×印を描く（書き出す前の検査でも知らせる）。 */
-function missingImageOps(shape: Extract<Shape, { kind: "image" }>, pageHeight: number, mode: ColorMode): PDFOperator[] {
+function missingImageOps(shape: Extract<Shape, { kind: "image" }>, pageHeight: number, paint: Paint): PDFOperator[] {
   const top = pageHeight - shape.y;
   const bottom = top - shape.h;
   return [
-    strokeColor("#999999", mode),
+    ...paint.stroke("#999999"),
     setLineWidth(0.5),
     rectangle(shape.x, bottom, shape.w, shape.h),
     stroke(),
@@ -354,7 +362,7 @@ function missingImageOps(shape: Extract<Shape, { kind: "image" }>, pageHeight: n
 /** 円を4本のベジェ曲線で近似するときの係数。 */
 const KAPPA = 0.5522847498;
 
-function shapeOps(shape: Shape, pageHeight: number, mode: ColorMode): PDFOperator[] {
+function shapeOps(shape: Shape, pageHeight: number, paint: Paint): PDFOperator[] {
   const Y = (y: number) => pageHeight - y;
   switch (shape.kind) {
     case "path": {
@@ -362,7 +370,7 @@ function shapeOps(shape: Shape, pageHeight: number, mode: ColorMode): PDFOperato
       const [a, b, c, d, e, f] = shape.m;
       return [
         pushGraphicsState(),
-        fillColor(shape.color, mode),
+        ...paint.fill(shape.color),
         concatTransformationMatrix(a, -b, c, -d, e, pageHeight - f),
         ...svgPathOps(shape.d),
         fill(),
@@ -371,7 +379,7 @@ function shapeOps(shape: Shape, pageHeight: number, mode: ColorMode): PDFOperato
     }
     case "line":
       return [
-        strokeColor(shape.color, mode),
+        ...paint.stroke(shape.color),
         setLineWidth(shape.width),
         setDashPattern(shape.dash ?? [], 0),
         moveTo(shape.x1, Y(shape.y1)),
@@ -381,10 +389,10 @@ function shapeOps(shape: Shape, pageHeight: number, mode: ColorMode): PDFOperato
       ];
     case "rect": {
       const ops: PDFOperator[] = [];
-      if (shape.fill) ops.push(fillColor(shape.fill, mode), rectangle(shape.x, Y(shape.y + shape.h), shape.w, shape.h), fill());
+      if (shape.fill) ops.push(...paint.fill(shape.fill), rectangle(shape.x, Y(shape.y + shape.h), shape.w, shape.h), fill());
       if (shape.stroke) {
         ops.push(
-          strokeColor(shape.stroke.color, mode),
+          ...paint.stroke(shape.stroke.color),
           setLineWidth(shape.stroke.width),
           rectangle(shape.x, Y(shape.y + shape.h), shape.w, shape.h),
           stroke(),
@@ -397,7 +405,7 @@ function shapeOps(shape: Shape, pageHeight: number, mode: ColorMode): PDFOperato
       const cy = Y(shape.cy);
       const k = r * KAPPA;
       return [
-        fillColor(shape.fill, mode),
+        ...paint.fill(shape.fill),
         moveTo(cx + r, cy),
         appendBezierCurve(cx + r, cy + k, cx + k, cy + r, cx, cy + r),
         appendBezierCurve(cx - k, cy + r, cx - r, cy + k, cx - r, cy),
@@ -410,7 +418,7 @@ function shapeOps(shape: Shape, pageHeight: number, mode: ColorMode): PDFOperato
     case "diamond": {
       const { cx, r } = shape;
       const cy = Y(shape.cy);
-      return [fillColor(shape.fill, mode), moveTo(cx, cy + r), lineTo(cx + r, cy), lineTo(cx, cy - r), lineTo(cx - r, cy), closePath(), fill()];
+      return [...paint.fill(shape.fill), moveTo(cx, cy + r), lineTo(cx + r, cy), lineTo(cx, cy - r), lineTo(cx - r, cy), closePath(), fill()];
     }
     case "image":
       // 画像は imageOps で描く（XObject の名前が要るため）。
@@ -427,8 +435,7 @@ function registrationColorSpace(doc: PDFDocument) {
 }
 
 function setColorSpace(page: PDFPage, name: string, ref: ReturnType<typeof registrationColorSpace>): string {
-  const resources = page.node.Resources()!;
-  resources.set(PDFName.of("ColorSpace"), page.doc.context.obj({ [name]: ref }));
+  addResource(page, "ColorSpace", name, ref);
   return name;
 }
 

@@ -1,4 +1,5 @@
 import { MasterEditor } from "./master-editor.js";
+import { SPOT_LIST_ID, SpotEditor, updateSpotList } from "./spot-editor.js";
 import { PageStructureEditor } from "./page-structure-editor.js";
 import { StyleEditor } from "./style-editor.js";
 import {
@@ -44,6 +45,7 @@ type Field =
   | { kind: "pages" }
   | { kind: "custom"; id: string }
   | { kind: "masters" }
+  | { kind: "spots" }
   | { kind: "info"; render: (s: Settings) => string | null; tone?: "warning"; when?: (s: Settings) => boolean }
   | { kind: "button"; label: string; action: string; when?: (s: Settings) => boolean };
 
@@ -421,6 +423,15 @@ function sections(): Section[] {
         },
         { kind: "button", label: "ICC プロファイルのファイルを選ぶ…", action: "choose-icc", when: (s) => s.pdfKind !== "screen" && s.output.pdfStandard === "x4" },
         { kind: "check", path: "output.outline", label: "文字をアウトライン化する（フォントを埋め込まない）", when: (s) => s.pdfKind !== "screen" },
+        { kind: "check", path: "output.overprintBlack", label: "スミ（K100%）の文字・罫をノセにする（オーバープリント）", when: (s) => s.pdfKind !== "screen" },
+        {
+          kind: "info",
+          render: (s) =>
+            s.pdfKind !== "screen" && s.output.overprintBlack
+              ? "黒（#000000）の文字と罫を、下の色や画像を抜かずに重ねて刷ります。版ずれで文字の周りに白いすき間が出るのを防ぎます（InDesign の既定と同じ）。"
+              : null,
+        },
+        { kind: "spots" },
         {
           kind: "info",
           render: (s) =>
@@ -607,6 +618,7 @@ export class SettingsPanel {
   }
 
   render(settings: Settings) {
+    updateSpotList(settings.output.spotColors);
     this.settings = settings;
     const openState = new Map([...this.root.querySelectorAll("details")].map((d) => [d.dataset.title!, d.open]));
     this.root.replaceChildren();
@@ -721,6 +733,14 @@ export class SettingsPanel {
         return this.buildStyles();
       case "masters":
         return new MasterEditor(this.settings.masters, () => this.onChange(this.settings)).element;
+      case "spots": {
+        const wrap = document.createElement("div");
+        wrap.className = "field";
+        const t = document.createElement("span");
+        t.textContent = "特色（入稿用 PDF）";
+        wrap.append(t, new SpotEditor(this.settings.output.spotColors, () => this.onChange(this.settings)).element);
+        return wrap;
+      }
       case "custom":
         return this.custom.get(field.id)?.() ?? document.createElement("div");
       case "pages":
@@ -780,12 +800,27 @@ export class SettingsPanel {
     const picker = document.createElement("input");
     picker.type = "color";
     picker.title = "色を指定";
+    picker.setAttribute("list", SPOT_LIST_ID);
     picker.value = current();
     picker.addEventListener("input", () => this.changed(path, picker.value));
     this.refreshers.push(() => {
       for (const [i, b] of buttons.entries()) b.setAttribute("aria-pressed", String(palette[i][1] === current()));
     });
-    swatches.append(...buttons, picker);
+    // 登録した特色も、ここから選べるようにする。
+    const spotButtons = this.settings.output.spotColors.map((spot) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "spot-swatch";
+      b.title = `特色：${spot.name}`;
+      b.setAttribute("aria-label", `特色：${spot.name}`);
+      b.style.background = spot.color;
+      b.addEventListener("click", () => {
+        picker.value = spot.color;
+        this.changed(path, spot.color);
+      });
+      return b;
+    });
+    swatches.append(...buttons, ...spotButtons, picker);
     wrap.append(title(label), swatches);
     return wrap;
   }

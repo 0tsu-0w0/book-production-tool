@@ -214,6 +214,38 @@ export interface OutputSettings {
   iccPath: string;
   /** 入稿用 PDF で、文字をアウトライン化する（フォントを埋め込まない）。 */
   outline: boolean;
+  /** 特色：画面でこの色を使った所を、入稿用 PDF では特色の版で刷る。 */
+  spotColors: SpotColor[];
+  /** 入稿用 PDF で、スミ（K100%）の文字・罫をノセ（オーバープリント）にする。 */
+  overprintBlack: boolean;
+}
+
+/** 特色の登録。 */
+export interface SpotColor {
+  /** 印刷所に伝えるインキの名前（例：DIC 156）。PDF の版の名前になる。 */
+  name: string;
+  /** 画面での色（#rrggbb）。この色で描いた所が特色になる。 */
+  color: string;
+  /** 代わりの CMYK（各 0〜100）。特色を使えないときや、校正の表示に使われる。 */
+  cmyk: [number, number, number, number];
+  /** ノセ（下の色を抜かずに重ねて刷る）。 */
+  overprint: boolean;
+}
+
+/** 特色の登録を確かめて、使えるものだけにする（名前と色が重ならないように）。 */
+export function normalizeSpots(v: unknown): SpotColor[] {
+  if (!Array.isArray(v)) return [];
+  const out: SpotColor[] = [];
+  for (const x of v) {
+    const s = (x && typeof x === "object" ? x : {}) as Partial<SpotColor>;
+    const name = typeof s.name === "string" ? s.name.trim().slice(0, 60) : "";
+    const color = typeof s.color === "string" && /^#[0-9a-f]{6}$/i.test(s.color) ? s.color.toLowerCase() : "";
+    if (!name || !color || out.some((o) => o.name === name || o.color === color)) continue;
+    const cmyk = (Array.isArray(s.cmyk) ? s.cmyk : []).slice(0, 4).map((n) => (typeof n === "number" && Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0));
+    while (cmyk.length < 4) cmyk.push(0);
+    out.push({ name, color, cmyk: cmyk as SpotColor["cmyk"], overprint: s.overprint === true });
+  }
+  return out.slice(0, 16);
 }
 
 /** 詳細設定：ふだんは既定のままでよい、細かな組版と書き出しの値。 */
@@ -442,7 +474,7 @@ export const DEFAULT_SETTINGS: Settings = {
   font: null,
   image: { format: "png", dpi: 350, jpegQuality: 0.92, range: "", snsGroups: false, credit: "" },
   pdfKind: "print",
-  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "", outline: false },
+  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "", outline: false, spotColors: [], overprintBlack: true },
 };
 
 /** 紙1枚の厚さ（mm）。 */
@@ -619,6 +651,7 @@ export function normalizeSettings(input: unknown): Settings {
   const o = s.output;
   if (o.color !== "gray") o.color = "auto";
   if (o.imposition !== "spread" && o.imposition !== "saddle") o.imposition = "single";
+  o.spotColors = normalizeSpots(o.spotColors);
   if (!(o.paper in PAPERS) && o.paper !== CUSTOM_PAPER) o.paper = DEFAULT_SETTINGS.output.paper;
   if (!(o.paperThicknessMm > 0.02 && o.paperThicknessMm < 1)) o.paperThicknessMm = DEFAULT_SETTINGS.output.paperThicknessMm;
   return s;
