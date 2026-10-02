@@ -121,6 +121,8 @@ export class BackgroundDialog {
   private platform = "";
   /** 今の窓が透明な窓として作られているか（起動したときに決まる）。 */
   private transparentWindow = false;
+  /** 「画像」「動画」を選んだが、まだファイルを選んでいない（選ぶまでは今の背景のまま）。 */
+  private pending: "image" | "video" | null = null;
 
   constructor(
     private readonly host: BackgroundHost,
@@ -144,11 +146,13 @@ export class BackgroundDialog {
   }
 
   open() {
+    this.pending = null;
     this.render();
     if (!this.dialog.open) this.dialog.showModal();
   }
 
   private async update(change: Partial<Appearance>) {
+    if ("kind" in change) this.pending = null;
     this.a = normalizeAppearance({ ...this.a, ...change });
     this.backdrop.apply(this.a);
     this.render();
@@ -176,6 +180,8 @@ export class BackgroundDialog {
 
   private render() {
     const a = this.a;
+    // 画面に出す種類（ファイルを選ぶのを待っている画像・動画なら、そちら）。
+    const shown: BackgroundKind = this.pending ?? a.kind;
     const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] => {
       const e = Object.assign(document.createElement(tag), props);
       e.append(...kids);
@@ -198,18 +204,27 @@ export class BackgroundDialog {
     const kind = el("select");
     // 壁紙のすりガラスは Windows だけ（Mac は「すりガラス」で vibrancy を使う）。
     const kinds = KINDS.filter(([v]) => v !== "wallpaper" || this.platform === "win32");
-    for (const [v, label] of kinds) kind.append(el("option", { value: v, selected: v === a.kind }, label));
+    for (const [v, label] of kinds) kind.append(el("option", { value: v, selected: v === shown }, label));
     kind.addEventListener("change", () => {
       const k = kind.value as BackgroundKind;
-      // 画像・動画は、まだ選んでいなければファイルを選ぶ。
-      if ((k === "image" || k === "video") && !(a.file && a.file.startsWith(`${k}-`))) void this.chooseFile(k).then(() => this.render());
+      // 画像・動画は、まだ選んでいなければファイルを選ぶ。選ばずに閉じても「画像」「動画」のまま、選ぶボタンを出しておく。
+      if ((k === "image" || k === "video") && !(a.file && a.file.startsWith(`${k}-`))) {
+        this.pending = k;
+        this.render();
+        void this.chooseFile(k);
+      }
       // 完全な透明では後ろの窓の字がくっきり透けるので、欄は濃いめから始める（あとで薄くできる）。
       else if (k === "transparent") void this.update({ kind: k, panelOpacity: Math.max(this.a.panelOpacity, 92) });
       else void this.update({ kind: k });
     });
 
     const body: HTMLElement[] = [field("背景", kind)];
-    if (a.kind === "image" || a.kind === "video") {
+    if (this.pending) {
+      const k = this.pending;
+      const pick = el("button", { type: "button", className: "primary" }, k === "video" ? "動画を選ぶ…" : "画像を選ぶ…");
+      pick.addEventListener("click", () => void this.chooseFile(k));
+      body.push(el("div", { className: "row" }, pick, el("span", { className: "computed" }, "（未選択。選ぶまでは今の背景のままです）")));
+    } else if (a.kind === "image" || a.kind === "video") {
       const pick = el("button", { type: "button" }, a.kind === "video" ? "動画を選ぶ…" : "画像を選ぶ…");
       pick.addEventListener("click", () => void this.chooseFile(a.kind as "image" | "video"));
       body.push(el("div", { className: "row" }, pick, el("span", { className: "computed" }, a.fileLabel || "（未選択）")));
@@ -219,10 +234,10 @@ export class BackgroundDialog {
       fit.addEventListener("change", () => void this.update({ fit: fit.value as Appearance["fit"] }));
       body.push(field("置き方", fit));
     }
-    if (a.kind === "wallpaper") {
+    if (!this.pending && a.kind === "wallpaper") {
       body.push(el("p", { className: "hint" }, "今のデスクトップの壁紙を、窓の位置に合わせてぼかして敷きます。窓を動かすと、壁紙も一緒にずれて、窓の後ろが透けて見えるようになります。壁紙を変えたら、Kolophon の窓に戻ったときに読み直します。"));
     }
-    if (a.kind === "transparent") {
+    if (!this.pending && a.kind === "transparent") {
       body.push(el("p", { className: "hint" }, "窓そのものを透明にし、後ろの窓（ターミナルなど）やデスクトップをそのまま見せます。透けるのは見えるだけで、クリックは Kolophon に届きます。Windows では窓の枠の代わりに、上に題名の欄（メニュー・最小化・最大化・閉じる）を出します。欄をつかむと窓が動き、ダブルクリックで最大化します。Alt キーでもメニューが開きます。"));
     }
     if (wantsTransparentWindow(a) !== this.transparentWindow) {
@@ -230,7 +245,7 @@ export class BackgroundDialog {
       restart.addEventListener("click", () => void this.host.relaunch());
       body.push(el("div", { className: "warning row" }, el("span", {}, wantsTransparentWindow(a) ? "完全な透明は、起動し直すと始まります。" : "完全な透明は、起動し直すと終わります。"), restart));
     }
-    if (a.kind === "glass") {
+    if (!this.pending && a.kind === "glass") {
       if (this.platform === "win32") {
         const mat = el("select");
         for (const [v, label] of [["acrylic", "アクリル（強くぼかす。後ろの窓が透ける）"], ["mica", "マイカ（壁紙の色をうっすら）"], ["tabbed", "タブ付きマイカ（マイカより濃い）"]])
@@ -243,7 +258,7 @@ export class BackgroundDialog {
         body.push(el("p", { className: "hint" }, "この OS では、すりガラスを使えないことがあります。"));
       }
     }
-    if (a.kind !== "none") {
+    if (a.kind !== "none" && !this.pending) {
       body.push(
         field("背景を地の色で薄める", slider("dim", 0, 90, "%"), "0% で背景そのまま。字が読みにくいときは上げてください。"),
         field("欄の濃さ", slider("panelOpacity", 20, 100, "%"), "ツールバー・原稿・設定の欄。100% で不透明。"),
