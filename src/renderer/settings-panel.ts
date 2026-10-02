@@ -437,11 +437,32 @@ function sections(): Section[] {
               : null,
         },
         { kind: "select", path: "output.color", label: "色", options: [["auto", "自動（入稿用は CMYK、閲覧用・画像は RGB）"], ["gray", "グレースケール（モノクロ印刷用）"]] },
-        { kind: "select", path: "output.imposition", label: "面付け", options: [["single", "単ページ"], ["spread", "見開き（閲覧用 PDF と画像）"]] },
+        {
+          kind: "select",
+          path: "output.imposition",
+          label: "面付け",
+          options: [
+            ["single", "単ページ"],
+            ["spread", "見開き（閲覧用 PDF と画像）"],
+            ["saddle", "中綴じ（閲覧用 PDF。家庭のプリンターで冊子に）"],
+          ],
+        },
+        {
+          kind: "info",
+          render: (s) =>
+            s.output.imposition === "saddle" && s.pdfKind === "screen"
+              ? "PDF の1枚に2ページずつ、刷る順に並べます（紙は仕上がりの幅の2倍。A5 の本なら A4 横）。両面印刷の「短辺とじ」で刷り、重ねて真ん中で折り、ホチキスで留めると本になります。ページ数が4の倍数でなければ、最後に白ページを足します。"
+              : null,
+        },
         {
           kind: "info",
           tone: "warning",
-          render: (s) => (s.output.imposition === "spread" && s.pdfKind !== "screen" ? "入稿用 PDF は単ページで書き出します。見開きになるのは閲覧用 PDF と画像です。" : null),
+          render: (s) =>
+            s.output.imposition === "spread" && s.pdfKind !== "screen"
+              ? "入稿用 PDF は単ページで書き出します。見開きになるのは閲覧用 PDF と画像です。"
+              : s.output.imposition === "saddle" && s.pdfKind !== "screen"
+                ? "中綴じの面付けは閲覧用 PDF だけです（印刷所に頼むときは、印刷所が面付けします）。入稿用 PDF は単ページで書き出します。"
+                : null,
         },
         { kind: "select", path: "image.format", label: "画像の形式", options: [["png", "PNG"], ["jpeg", "JPEG"]] },
         { kind: "select", path: "image.dpi", label: "画像の解像度", numeric: true, options: DPI_OPTIONS },

@@ -62,3 +62,48 @@ export function spreadLabel(p: Spread, firstPageNumber: number, leftBound = fals
   const num = (i: number) => String(firstPageNumber + i).padStart(3, "0");
   return (leftBound ? [p.left, p.right] : [p.right, p.left]).filter((v): v is number => v !== null).map(num).join("-");
 }
+
+/**
+ * 中綴じの面付け：ページを、両面に刷って重ね、真ん中で折って綴じると冊子になる順に並べる。
+ * 1枚の紙の表に2ページ、裏に2ページ。ページ数は4の倍数になるよう、最後に白ページを足す。
+ * 最初のページが偶数ページ（ノンブルの開始番号が偶数）なら、先頭にも白ページを1つ足す（1ページ目は表紙側の右か左）。
+ * 右綴じ（縦組み）では、表紙が紙の左半分に来る。左綴じ（横組み）は左右が逆。
+ * 返すのは紙の面の並び（1枚目の表・1枚目の裏・2枚目の表…）。null は白ページ。
+ */
+export function saddlePairs(pageCount: number, firstPageNumber: number, leftBound = false): Spread[] {
+  const order: (number | null)[] = [];
+  if (pageCount > 0 && firstPageNumber % 2 === 0) order.push(null);
+  for (let i = 0; i < pageCount; i++) order.push(i);
+  while (order.length % 4 !== 0) order.push(null);
+  const n = order.length;
+  const at = (p: number) => order[p - 1] ?? null;
+  const out: Spread[] = [];
+  for (let s = 0; s < n / 4; s++) {
+    // 表（外側）：最後から数えたページと、前から数えたページ。裏（内側）：その裏のページ。
+    const outerBack = n - 2 * s;
+    const outerFront = 1 + 2 * s;
+    const innerFront = 2 + 2 * s;
+    const innerBack = n - 1 - 2 * s;
+    if (leftBound) {
+      out.push({ left: at(outerBack), right: at(outerFront) });
+      out.push({ left: at(innerFront), right: at(innerBack) });
+    } else {
+      out.push({ left: at(outerFront), right: at(outerBack) });
+      out.push({ left: at(innerBack), right: at(innerFront) });
+    }
+  }
+  return out;
+}
+
+/** 中綴じの面付けをしたページ（紙の面ごとに2ページを並べたもの）と、紙の枚数・足した白ページの数。 */
+export function imposeSaddle(pages: DrawPage[], firstPageNumber: number, leftBound = false): { pages: DrawPage[]; sheets: number; blanks: number } {
+  const pairs = saddlePairs(pages.length, firstPageNumber, leftBound);
+  // 白ページは、紙の色だけの同じ大きさのページ。
+  const blank = (): DrawPage => ({ ...pages[0], items: [], shapes: [] });
+  const page = (i: number | null) => (i === null ? blank() : pages[i]);
+  return {
+    pages: pairs.map((p, i) => combineSpread(page(p.right), page(p.left), i)),
+    sheets: pairs.length / 2,
+    blanks: pairs.length * 2 - pages.length,
+  };
+}

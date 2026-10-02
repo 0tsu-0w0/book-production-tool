@@ -1,8 +1,8 @@
 import { imageInfos, type DocImage } from "../document/document.js";
-import { leftBound, spreadOutput, type PdfKind, type Settings } from "../document/settings.js";
+import { leftBound, saddleOutput, spreadOutput, type PdfKind, type Settings } from "../document/settings.js";
 import { Face, typeset } from "../engine/index.js";
 import { checkPdfX, type CheckItem } from "./check-pdfx.js";
-import { imposeSpreads } from "./imposition.js";
+import { imposeSaddle, imposeSpreads } from "./imposition.js";
 import { PRINT_PDF, SCREEN_PDF, renderPdf, type PdfOptions } from "./pdf.js";
 
 export const PDF_KINDS: Record<PdfKind, Omit<PdfOptions, "title">> = {
@@ -33,8 +33,12 @@ export async function exportPdf(
   const table = { faces: fonts.map((f) => new Face(f.bytes)), keys: fonts.map((f) => f.key) };
   const typeset_ = typeset(text, settings, table, imageInfos(images));
   const options = { ...pdfOptions(settings, title), icc };
-  // 見開き（閲覧用だけ）：2ページを1枚に並べる。
-  const pages = spreadOutput(settings, "pdf") ? imposeSpreads(typeset_.pages, settings.nombreStart, leftBound(settings)).pages : typeset_.pages;
+  // 見開き・中綴じ（閲覧用だけ）：2ページを1枚に並べる。
+  const pages = spreadOutput(settings, "pdf")
+    ? imposeSpreads(typeset_.pages, settings.nombreStart, leftBound(settings)).pages
+    : saddleOutput(settings) && typeset_.pages.length > 0
+      ? imposeSaddle(typeset_.pages, settings.nombreStart, leftBound(settings)).pages
+      : typeset_.pages;
   const sources = images.map((i) => ({ name: i.name, mime: i.mime, bytes: Buffer.from(i.data, "base64") }));
   const bytes = await renderPdf(pages, fonts.map((f) => f.bytes), options, onProgress, sources);
   if (!options.pdfx) return { bytes, pages: pages.length };

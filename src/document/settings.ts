@@ -197,8 +197,11 @@ export const CUSTOM_PAPER = "厚さを入れる";
 export interface OutputSettings {
   /** auto：入稿用は CMYK、閲覧用・画像はそのまま。gray：すべてグレースケール。 */
   color: "auto" | "gray";
-  /** 面付け：単ページか見開き（見開きは閲覧用 PDF と画像だけ）。 */
-  imposition: "single" | "spread";
+  /**
+   * 面付け：単ページ・見開き（閲覧用 PDF と画像）・中綴じ（閲覧用 PDF。家庭のプリンターで両面に刷って、
+   * 半分に折って綴じると冊子になる順に、2ページずつ並べる）。
+   */
+  imposition: "single" | "spread" | "saddle";
   /** 画像を1つの ZIP にまとめる。 */
   zipImages: boolean;
   /** 本文用紙（PAPERS のキーか CUSTOM_PAPER）。 */
@@ -462,6 +465,11 @@ export function spreadOutput(s: Settings, target: "pdf" | "images"): boolean {
   return s.output.imposition === "spread" && (target === "images" || s.pdfKind === "screen");
 }
 
+/** 中綴じの面付けで書き出すか（閲覧用 PDF だけ。入稿用は印刷所が面付けするので単ページのまま）。 */
+export function saddleOutput(s: Settings): boolean {
+  return s.output.imposition === "saddle" && s.pdfKind === "screen";
+}
+
 /** 「お任せ整形」で入れる整形ルールの組み合わせ（参照元のお節介アシスト相当）。 */
 export const RECOMMENDED_FORMAT: Partial<FormatSettings> = {
   symbols: true,
@@ -610,7 +618,7 @@ export function normalizeSettings(input: unknown): Settings {
   if (!HORIZONTAL_PUNCTUATION.includes(s.book.punctuation)) s.book.punctuation = "、。";
   const o = s.output;
   if (o.color !== "gray") o.color = "auto";
-  if (o.imposition !== "spread") o.imposition = "single";
+  if (o.imposition !== "spread" && o.imposition !== "saddle") o.imposition = "single";
   if (!(o.paper in PAPERS) && o.paper !== CUSTOM_PAPER) o.paper = DEFAULT_SETTINGS.output.paper;
   if (!(o.paperThicknessMm > 0.02 && o.paperThicknessMm < 1)) o.paperThicknessMm = DEFAULT_SETTINGS.output.paperThicknessMm;
   return s;

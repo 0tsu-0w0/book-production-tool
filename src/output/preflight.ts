@@ -1,4 +1,4 @@
-import { bookGeometry, spreadOutput, type Settings } from "../document/settings.js";
+import { bookGeometry, saddleOutput, spreadOutput, type Settings } from "../document/settings.js";
 import type { DrawPage } from "../engine/types.js";
 import { hexToCmyk } from "./color.js";
 
@@ -123,6 +123,20 @@ export function preflight(input: PreflightInput): Finding[] {
   }
   if (s.output.imposition === "spread" && target === "pdf" && !spreadOutput(s, "pdf")) {
     out.push({ level: "info", message: "入稿用 PDF は単ページで書き出します（見開きは閲覧用 PDF と画像だけ）。" });
+  }
+  if (s.output.imposition === "saddle" && target === "pdf") {
+    if (!saddleOutput(s)) {
+      out.push({ level: "info", message: "入稿用 PDF は単ページで書き出します（中綴じの面付けは閲覧用 PDF だけ。印刷所に頼むときは、印刷所が面付けします）。" });
+    } else {
+      const lead = s.nombreStart % 2 === 0 ? 1 : 0;
+      const total = Math.ceil((pageCount + lead) / 4) * 4;
+      const blanks = total - pageCount;
+      out.push({
+        level: "info",
+        message: `中綴じ：${pageCount}ページを${total / 4}枚の紙の両面に刷ります${blanks > 0 ? `（白ページを${blanks}ページ足します）` : ""}。両面印刷は「短辺とじ」で刷り、重ねて真ん中で折ってください。`,
+      });
+      if (pageCount > 64) out.push({ level: "warning", message: `中綴じで${pageCount}ページは厚すぎて、きれいに折れないことがあります（目安は64ページまで）。` });
+    }
   }
   return out;
 }
