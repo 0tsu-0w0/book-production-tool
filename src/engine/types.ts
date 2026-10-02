@@ -29,6 +29,9 @@ export interface Cell {
   features?: string;
   /** プロポーショナル（字の幅どおりに詰める）。 */
   proportional?: boolean;
+  /** 長体・平体：字形の横・縦の伸縮率（字形そのものの向きで。省略時は 1）。 */
+  sx?: number;
+  sy?: number;
   /** 原稿の行の中での位置（紙面から原稿へ戻るのに使う。DTP-15）。 */
   src?: number;
   /** 数式（text は TeX）。display なら別行数式。pad は前後の空き（em）。 */
@@ -232,6 +235,9 @@ export interface PlacedGlyph {
   bold?: boolean;
   /** OpenType の字形の機能。 */
   features?: string;
+  /** 長体・平体（字形の横・縦の伸縮率）。 */
+  sx?: number;
+  sy?: number;
   /** 原稿の位置：[行（0始まり）, 行の中の位置]。 */
   src?: [number, number];
   x: number;
@@ -309,8 +315,10 @@ export interface DrawItem {
   x: number;
   y: number;
   size: number;
-  /** 横方向の伸縮率（縦中横を1マスに収めるときに 1 未満になる）。 */
+  /** 横方向の伸縮率（縦中横を1マスに収めるとき・長体で 1 未満になる）。 */
   sx: number;
+  /** 縦方向の伸縮率（平体で 1 未満になる。省略時は 1）。 */
+  sy?: number;
   /** true なら時計回りに 90° 回して描く（横倒しの半角文字）。 */
   rotate?: boolean;
   color: string;

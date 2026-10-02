@@ -116,3 +116,25 @@ function placeRubySpacing(atom: Atom, prev: Atom | undefined, next: Atom | undef
     cell.shift = (cell.shift ?? 0) + per / 2;
   }
 }
+
+/**
+ * 長体・平体：字の取る長さを、行の向きに縮めた分だけ短くする（約物の詰めの量と字のずれも同じ割合で）。
+ * 縦組みでは平体（縦を縮める）が、横組みと横倒しの欧文では長体（横を縮める）が行の長さに効く。
+ * 約物の詰めとプロポーショナルのあとで呼ぶ。
+ */
+export function applyDeform(blocks: Block[], horizontal: boolean): void {
+  for (const block of textBlocks(blocks)) {
+    for (const atom of block.atoms) {
+      if (atom.warichu) continue;
+      for (const cell of atom.cells) {
+        if (cell.sx === undefined && cell.sy === undefined) continue;
+        const f = horizontal || cell.rotate ? (cell.sx ?? 1) : (cell.sy ?? 1);
+        if (f === 1 || cell.math) continue;
+        cell.advance = (cell.advance ?? 1) * f;
+        cell.compress = (cell.compress ?? 0) * f;
+        cell.shift = (cell.shift ?? 0) * f;
+        if (cell.hyph) cell.hyph = cell.hyph.map((h) => ({ at: h.at, width: h.width * f, rest: h.rest * f }));
+      }
+    }
+  }
+}

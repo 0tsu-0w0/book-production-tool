@@ -8,7 +8,7 @@ import { formatText } from "./format.js";
 import { layoutDocument } from "./layout.js";
 import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
-import { prepareSpacing } from "./spacing.js";
+import { applyDeform, prepareSpacing } from "./spacing.js";
 import { applyStyles, type EngineStyles } from "./styles.js";
 import { hasPageRefs, hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
 import { texToMarkup } from "./tex.js";
@@ -127,6 +127,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     if (hasMath) mathErrors.push(...measureMath(bs, spec.charsPerLine, spec.lineGap, spec.mathSpaceEm));
     prepareSpacing(bs, spec.typography, spec.rubyScale);
     applyProportional(bs, faces);
+    applyDeform(bs, !!spec.horizontal);
   };
   let blocks = source;
   let layouts: PageLayout[];

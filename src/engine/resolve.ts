@@ -143,7 +143,10 @@ export function resolvePage(page: PageLayout, faces: Face[], textColor: string):
 
 function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: string): DrawItem {
   const scale = g.size / face.upem;
-  const base = { text: g.text, size: g.size, color, sx: 1, face: faceIndex, ...(g.bold ? { bold: true } : {}), ...(g.src ? { src: g.src } : {}) };
+  // 長体・平体（字形の横・縦の伸縮率）。
+  const gx = g.sx ?? 1;
+  const gy = g.sy ?? 1;
+  const base = { text: g.text, size: g.size, color, sx: gx, ...(gy !== 1 ? { sy: gy } : {}), face: faceIndex, ...(g.bold ? { bold: true } : {}), ...(g.src ? { src: g.src } : {}) };
 
   if (g.kind === "horiz") {
     const shaped = face.shape(g.text, "ltr");
@@ -155,7 +158,7 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
   if (g.kind === "rot") {
     // 時計回りに 90° 回すと、字形の上（y の正）が右を向く。仮想ボディの中心を行の中心に合わせる。
     const shaped = face.shape(g.text, "ltr");
-    const baselineX = g.x - (face.emBottom + face.upem / 2) * scale;
+    const baselineX = g.x - (face.emBottom + face.upem / 2) * scale * gy;
     return { ...base, font: "horiz", glyphs: withOffsets(shaped), x: baselineX, y: g.y, rotate: true };
   }
 
@@ -163,9 +166,9 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
     // 横組みの1マス：y は行の中心。仮想ボディの中心を行の中心に合わせる。fit なら1字分の幅に収める。
     const shaped = face.shape(g.text, "ltr", g.features);
     const total = totalAdvance(shaped);
-    const sx = g.fit ? Math.min(1, (face.upem * TCY_MAX_WIDTH) / total) : 1;
-    const x = g.fit ? g.x + (g.size - total * scale * sx) / 2 : g.x;
-    return { ...base, font: "horiz", glyphs: withOffsets(shaped), x, y: g.y + (face.emBottom + face.upem / 2) * scale, sx };
+    const sx = (g.fit ? Math.min(1, (face.upem * TCY_MAX_WIDTH) / total) : 1) * gx;
+    const x = g.fit ? g.x + (g.size * gx - total * scale * sx) / 2 : g.x;
+    return { ...base, font: "horiz", glyphs: withOffsets(shaped), x, y: g.y + (face.emBottom + face.upem / 2) * scale * gy, sx };
   }
 
   if (g.kind === "hmark") {
@@ -182,18 +185,18 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
   }
 
   // マスの上端から仮想ボディの上端までを 1em とみなし、ベースラインの位置を決める。
-  const baseline = g.y + (face.upem + face.emBottom) * scale;
+  const baseline = g.y + (face.upem + face.emBottom) * scale * gy;
 
   if (g.kind === "tcy") {
     const shaped = face.shape(g.text, "ltr");
     const total = totalAdvance(shaped);
-    const sx = Math.min(1, (face.upem * TCY_MAX_WIDTH) / total);
+    const sx = Math.min(1, (face.upem * TCY_MAX_WIDTH) / total) * gx;
     return { ...base, font: "horiz", glyphs: withOffsets(shaped), x: g.x - (total * scale * sx) / 2, y: baseline, sx };
   }
 
   const shaped = face.shape(g.text, "ttb", g.features);
   const advance = shaped[0]?.advance ?? face.upem;
-  return { ...base, font: "vert", glyphs: withOffsets(shaped), x: g.x - (advance * scale) / 2, y: baseline };
+  return { ...base, font: "vert", glyphs: withOffsets(shaped), x: g.x - (advance * scale * gx) / 2, y: baseline };
 }
 
 function totalAdvance(shaped: readonly ShapedGlyph[]): number {

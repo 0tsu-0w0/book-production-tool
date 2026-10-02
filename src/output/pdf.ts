@@ -255,8 +255,8 @@ function textOps(page: DrawPage, fontsOf: (face: number) => { vert: FontPair; ho
     }
     // PDF の座標は左下が原点で y 軸が上向き。横倒しは、送り方向が下、字形の上が右を向くように回す。
     const matrix = item.rotate
-      ? setTextMatrix(0, -1, 1, 0, item.x, page.height - item.y)
-      : setTextMatrix(item.sx, 0, 0, 1, item.x, page.height - item.y);
+      ? setTextMatrix(0, -item.sx, item.sy ?? 1, 0, item.x, page.height - item.y)
+      : setTextMatrix(item.sx, 0, 0, item.sy ?? 1, item.x, page.height - item.y);
     ops.push(setFontAndSize(key, item.size), matrix, showText(font.encode(item)));
   }
   ops.push(endText());
@@ -314,8 +314,8 @@ class GlyphForms {
         if (!name) names.set(ref, (name = pdfPage.node.newXObject("G", ref)));
         // 画面の描き方（draw.ts）と同じ置き方。PDF は y 軸が上向きなので、ページの高さから引く。
         const m = item.rotate
-          ? [0, -s, s, 0, item.x, page.height - (item.y + g.dx * s)]
-          : [s * item.sx, 0, 0, s, item.x + g.dx * s * item.sx, page.height - item.y];
+          ? [0, -s * item.sx, s * (item.sy ?? 1), 0, item.x, page.height - (item.y + g.dx * s * item.sx)]
+          : [s * item.sx, 0, 0, s * (item.sy ?? 1), item.x + g.dx * s * item.sx, page.height - item.y];
         ops.push(pushGraphicsState(), concatTransformationMatrix(m[0], m[1], m[2], m[3], m[4], m[5]));
         // 擬似ボールドの線の太さ（字の大きさに対する割合）を、フォント単位にして指定する。
         if (item.bold) ops.push(setLineWidth(BOLD_STROKE * face.upem));

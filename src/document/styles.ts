@@ -63,7 +63,20 @@ export interface ParagraphStyle {
   glyphForm: GlyphForm;
   /** プロポーショナル（かなと約物を字の幅どおりに詰める）。 */
   proportional: boolean;
+  /** 長体（字を横に縮めて縦長に）・平体（縦に縮めて横長に）。空ならそのまま。 */
+  deform: Deform;
+  /** 長体・平体の割合（%）。 */
+  deformRatio: number;
 }
+
+/** 長体・平体。文字スタイルの空は「段落と同じ」。 */
+export type Deform = "" | "condensed" | "flat";
+export const DEFORMS: [Deform, string][] = [
+  ["", "なし"],
+  ["condensed", "長体（縦長）"],
+  ["flat", "平体（横長）"],
+];
+export const DEFORM_RATIOS = [90, 80, 70, 60, 50];
 
 export interface CharacterStyle {
   name: string;
@@ -74,6 +87,9 @@ export interface CharacterStyle {
   /** 空なら段落の字形のまま。 */
   glyphForm: GlyphForm;
   proportional: boolean;
+  /** 空なら段落の長体・平体のまま。 */
+  deform: Deform;
+  deformRatio: number;
 }
 
 /** 字形の切り替え（OpenType の機能の名前）。フォントにその機能がなければ変わらない。 */
@@ -111,6 +127,8 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   bold: false,
   glyphForm: "",
   proportional: false,
+  deform: "",
+  deformRatio: 80,
   ...over,
 });
 
@@ -122,9 +140,12 @@ const character = (name: string, over: Partial<CharacterStyle> = {}): CharacterS
   bold: false,
   glyphForm: "",
   proportional: false,
+  deform: "",
+  deformRatio: 80,
   ...over,
 });
 
+const deform = (v: unknown): Deform => (v === "condensed" || v === "flat" ? v : "");
 const glyphForm = (v: unknown): GlyphForm => (GLYPH_FORMS.some(([k]) => k === v) ? (v as GlyphForm) : "");
 
 /** 既定のスタイル。見出しの字下げ（3字・4字）はこれまでの組み方と同じ。 */
@@ -192,6 +213,8 @@ export function normalizeStyles(input: unknown): StyleSheet {
         bold: p.bold === true,
         glyphForm: glyphForm(p.glyphForm),
         proportional: p.proportional === true,
+        deform: deform(p.deform),
+        deformRatio: Math.round(num(p.deformRatio, 80, 30, 99)),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {
@@ -207,6 +230,8 @@ export function normalizeStyles(input: unknown): StyleSheet {
         bold: c.bold === true,
         glyphForm: glyphForm(c.glyphForm),
         proportional: c.proportional === true,
+        deform: deform(c.deform),
+        deformRatio: Math.round(num(c.deformRatio, 80, 30, 99)),
       }),
     );
   return { paragraph: paragraphs, character: Array.isArray(src.character) ? characters : structuredClone(DEFAULT_STYLES.character) };

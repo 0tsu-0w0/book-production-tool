@@ -20,6 +20,9 @@ export interface EngineParagraphStyle {
   bold: boolean;
   glyphForm?: string;
   proportional?: boolean;
+  deform?: "" | "condensed" | "flat";
+  /** 長体・平体の割合（%）。 */
+  deformRatio?: number;
 }
 
 export interface EngineCharacterStyle {
@@ -30,6 +33,9 @@ export interface EngineCharacterStyle {
   bold: boolean;
   glyphForm?: string;
   proportional?: boolean;
+  /** 空なら段落の長体・平体のまま。 */
+  deform?: "" | "condensed" | "flat";
+  deformRatio?: number;
 }
 
 export interface EngineStyles {
@@ -84,6 +90,11 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         // delete を使うとオブジェクトが遅い形に変わるので、undefined を入れる。
         cell.features = form || undefined;
         cell.proportional = !!(ps.proportional || cs?.proportional);
+        // 長体・平体：字形の横（sx）か縦（sy）を縮める。
+        const d = cs?.deform ? cs : ps.deform ? ps : undefined;
+        const r = d ? (d.deformRatio ?? 80) / 100 : 1;
+        cell.sx = d?.deform === "condensed" && !cell.math ? r : undefined;
+        cell.sy = d?.deform === "flat" && !cell.math ? r : undefined;
       }
     }
   }

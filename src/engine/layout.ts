@@ -992,6 +992,8 @@ function placeLine(
       // 1字ごとに作るので、使わない項目のための一時的なオブジェクトを作らない（組み直しを速くするため）。
       const g: PlacedGlyph = { text: cell.text, kind, x, y, size: size * scale, font: cell.font, bold: cell.bold, color: cell.color };
       if (cell.features) g.features = cell.features;
+      if (cell.sx !== undefined) g.sx = cell.sx;
+      if (cell.sy !== undefined) g.sy = cell.sy;
       if (cell.math) {
         if (cell.math.display) g.display = true;
         if (cell.math.pad !== undefined) g.pad = cell.math.pad;

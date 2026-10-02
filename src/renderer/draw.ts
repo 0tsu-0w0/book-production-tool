@@ -91,11 +91,11 @@ export function drawPage(ctx: Ctx, page: DrawPage, fonts: DrawFont[], opts: Draw
       if (!path) continue;
       if (item.rotate) {
         // 時計回りに 90°：送り方向（字形の x）がページの下、字形の上（y）がページの右。
-        const [ox, oy] = origin(item.x, item.y + (g.dx * item.size) / upem);
-        setMatrix(matrix, 0, scale, scale, 0, ox, oy);
+        const [ox, oy] = origin(item.x, item.y + (g.dx * item.size * item.sx) / upem);
+        setMatrix(matrix, 0, scale * item.sx, scale * (item.sy ?? 1), 0, ox, oy);
       } else {
         const [ox, oy] = origin(item.x + (g.dx * item.size * item.sx) / upem, item.y);
-        setMatrix(matrix, scale * item.sx, 0, 0, -scale, ox, oy);
+        setMatrix(matrix, scale * item.sx, 0, 0, -scale * (item.sy ?? 1), ox, oy);
       }
       combined.addPath(path, matrix);
     }

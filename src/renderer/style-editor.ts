@@ -2,7 +2,10 @@ import type { FontChoice } from "../document/settings.js";
 import { PAGE_COMMANDS } from "../engine/parse.js";
 import {
   BUILTIN_PARAGRAPH_STYLES,
+  DEFORMS,
+  DEFORM_RATIOS,
   GLYPH_FORMS,
+  type Deform,
   fontKey,
   type GlyphForm,
   newCharacterStyle,
@@ -174,6 +177,27 @@ export class StyleEditor {
       ),
     );
     this.root.append(this.check("かなと約物を詰める（プロポーショナル）", style.proportional, (v) => (style.proportional = v)));
+
+    // 長体・平体：字を縦長・横長に変形する。縦組みでは平体が、横組みでは長体が行の長さを縮める。
+    const deforms: [string, string][] = DEFORMS.map(([k, label]) => [k, k === "" && this.kind === "character" ? "段落と同じ" : label]);
+    const ratio = this.select(
+      DEFORM_RATIOS.map((r) => [String(r), `${r}%`]),
+      String(style.deformRatio),
+      (v) => {
+        style.deformRatio = Number(v);
+        this.onChange();
+      },
+    ) as HTMLSelectElement;
+    ratio.disabled = !style.deform;
+    const kind = this.select(deforms, style.deform, (v) => {
+      style.deform = v as Deform;
+      ratio.disabled = !style.deform;
+      this.onChange();
+    });
+    const deformRow = document.createElement("div");
+    deformRow.className = "row";
+    deformRow.append(kind, ratio);
+    this.root.append(this.labeled("長体・平体", deformRow));
   }
 
   private check(label: string, value: boolean, set: (v: boolean) => void): HTMLElement {
