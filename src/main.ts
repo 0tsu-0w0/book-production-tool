@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, net, protocol, screen, shell, type MenuItemConstructorOptions } from "electron";
+import { BrowserWindow, Menu, app, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, screen, session, shell, type MenuItemConstructorOptions } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -185,6 +185,9 @@ function loadAppearance(): Appearance {
 /** すりガラスは窓そのものの機能なので、ここで窓に当てる（画像・動画は画面の側で描く）。 */
 function applyWindowBackground(a: Appearance) {
   if (!win) return;
+  // 後ろの窓のすりガラス：画面を取り込むとき、Kolophon 自身は写らないようにする（窓の中に窓が映り続けないように）。
+  // その間は、スクリーンショットや画面共有にも Kolophon が写らない。
+  win.setContentProtection(a.kind === "behind");
   // 透明な窓は、地も透明のまま（すりガラスなどは重ねない）。
   if (transparentWindow) return;
   const glass = a.kind === "glass";
@@ -217,8 +220,9 @@ function wallpaperVersion(): number {
 function sendGeometry() {
   if (!win || win.isDestroyed()) return;
   const c = win.getContentBounds();
-  const d = screen.getDisplayMatching(c).bounds;
-  const g: WindowGeometry = { x: c.x - d.x, y: c.y - d.y, width: d.width, height: d.height };
+  const display = screen.getDisplayMatching(c);
+  const d = display.bounds;
+  const g: WindowGeometry = { x: c.x - d.x, y: c.y - d.y, width: d.width, height: d.height, display: display.id };
   send("window-geometry", g);
 }
 
@@ -969,6 +973,15 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(path.join(dir, name)).toString(), { headers: req.headers });
   });
   transparentWindow = wantsTransparentWindow(loadAppearance());
+  // 後ろの窓のすりガラス：画面の取り込み（getDisplayMedia）を頼まれたら、窓のあるディスプレイを選ぶ（選ぶ画面は出さない）。
+  // ほかの使い方では取り込ませない。
+  session.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
+    if (loadAppearance().kind !== "behind" || !win) return callback({});
+    const display = screen.getDisplayMatching(win.getBounds());
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+    const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
+    callback(source ? { video: source } : {});
+  });
   win = new BrowserWindow({
     ...(transparentWindow ? { transparent: true, frame: !framelessFor(true) } : {}),
     width: 1440,

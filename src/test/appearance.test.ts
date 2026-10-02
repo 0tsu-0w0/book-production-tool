@@ -37,4 +37,12 @@ describe("窓の背景（見た目の設定）", () => {
     assert.equal(wantsTransparentWindow(normalizeAppearance({ kind: "transparent" })), true);
     for (const kind of ["none", "image", "wallpaper", "glass"]) assert.equal(wantsTransparentWindow(normalizeAppearance({ kind, file: "image-1.png" })), false);
   });
+
+  it("後ろの窓のすりガラス：種類として保存でき、背景のぼかしは範囲に収める", () => {
+    const a = normalizeAppearance({ kind: "behind", backBlur: 200 });
+    assert.equal(a.kind, "behind");
+    assert.equal(a.backBlur, 80);
+    assert.equal(normalizeAppearance({}).backBlur, 40);
+    assert.equal(wantsTransparentWindow(a), false);
+  });
 });

@@ -1,7 +1,7 @@
 // 画面の見た目（アプリの設定。文書には入れない）：窓の背景に画像・動画・すりガラスを使う。
 // 紙面はいつも不透明のまま。背景が見えるのは紙の周りと、半透明にした欄の後ろだけ。
 
-export type BackgroundKind = "none" | "image" | "video" | "wallpaper" | "glass" | "transparent";
+export type BackgroundKind = "none" | "image" | "video" | "wallpaper" | "behind" | "glass" | "transparent";
 /** すりガラスの種類（Windows 11）。Mac ではどれも vibrancy になる。 */
 export type GlassMaterial = "acrylic" | "mica" | "tabbed";
 export type BackgroundFit = "cover" | "contain" | "tile";
@@ -20,6 +20,8 @@ export interface Appearance {
   blur: number;
   /** 背景を画面の地の色で薄める割合（%）。0 でそのまま。 */
   dim: number;
+  /** 壁紙・後ろの窓のすりガラスのぼかし（px）。 */
+  backBlur: number;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -31,6 +33,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   panelOpacity: 78,
   blur: 14,
   dim: 25,
+  backBlur: 40,
 };
 
 const clamp = (v: unknown, lo: number, hi: number, d: number) =>
@@ -42,7 +45,7 @@ export function normalizeAppearance(v: unknown): Appearance {
   const a = (v && typeof v === "object" ? v : {}) as Partial<Appearance>;
   const d = DEFAULT_APPEARANCE;
   const file = typeof a.file === "string" && a.file && !/[\\/]/.test(a.file) ? a.file : null;
-  let kind = oneOf(a.kind, ["none", "image", "video", "wallpaper", "glass", "transparent"] as const, d.kind);
+  let kind = oneOf(a.kind, ["none", "image", "video", "wallpaper", "behind", "glass", "transparent"] as const, d.kind);
   // 画像・動画なのにファイルがなければ、背景なしにする。
   if ((kind === "image" || kind === "video") && !file) kind = "none";
   return {
@@ -54,6 +57,7 @@ export function normalizeAppearance(v: unknown): Appearance {
     panelOpacity: clamp(a.panelOpacity, 20, 100, d.panelOpacity),
     blur: clamp(a.blur, 0, 40, d.blur),
     dim: clamp(a.dim, 0, 90, d.dim),
+    backBlur: clamp(a.backBlur, 0, 80, d.backBlur),
   };
 }
 
@@ -81,4 +85,6 @@ export interface WindowGeometry {
   /** ディスプレイの大きさ。 */
   width: number;
   height: number;
+  /** ディスプレイの番号（後ろの窓のすりガラスで、取り込む画面を決める）。 */
+  display?: number;
 }
