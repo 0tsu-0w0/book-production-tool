@@ -35,6 +35,9 @@ export interface EngineCharacterStyle {
 export interface EngineStyles {
   paragraph: Map<string, EngineParagraphStyle>;
   character: Map<string, EngineCharacterStyle>;
+  /** 合成フォント：本文の書体の字のうち、かなと欧文に使う書体の番号（-1 なら本文の書体のまま）。 */
+  kanaFont?: number;
+  latinFont?: number;
   body: string;
   heading1: string;
   heading2: string;
@@ -44,6 +47,10 @@ export interface EngineStyles {
  * 段落スタイルとして、見出しには大見出し・中見出し、それ以外には本文を当てる。行頭の［＃名前］があればそちら。
  * 記法の読み取り結果は使い回すので、毎回すべてのマスに値を書き直す（前の設定を残さない）。
  */
+/** 合成フォントの字の種類：かな（ひらがな・カタカナ・長音・踊り字）と欧文（半角の英数字と記号）。 */
+const KANA = /^[ぁ-ゟ゠-ヿㇰ-ㇿ]+$/u;
+const LATIN = /^[\x20-\x7e]+$/;
+
 export function applyStyles(blocks: Block[], styles: EngineStyles): void {
   const body = styles.paragraph.get(styles.body)!;
   for (const block of textBlocks(blocks)) {
@@ -65,6 +72,11 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       const cs = (atom.style ? styles.character.get(atom.style) : undefined) ?? lineStyle;
       for (const cell of atom.cells) {
         cell.font = cs && cs.font >= 0 ? cs.font : ps.font;
+        // 合成フォント：本文の書体（0）の字だけ、かな・欧文を別の書体にする。
+        if (cell.font === 0 && !cell.math) {
+          if (styles.kanaFont !== undefined && styles.kanaFont > 0 && KANA.test(cell.text)) cell.font = styles.kanaFont;
+          else if (styles.latinFont !== undefined && styles.latinFont > 0 && LATIN.test(cell.text)) cell.font = styles.latinFont;
+        }
         cell.scale = ps.scale * (cs?.scale ?? 1) * (atom.note ? NOTE_MARK_SCALE : 1);
         cell.bold = ps.bold || !!cs?.bold;
         cell.color = cs?.color ?? ps.color ?? undefined;

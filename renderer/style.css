@@ -66,14 +66,34 @@ label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--
 
 main { display: grid; grid-template-columns: minmax(300px, 32%) 1fr 340px; min-height: 0; }
 
-.editor { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+.editor { display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+/* 検索の欄を閉じても、原稿欄が伸びる行にとどまるよう、行を決めておく。 */
+.editor > .assist { grid-row: 1; }
+.editor > .find-bar { grid-row: 2; }
+.editor > .source-wrap { grid-row: 3; }
+.editor > .editor-status { grid-row: 4; }
 .assist { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .assist button { padding: 2px 8px; font-size: 12px; }
-textarea#source {
-  width: 100%; height: 100%; resize: none; border: 0; padding: 14px 16px;
-  background: var(--panel);
-  font: 15px/1.9 "Yu Mincho", "Hiragino Mincho ProN", serif;
+/* 原稿欄：検索で見つかった所に色を付ける層を、原稿欄の後ろに重ねる（字の大きさ・折り返しを同じにする）。 */
+.source-wrap { position: relative; min-height: 0; background: var(--panel); }
+textarea#source, .source-backdrop {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border: 0; padding: 14px 16px;
+  font: 15px/1.9 "Yu Mincho", "Hiragino Mincho ProN", serif; letter-spacing: normal;
+  white-space: pre-wrap; overflow-wrap: break-word; overflow-y: scroll; box-sizing: border-box;
 }
+textarea#source { resize: none; background: transparent; z-index: 1; }
+.source-backdrop { color: transparent; pointer-events: none; overflow: hidden; overflow-y: scroll; scrollbar-color: transparent transparent; }
+.source-backdrop mark { color: transparent; background: rgba(255, 196, 0, 0.35); border-radius: 2px; }
+.source-backdrop mark.current { background: rgba(255, 140, 0, 0.7); }
+.source-backdrop.tex { font-family: "Cascadia Mono", Consolas, Menlo, "Yu Gothic UI", "Hiragino Sans", sans-serif; }
+/* 検索と置換。 */
+.find-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.find-row { display: flex; align-items: center; gap: 4px; }
+.find-row input[type="search"], .find-row input[type="text"] { flex: 1; min-width: 0; }
+.find-row button { padding: 2px 8px; font-size: 12px; }
+.find-count { min-width: 5em; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.find-options { font-size: 12px; gap: 12px; }
+.find-bar input:invalid { box-shadow: inset 0 0 0 2px var(--danger); }
 textarea#source:focus { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
 .editor-status { padding: 4px 12px; border-top: 1px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums; }
 

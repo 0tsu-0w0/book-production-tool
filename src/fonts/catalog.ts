@@ -79,7 +79,7 @@ export interface ScanCache {
  * PC のフォントを調べる。cache を渡すと、変わっていないファイルは控えを使い（起動を速くするため）、
  * 調べ直したファイルの結果を cache に書き足す（なくなったファイルは cache から消す）。
  */
-export function scanFonts(dirs = fontDirectories(), cache?: ScanCache): FontEntry[] {
+export function scanFonts(dirs = fontDirectories(), cache?: ScanCache, kind: "vertical" | "any" = "vertical"): FontEntry[] {
   const seen = new Set<string>();
   const out: FontEntry[] = [];
   const files = dirs.flatMap((d) => listFiles(d));
@@ -95,7 +95,9 @@ export function scanFonts(dirs = fontDirectories(), cache?: ScanCache): FontEntr
       if (cache && stat) cache[file] = { size: stat.size, mtimeMs: stat.mtimeMs, faces };
     }
     for (const info of faces) {
-      if (!info.japanese || !info.vertical || !info.embeddable || info.variable || !info.postscriptName) continue;
+      if (!info.embeddable || info.variable || !info.postscriptName) continue;
+      // 本文の書体の一覧は、縦書きに使える日本語フォントだけ。欧文の一覧は、埋め込めるフォントすべて。
+      if (kind === "vertical" && (!info.japanese || !info.vertical)) continue;
       if (seen.has(info.postscriptName)) continue;
       seen.add(info.postscriptName);
       const style = info.subfamilyName && !/^(Regular|標準|R)$/i.test(info.subfamilyName) ? info.subfamilyName : "";

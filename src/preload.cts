@@ -9,6 +9,7 @@ const invoke =
 contextBridge.exposeInMainWorld("api", {
   init: invoke("init"),
   listFonts: invoke("fonts:list"),
+  listAllFonts: invoke("fonts:list-all"),
   typeset: invoke("typeset"),
   pages: invoke("pages"),
   openDocument: invoke("doc:open"),

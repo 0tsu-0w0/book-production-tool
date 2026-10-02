@@ -43,6 +43,18 @@ export class FontService {
   /** cacheFile を渡すと、フォントを調べた結果をそのファイルに控え、次の起動で使い回す。 */
   constructor(private readonly options: { cacheFile?: string } = {}) {}
 
+  private latinCatalog: FontEntry[] | undefined;
+
+  /** 合成フォントの欧文に使える書体：PC に入っている、埋め込める書体すべて（日本語のフォントも含む）。 */
+  listAll(): FontEntry[] {
+    if (!this.latinCatalog) {
+      const cache = this.readCache();
+      this.latinCatalog = scanFonts(undefined, cache, "any");
+      this.writeCache(cache);
+    }
+    return this.latinCatalog;
+  }
+
   /** 同梱フォントを先頭に、PC に入っている縦書き用の日本語フォントを続けた一覧。 */
   list(): FontEntry[] {
     if (!this.catalog) {
@@ -114,8 +126,8 @@ export class FontService {
    * 文書で使うフォントをまとめて読む。先頭が本文の書体、続いてスタイルで指定した書体。
    * keys には、スタイルが指定したフォントのキーを入れる（見つからず代わりのフォントになっても、指定の側で引けるように）。
    */
-  loadTable(body: FontChoice | null, styles: StyleSheet): { table: FontTable; loaded: LoadedFont[]; warnings: string[] } {
-    const choices = requiredFonts(body, styles);
+  loadTable(body: FontChoice | null, styles: StyleSheet, extra: (FontChoice | null)[] = []): { table: FontTable; loaded: LoadedFont[]; warnings: string[] } {
+    const choices = requiredFonts(body, styles, extra);
     const loaded = choices.map((c) => this.load(c));
     const keys = choices.map((c, i) => (i === 0 || !c ? fontKey(loaded[i].choice) : fontKey(c)));
     const warnings = [...new Set(loaded.flatMap((l) => (l.warning ? [l.warning] : [])))];

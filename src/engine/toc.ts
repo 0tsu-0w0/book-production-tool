@@ -22,8 +22,11 @@ export function headingBlocks(blocks: Block[]): Extract<TextBlock, { kind: "head
 }
 
 /** 組んだページから、見出しごとのページ番号を出てくる順に取り出す。 */
-export function headingPageNumbers(pages: PageLayout[], firstPageNumber: number): number[] {
-  return pages.flatMap((p) => p.headings.map(() => firstPageNumber + p.index));
+/** ページの番号の付け方（ページの一覧と、そのページの番号）。既定は通し番号。 */
+export type PageNumberOf = (pages: PageLayout[], index: number) => number;
+
+export function headingPageNumbers(pages: PageLayout[], firstPageNumber: number, numberOf?: PageNumberOf): number[] {
+  return pages.flatMap((p) => p.headings.map(() => (numberOf ? numberOf(pages, p.index) : firstPageNumber + p.index)));
 }
 
 /**
@@ -45,9 +48,9 @@ function numberAtoms(n: number, numerals: TocSettings["numerals"], horizontal = 
 }
 
 /** 原稿の［＃ページ：名前］に、そのラベルのあるページ番号を入れる。番号が変わったら true（組み直しが要る）。ないラベルは「？」。 */
-export function resolvePageRefs(blocks: Block[], pages: PageLayout[], firstPageNumber: number, numerals: TocSettings["numerals"], horizontal = false): boolean {
+export function resolvePageRefs(blocks: Block[], pages: PageLayout[], firstPageNumber: number, numerals: TocSettings["numerals"], horizontal = false, numberOf?: PageNumberOf): boolean {
   const where = new Map<string, number>();
-  for (const p of pages) for (const l of p.labels ?? []) if (!where.has(l)) where.set(l, firstPageNumber + p.index);
+  for (const p of pages) for (const l of p.labels ?? []) if (!where.has(l)) where.set(l, numberOf ? numberOf(pages, p.index) : firstPageNumber + p.index);
   let changed = false;
   for (const block of textBlocks(blocks)) {
     for (const atom of block.atoms) {
@@ -110,6 +113,7 @@ export function layoutWithToc(
   prepare: (blocks: Block[]) => void,
   layout: (blocks: Block[]) => PageLayout[],
   horizontal = false,
+  numberOf?: PageNumberOf,
 ): { blocks: Block[]; pages: PageLayout[] } {
   const headings = headingBlocks(blocks);
   // 仮の番号：見出しの数だけ同じ幅（3桁）の番号を入れておく。
@@ -121,7 +125,7 @@ export function layoutWithToc(
     // 本文の段落は2回目からは変わらないので、目次の段落だけに当て直す。
     prepare(pass === 0 ? expanded : toc);
     result = { blocks: expanded, pages: layout(expanded) };
-    const next = headingPageNumbers(result.pages, firstPageNumber);
+    const next = headingPageNumbers(result.pages, firstPageNumber, numberOf);
     if (next.length === numbers.length && next.every((n, i) => n === numbers[i])) break;
     numbers = next;
   }

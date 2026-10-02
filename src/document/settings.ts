@@ -1,4 +1,4 @@
-import type { Decoration, HeadSource, MasterSettings, NamedMaster, PageDecor, Placement } from "../engine/decorate.js";
+import { DEFAULT_NOMBRE_STYLE, type Decoration, type HeadSource, type MasterSettings, type NamedMaster, type NombreStyle, type PageDecor, type Placement } from "../engine/decorate.js";
 import type { FormatOptions } from "../engine/format.js";
 import type { ParseOptions } from "../engine/parse.js";
 import type { Typography } from "../engine/spacing.js";
@@ -263,6 +263,13 @@ export interface Settings {
   toc: TocSettings;
   /** 注（［＃注：…］）を置く場所：章ごと（次の大見出しの前）か本の終わり。 */
   notes: { placement: "chapter" | "end" | "page" };
+  /** ノンブルの書き方（前付けの番号・数字）と位置の微調整。 */
+  nombreStyle: NombreStyle;
+  /**
+   * 合成フォント：本文の書体の字のうち、かな（ひらがな・カタカナ）と欧文（半角の英数字・記号）を別の書体にする。
+   * null なら本文の書体のまま。スタイルで書体を指定した字には効かない。
+   */
+  compositeFont: { kana: FontChoice | null; latin: FontChoice | null };
   /** 表紙（表1・背・表4）。題と著者名は書誌のもの。 */
   cover: CoverSettings;
   /** 詳細設定。 */
@@ -385,6 +392,8 @@ export const DEFAULT_SETTINGS: Settings = {
   pages: { front: [], back: [], padTo: 1 },
   toc: { title: "目次", levels: 2, numerals: "arabic", leader: "…" },
   notes: { placement: "chapter" },
+  nombreStyle: { ...DEFAULT_NOMBRE_STYLE },
+  compositeFont: { kana: null, latin: null },
   cover: { background: "#ffffff", textColor: "#000000", frontImage: "", backImage: "", spineText: true },
   advanced: {
     rubyPercent: 50,
@@ -586,6 +595,13 @@ export function normalizeSettings(input: unknown): Settings {
   a.safeMarginMm = clamp(a.safeMarginMm, 0, 10);
   if (s.output.pdfStandard !== "x4") s.output.pdfStandard = "x1a";
   if (s.notes.placement !== "end" && s.notes.placement !== "page") s.notes.placement = "chapter";
+  if (!isFontChoice(s.compositeFont.kana)) s.compositeFont.kana = null;
+  if (!isFontChoice(s.compositeFont.latin)) s.compositeFont.latin = null;
+  const ns = s.nombreStyle;
+  if (!["continue", "roman", "roman-upper", "none"].includes(ns.front)) ns.front = "continue";
+  if (!["arabic", "fullwidth", "kanji"].includes(ns.numerals)) ns.numerals = "arabic";
+  ns.outerMm = Number.isFinite(ns.outerMm) ? Math.min(30, Math.max(-30, ns.outerMm)) : 0;
+  ns.downMm = Number.isFinite(ns.downMm) ? Math.min(30, Math.max(-30, ns.downMm)) : 0;
   if (!/^#[0-9a-f]{6}$/i.test(s.cover.background)) s.cover.background = "#ffffff";
   if (!/^#[0-9a-f]{6}$/i.test(s.cover.textColor)) s.cover.textColor = "#000000";
   if (s.toc.levels !== 1) s.toc.levels = 2;
@@ -652,6 +668,11 @@ export function toParseOptions(s: Settings): ParseOptions {
   return { tcyDigits: s.format.tcyDigits, halfWidth: s.format.halfWidth, pageBreakMark: s.format.pageBreakMark, tcyMaxDigits: s.advanced.tcyMaxDigits };
 }
 
+/** 合成フォントで使う書体（かな・欧文の順。使わないものは null）。フォントを読むときに本文・スタイルの書体に足す。 */
+export function compositeFonts(s: Pick<Settings, "compositeFont">): (FontChoice | null)[] {
+  return [s.compositeFont.kana, s.compositeFont.latin];
+}
+
 /** 横組みの句読点に置き換える（字数は変わらないので、原稿の位置はずれない）。 */
 export function horizontalPunctuation(text: string, s: Settings): string {
   if (!leftBound(s) || s.book.punctuation === "、。") return text;
@@ -682,5 +703,6 @@ export function toPageDecor(s: Settings): PageDecor {
     decoration,
     decoColor1,
     decoColor2,
+    nombreStyle: s.nombreStyle,
   };
 }

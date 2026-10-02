@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type TategumiDocument } from "./document/document.js";
-import type { Settings } from "./document/settings.js";
+import { compositeFonts, type Settings } from "./document/settings.js";
 import { BUILTIN_TEMPLATES, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
 import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
@@ -125,6 +125,8 @@ ipcMain.handle("init", () => {
 });
 
 ipcMain.handle("fonts:list", () => ({ list: fonts.list(), defaultChoice: fonts.defaultChoice() }));
+/** 合成フォントの欧文に使える書体の一覧（埋め込めるフォントすべて。初めて頼まれたときに調べる）。 */
+ipcMain.handle("fonts:list-all", () => fonts.listAll());
 
 /** 画面にすでに送った字形の輪郭（フォントごと）。同じ輪郭を毎回送り直さないため。 */
 const sentPaths = new Map<string, Set<number>>();
@@ -144,7 +146,7 @@ function pagesPayload(indices: number[]) {
 
 ipcMain.handle("typeset", (_e, text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo> = {}, caret?: [number, number]) => {
   const started = performance.now();
-  const { table, loaded, warnings } = fonts.loadTable(settings.font, settings.styles);
+  const { table, loaded, warnings } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
   const result = typesetLazy(text, settings, table, images);
   if (reset) sentPaths.clear();
   latest = { version: ++version, result, fonts: table };
@@ -360,7 +362,7 @@ function readIccFor(settings: Settings): { icc?: Uint8Array } | { error: string 
 
 /** 表紙の見本（設定欄に出す）。字形の輪郭は、まだ送っていないものだけ。 */
 ipcMain.handle("cover:preview", (_e, settings: Settings, pageCount: number, images: DocImage[] = []) => {
-  const { table } = fonts.loadTable(settings.font, settings.styles);
+  const { table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
   const r = typesetCover(settings, table, imageInfos(images), pageCount);
   return { page: r.page, paths: glyphPaths([r.page], table, sentPaths), fontKeys: table.keys, upems: table.faces.map((f) => f.upem), spineMm: r.spineMm, widthMm: r.widthMm, heightMm: r.heightMm };
 });
@@ -375,7 +377,7 @@ ipcMain.handle("cover:export", async (_e, settings: Settings, pageCount: number,
     : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}_表紙.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
   if (canceled || !filePath) return undefined;
   try {
-    const { loaded, table } = fonts.loadTable(settings.font, settings.styles);
+    const { loaded, table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
     const r = typesetCover(settings, table, imageInfos(images), pageCount);
     const options = { ...pdfOptions(settings, path.basename(filePath, ".pdf")), icc: iccRead.icc };
     const sources = images.map((i) => ({ name: i.name, mime: i.mime, bytes: Buffer.from(i.data, "base64") }));
@@ -421,7 +423,7 @@ ipcMain.handle("pdf:export", (_e, text: string, settings: Settings, baseName: st
 /** PDF を書き出す（保存先を聞いて、別スレッドで組んで書き出し、入稿用なら検査する）。 */
 async function exportPdfFile(text: string, settings: Settings, baseName: string, images: DocImage[]) {
   if (snapshotDir && !autoPdf) return undefined;
-  const { loaded, table } = fonts.loadTable(settings.font, settings.styles);
+  const { loaded, table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
   const { canceled, filePath } = autoPdf
     ? { canceled: false, filePath: path.resolve(autoPdf) }
     : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
@@ -528,7 +530,7 @@ ipcMain.handle("book:info", (_e, bookPath: string, book: Book) => {
   const { docs, errors } = loadBookDocs(bookPath, book);
   const combined = combineBook(book, docs);
   if (combined.included.length === 0) return { pages: 0, ranges: [], errors, renamed: [] };
-  const { table } = fonts.loadTable(combined.settings.font, combined.settings.styles);
+  const { table } = fonts.loadTable(combined.settings.font, combined.settings.styles, compositeFonts(combined.settings));
   const result = typesetLazy(combined.text, combined.settings, table, imageInfos(combined.images));
   const starts = result.labelPages();
   const first = combined.settings.nombreStart;
@@ -632,7 +634,7 @@ ipcMain.handle("images:end", (_e, ok: boolean) => {
 
 /** 校正の補助（DTP-16）：表記ゆれは原稿から、禁則違反と段落末の1文字の行は組んだ結果から探す。 */
 ipcMain.handle("proof", (_e, text: string, settings: Settings, images: Record<string, ImageInfo> = {}) => {
-  const { table } = fonts.loadTable(settings.font, settings.styles);
+  const { table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
   const result = typesetLazy(text, settings, table, images);
   const extra = { start: settings.advanced.kinsokuStartExtra, end: settings.advanced.kinsokuEndExtra };
   return { variants: findVariants(text), ...checkLines(result.pageCount, (i) => result.lines(i), extra) };
@@ -640,7 +642,7 @@ ipcMain.handle("proof", (_e, text: string, settings: Settings, images: Record<st
 
 /** 書き出す前の検査（OUT-09）。 */
 ipcMain.handle("preflight", (_e, text: string, settings: Settings, target: "pdf" | "images", images: Record<string, ImageInfo> = {}) => {
-  const { table, warnings } = fonts.loadTable(settings.font, settings.styles);
+  const { table, warnings } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
   const result = typesetLazy(text, settings, table, images);
   return preflight({
     settings,
@@ -657,6 +659,9 @@ ipcMain.handle("preflight", (_e, text: string, settings: Settings, target: "pdf"
 ipcMain.handle("snapshot:save", async (_e, images: ArrayBuffer[]) => {
   if (!snapshotDir) return;
   fs.mkdirSync(snapshotDir, { recursive: true });
+  // 隠した窓は描き直しが間引かれるので、描き直させてから撮る。
+  win!.webContents.invalidate();
+  await new Promise((r) => setTimeout(r, 300));
   const window = await win!.webContents.capturePage();
   fs.writeFileSync(path.join(snapshotDir, "window.png"), window.toPNG());
   images.forEach((b, i) => fs.writeFileSync(path.join(snapshotDir, `shot-${String(i + 1).padStart(2, "0")}.png`), Buffer.from(b)));
@@ -707,6 +712,9 @@ function buildMenu() {
         { role: "copy", label: "コピー" },
         { role: "paste", label: "貼り付け" },
         { role: "selectAll", label: "すべて選択" },
+        { type: "separator" },
+        cmd("検索…", "find", "CmdOrCtrl+F"),
+        cmd("置換…", "replace", "CmdOrCtrl+H"),
       ],
     },
     {

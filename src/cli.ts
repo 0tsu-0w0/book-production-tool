@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseDocument, type DocImage } from "./document/document.js";
-import { DEFAULT_SETTINGS, type Settings } from "./document/settings.js";
+import { DEFAULT_SETTINGS, compositeFonts, type Settings } from "./document/settings.js";
 import { FontService } from "./fonts/service.js";
 import { exportPdf } from "./output/export-pdf.js";
 import { SAMPLE_TEXT } from "./sample.js";
@@ -21,7 +21,7 @@ else if (input) text = fs.readFileSync(input, "utf8");
 if (input?.endsWith(".tex")) settings.format.markup = "tex";
 settings.pdfKind = flags.has("--screen") ? "screen" : flags.has("--no-marks") ? "print-nomarks" : settings.pdfKind;
 
-const { loaded, table, warnings } = new FontService().loadTable(settings.font, settings.styles);
+const { loaded, table, warnings } = new FontService().loadTable(settings.font, settings.styles, compositeFonts(settings));
 for (const w of warnings) console.warn(w);
 const font = loaded[0];
 const started = performance.now();

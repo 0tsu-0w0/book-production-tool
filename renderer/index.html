@@ -44,7 +44,10 @@
         <button data-insert="end" title="文末へ移動">文末へ</button>
         <button data-insert="clear" class="danger" title="本文を消す">本文クリア</button>
       </div>
-      <textarea id="source" spellcheck="false" aria-label="原稿"></textarea>
+      <div class="source-wrap" id="source-wrap">
+        <div class="source-backdrop" id="source-backdrop" aria-hidden="true"></div>
+        <textarea id="source" spellcheck="false" aria-label="原稿"></textarea>
+      </div>
       <div class="editor-status" id="counts">–</div>
     </section>
 

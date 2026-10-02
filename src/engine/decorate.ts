@@ -86,12 +86,33 @@ export interface PageDecor {
   noteScale?: number;
   /** 名前を付けたマスターページ。 */
   masters?: NamedMaster[];
+  /** ノンブルの書き方と位置の微調整。 */
+  nombreStyle?: NombreStyle;
+  /** 本文の始まりのページ（0始まり）。前付けを別の番号にするときに使う（組んだあとで決まる）。 */
+  bodyStart?: number;
   paperColor: string;
   textColor: string;
   decoration: Decoration;
   decoColor1: string;
   decoColor2: string;
 }
+
+/**
+ * ノンブルの書き方。front は前付け（本文の前のページ：本扉・目次など）の番号：通し番号のまま・ローマ数字・番号なし。
+ * 通し番号以外では、本文は開始番号から数え直す。numerals は本文の番号の数字。outerMm・downMm は位置の微調整
+ * （小口の側へ・下へ。負なら逆）。
+ */
+export interface NombreStyle {
+  front: "continue" | "roman" | "roman-upper" | "none";
+  numerals: "arabic" | "fullwidth" | "kanji";
+  outerMm: number;
+  downMm: number;
+}
+
+export const DEFAULT_NOMBRE_STYLE: NombreStyle = { front: "continue", numerals: "arabic", outerMm: 0, downMm: 0 };
+
+/** 本文の始まりに付けるラベル（前付けと本文の境目を知るため）。 */
+export const BODY_START_LABEL = "tategumi-body-start";
 
 type Corner = "tl" | "tr" | "bl" | "br" | "bc";
 
@@ -105,8 +126,52 @@ const PLACEMENTS: Record<Placement, { note: Corner; nombre: Corner; note2: Corne
 
 const MIRROR: Record<Corner, Corner> = { tl: "tr", tr: "tl", bl: "br", br: "bl", bc: "bc" };
 
+/** ページの通しの番号（奇数・偶数ページの判定に使う。ノンブルの書き方では変わらない）。 */
 export function pageNumber(page: PageLayout, d: PageDecor): number {
   return d.nombreStart + page.index;
+}
+
+const ROMAN: [number, string][] = [
+  [1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"], [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"],
+];
+
+export function toRoman(n: number): string {
+  let out = "";
+  for (const [v, s] of ROMAN) while (n >= v) [out, n] = [out + s, n - v];
+  return out;
+}
+
+const KANJI_DIGITS = "〇一二三四五六七八九";
+
+/** 前付けを本文と別の番号にするか。 */
+const separateFront = (d: Pick<PageDecor, "nombreStyle">) => (d.nombreStyle?.front ?? "continue") !== "continue";
+
+/**
+ * 本文のページの番号（目次・ページ番号の参照で使う）。前付けを別の番号にするときは、本文の始まりを開始番号として数える。
+ */
+export function displayNumber(index: number, d: Pick<PageDecor, "nombreStart" | "nombreStyle" | "bodyStart">): number {
+  if (separateFront(d) && d.bodyStart !== undefined) return d.nombreStart + index - d.bodyStart;
+  return d.nombreStart + index;
+}
+
+/** ページに出すノンブルの文字（前付けはローマ数字・番号なし。本文は数字の書き方どおり）。 */
+export function nombreText(page: PageLayout, d: PageDecor): string {
+  const st = d.nombreStyle ?? DEFAULT_NOMBRE_STYLE;
+  if (separateFront(d) && d.bodyStart !== undefined && page.index < d.bodyStart) {
+    if (st.front === "none") return "";
+    const r = toRoman(page.index + 1);
+    return st.front === "roman-upper" ? r.toUpperCase() : r;
+  }
+  const n = displayNumber(page.index, d);
+  if (st.numerals === "kanji") return [...String(n)].map((c) => KANJI_DIGITS[Number(c)] ?? c).join("");
+  if (st.numerals === "fullwidth") return String(n).replace(/[0-9]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
+  return String(n);
+}
+
+/** 前付けのページで、ローマ数字のノンブルを付けるページか（目次・自由なページ・白ページ）。 */
+function frontNumbered(page: PageLayout, d: PageDecor): boolean {
+  const front = d.nombreStyle?.front ?? "continue";
+  return (front === "roman" || front === "roman-upper") && d.bodyStart !== undefined && page.index < d.bodyStart && (page.role === "toc" || page.role === "free");
 }
 
 export function decoratePage(page: PageLayout, decor: PageDecor, bodySize: number, running: RunningHeads = { chapter: "", section: "" }): void {
@@ -128,6 +193,12 @@ export function decoratePage(page: PageLayout, decor: PageDecor, bodySize: numbe
       }
     : decor;
   page.paper = d.paperColor;
+  // 前付けをローマ数字で数えるときは、目次・自由なページにもノンブルだけ付ける（柱・付記・飾りは付けない）。
+  if (frontNumbered(page, d)) {
+    if (d.mode === "book") placeMaster(page, d, running, true);
+    else placeNotes(page, d, bodySize, true);
+    return;
+  }
   // 扉・奥付などには柱もノンブルも付けない（隠しノンブル）。
   if (page.role !== "body" && page.role !== "blank") return;
   if (page.lineCount === 0 && !d.blankPageNombre) return;
@@ -145,14 +216,15 @@ export function decoratePage(page: PageLayout, decor: PageDecor, bodySize: numbe
  * マスターページの柱とノンブルを置く。右綴じの本では、奇数ページは左ページで左側が小口、
  * 偶数ページは右ページで右側が小口になる。
  */
-function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads): void {
+function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads, nombreOnly = false): void {
   const m = d.master;
   const n = pageNumber(page, d);
   const odd = n % 2 !== 0;
   const opening = page.headings.some((h) => h.level === 1);
   const source = opening ? (odd ? m.openingOdd : m.openingEven) : odd ? m.bodyOdd : m.bodyEven;
-  const head = { none: "", "book-title": m.bookTitle, chapter: running.chapter, section: running.section || running.chapter }[source];
-  const nombre = (opening ? m.openingNombre : m.bodyNombre) ? String(n) : "";
+  const head = nombreOnly ? "" : { none: "", "book-title": m.bookTitle, chapter: running.chapter, section: running.section || running.chapter }[source];
+  const nombre = nombreOnly || (opening ? m.openingNombre : m.bodyNombre) ? nombreText(page, d) : "";
+  const st = d.nombreStyle ?? DEFAULT_NOMBRE_STYLE;
   const { block } = page;
   const gap = m.gapMm * MM;
   const size = m.sizePt;
@@ -164,12 +236,15 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads): voi
   const bottomY = block.top + block.height + gap + size * 0.8;
   const horiz = (text: string, x: number, y: number, align: "left" | "center" | "right") =>
     page.glyphs.push({ text, kind: "horiz", x, y, size, color: d.textColor, align });
+  // ノンブルの位置の微調整：小口の側へ（中央なら動かさない）・下へ。
+  const shiftX = (align: "left" | "center" | "right") => (align === "center" ? 0 : (leftOuter ? -1 : 1) * st.outerMm * MM);
+  const shiftY = st.downMm * MM;
 
   // ノンブルと柱がどちらも上の小口側に来るときは、1行にまとめる（小口側にノンブル）。
   if (m.headPosition === "top-outer" && m.nombrePosition === "top-outer") {
     const parts = leftOuter ? [nombre, head] : [head, nombre];
     const text = parts.filter(Boolean).join("　");
-    if (text) horiz(text, outerX, topY, outerAlign);
+    if (text) horiz(text, outerX + (nombre ? shiftX(outerAlign) : 0), topY + (nombre ? shiftY : 0), outerAlign);
     return;
   }
 
@@ -183,33 +258,42 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads): voi
     }
   }
   if (nombre) {
-    if (m.nombrePosition === "bottom-outer") horiz(nombre, outerX, bottomY, outerAlign);
-    else if (m.nombrePosition === "bottom-center") horiz(nombre, block.left + block.width / 2, bottomY, "center");
-    else horiz(nombre, outerX, topY, outerAlign);
+    if (m.nombrePosition === "bottom-outer") horiz(nombre, outerX + shiftX(outerAlign), bottomY + shiftY, outerAlign);
+    else if (m.nombrePosition === "bottom-center") horiz(nombre, block.left + block.width / 2, bottomY + shiftY, "center");
+    else horiz(nombre, outerX + shiftX(outerAlign), topY + shiftY, outerAlign);
   }
 }
 
-function placeNotes(page: PageLayout, d: PageDecor, bodySize: number): void {
+function placeNotes(page: PageLayout, d: PageDecor, bodySize: number, nombreOnly = false): void {
   const n = pageNumber(page, d);
   const mirrored = d.spread && n % 2 === 0;
   const p = PLACEMENTS[d.placement];
   const corner = (c: Corner) => (mirrored ? MIRROR[c] : c);
-  const showNotes = !mirrored;
+  const showNotes = !mirrored && !nombreOnly;
   const size = bodySize * (d.noteScale ?? 0.8);
-  const nombreText = d.nombre ? String(n) : "";
+  const nombre = d.nombre ? nombreText(page, d) : "";
+  const st = d.nombreStyle ?? DEFAULT_NOMBRE_STYLE;
 
-  const texts: { corner: Corner; text: string; color: string }[] = [];
+  const texts: { corner: Corner; text: string; color: string; nombre: boolean }[] = [];
   if (p.together) {
-    const joined = [nombreText, showNotes ? d.note1 : ""].filter(Boolean).join("　");
-    if (joined) texts.push({ corner: corner(p.note), text: joined, color: d.textColor });
+    const joined = [nombre, showNotes ? d.note1 : ""].filter(Boolean).join("　");
+    if (joined) texts.push({ corner: corner(p.note), text: joined, color: d.textColor, nombre: !!nombre });
   } else {
-    if (showNotes && d.note1) texts.push({ corner: corner(p.note), text: d.note1, color: d.textColor });
-    if (nombreText) texts.push({ corner: corner(p.nombre), text: nombreText, color: d.textColor });
+    if (showNotes && d.note1) texts.push({ corner: corner(p.note), text: d.note1, color: d.textColor, nombre: false });
+    if (nombre) texts.push({ corner: corner(p.nombre), text: nombre, color: d.textColor, nombre: true });
   }
   if (showNotes && d.note2) {
-    texts.push({ corner: corner(p.note2), text: d.note2, color: d.note2Faint ? mix(d.textColor, d.paperColor, 0.45) : d.textColor });
+    texts.push({ corner: corner(p.note2), text: d.note2, color: d.note2Faint ? mix(d.textColor, d.paperColor, 0.45) : d.textColor, nombre: false });
   }
-  for (const t of texts) page.glyphs.push(placeCornerText(page, t.corner, t.text, size, t.color));
+  for (const t of texts) {
+    const g = placeCornerText(page, t.corner, t.text, size, t.color);
+    if (t.nombre) {
+      // ノンブルの位置の微調整：左の隅なら左へ、右の隅なら右へ（外側へ）、下へ。
+      g.x += t.corner === "bc" ? 0 : (t.corner[1] === "l" ? -1 : 1) * st.outerMm * MM;
+      g.y += st.downMm * MM;
+    }
+    page.glyphs.push(g);
+  }
 }
 
 function placeCornerText(page: PageLayout, corner: Corner, text: string, size: number, color: string): PlacedGlyph {

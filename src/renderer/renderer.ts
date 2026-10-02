@@ -5,6 +5,7 @@ import type { ImageInfo } from "../engine/types.js";
 import { ImageManager } from "./image-manager.js";
 import { BookDialog, type BookInfo } from "./book-dialog.js";
 import type { Book } from "../document/book.js";
+import { FindReplace } from "./find-replace.js";
 import { CoverPreview } from "./cover-preview.js";
 import { PageTyping } from "./page-typing.js";
 import { InlineEditor } from "./inline-editor.js";
@@ -65,6 +66,7 @@ interface Api extends TemplateApi {
     startPage: number;
   }>;
   listFonts(): Promise<{ list: FontOption[]; defaultChoice: FontChoice }>;
+  listAllFonts(): Promise<FontOption[]>;
   typeset(text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo>, caret?: [number, number]): Promise<TypesetResult>;
   pages(version: number, indices: number[]): Promise<{ pages: DrawPage[]; paths: Record<string, Record<number, string>> } | null>;
   openDocument(): Promise<Opened | undefined>;
@@ -189,6 +191,16 @@ const inlineEditor = new InlineEditor({
     document.execCommand("insertText", false, text);
     setStatus(`原稿の${line + 1}行目を直しました（Ctrl+Z で戻せます）。`);
   },
+});
+
+// 検索と置換（Ctrl+F・Ctrl+H・F3）。
+const finder = new FindReplace({ source, setStatus: (text) => setStatus(text) }, $<HTMLDivElement>("source-backdrop"));
+document.querySelector(".editor .assist")!.after(finder.bar);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "F3") {
+    e.preventDefault();
+    finder.step(e.shiftKey ? -1 : 1);
+  }
 });
 
 // 紙面に直接打って直す（カーソルを置いて打つ）。
@@ -749,6 +761,10 @@ async function runCommand(command: string) {
       return templates.open();
     case "book":
       return bookDialog.open();
+    case "find":
+      return finder.open(false);
+    case "replace":
+      return finder.open(true);
     case "open":
       return open();
     case "save":
@@ -850,6 +866,7 @@ api.onProgress((p) => {
 const init = await api.init();
 panel.render(settings);
 void api.listFonts().then(({ list, defaultChoice }) => panel.setFonts(list, defaultChoice.name));
+panel.loadAllFonts = () => api.listAllFonts();
 
 if (init.opened && "error" in init.opened) alert(init.opened.error);
 if (init.book) void bookDialog.open(init.book);

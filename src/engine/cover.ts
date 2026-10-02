@@ -17,7 +17,7 @@ export function typesetCover(settings: Settings, fonts: FontTable, images: Recor
   const info = settings.bookInfo;
   const text = (s: string, style: string): Block & { kind: "para" } => ({ kind: "para", style, atoms: parseInline(s.replace(/\n/g, "　")) });
   const blocks = [text(info.title, TITLE_STYLE), text(info.author, AUTHOR_STYLE), text(info.title, TITLE_STYLE), text(info.author, AUTHOR_STYLE)];
-  applyStyles(blocks, engineStyles(settings.styles, fonts));
+  applyStyles(blocks, engineStyles(settings.styles, fonts, settings.compositeFont));
   measureRotated(blocks, fonts.faces);
   prepareSpacing(blocks, spec.typography, spec.rubyScale);
   applyProportional(blocks, fonts.faces);

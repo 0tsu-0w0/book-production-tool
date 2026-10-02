@@ -241,7 +241,21 @@ function sections(): Section[] {
     {
       title: "付記とノンブル",
       fields: [
-        { kind: "info", when: isBook, render: () => "詳しい組み方では、「柱とマスターページ」で柱とノンブルを決めます。" },
+        { kind: "info", when: isBook, render: () => "詳しい組み方では、「柱とマスターページ」で柱とノンブルを決めます。下のノンブルの書き方と位置の微調整は、どちらの組み方でも使えます。" },
+        {
+          kind: "select",
+          path: "nombreStyle.front",
+          label: "前付け（本扉・目次など）のノンブル",
+          options: [
+            ["continue", "本文と通し番号"],
+            ["roman", "ローマ数字（i, ii, iii…）・本文は開始番号から"],
+            ["roman-upper", "ローマ数字（I, II, III…）・本文は開始番号から"],
+            ["none", "番号なし・本文は開始番号から"],
+          ],
+        },
+        { kind: "select", path: "nombreStyle.numerals", label: "本文のノンブルの数字", options: [["arabic", "算用数字（1, 2, 3）"], ["fullwidth", "全角の算用数字（１, ２, ３）"], ["kanji", "漢数字（一, 二, 三）"]] },
+        { kind: "number", path: "nombreStyle.outerMm", label: "ノンブルの位置：小口の側へ（負なら内側へ）", min: -30, max: 30, step: 0.5, unit: "mm" },
+        { kind: "number", path: "nombreStyle.downMm", label: "ノンブルの位置：下へ（負なら上へ）", min: -30, max: 30, step: 0.5, unit: "mm" },
         { kind: "text", path: "note1", label: "付記1", placeholder: "作品名など", when: isSimple },
         { kind: "text", path: "note2", label: "付記2（付記1の対角に置く）", placeholder: "作者名など", when: isSimple },
         { kind: "check", path: "note2Faint", label: "付記2を薄くする", when: isSimple },
@@ -530,6 +544,10 @@ export class SettingsPanel {
   private settings!: Settings;
   private fonts: FontOption[] = [];
   private defaultFontName = "";
+  /** 合成フォントの欧文に使える書体（埋め込めるフォントすべて）。開いたときに読み込む。 */
+  private allFonts: FontOption[] | undefined;
+  /** 欧文の書体の一覧を読み込む（読み込んだら設定欄を描き直す）。 */
+  loadAllFonts?: () => Promise<FontOption[]>;
   private readonly refreshers: (() => void)[] = [];
   /** 設定欄の外で中身を持つ部品（画像の一覧など）。 */
   readonly custom = new Map<string, () => HTMLElement>();
@@ -765,29 +783,55 @@ export class SettingsPanel {
     return box;
   }
 
-  private buildFont(title: (t: string) => HTMLElement): HTMLElement {
+  /** 書体を選ぶ欄（list の中から。空の選択肢は emptyLabel）。 */
+  private fontSelect(label: string, path: Path, list: FontOption[], emptyLabel: string, title: (t: string) => HTMLElement): HTMLElement {
     const wrap = document.createElement("label");
     wrap.className = "field";
     const select = document.createElement("select");
-    select.add(new Option(`既定（${this.defaultFontName || "読み込み中"}）`, ""));
-    for (const f of this.fonts) {
-      select.add(new Option(f.name, `${f.path}#${f.index}`));
-    }
-    const cur = this.settings.font;
+    select.add(new Option(emptyLabel, ""));
+    for (const f of list) select.add(new Option(f.name, `${f.path}#${f.index}`));
+    const cur = getPath(this.settings, path) as FontChoice | null;
     select.value = cur ? `${cur.path}#${cur.index}` : "";
     if (cur && select.value === "") {
-      // 一覧にないフォント（別の PC で作った文書）。選択肢に残して、見つからないことを示す。
-      select.add(new Option(`${cur.name}（見つかりません）`, `${cur.path}#${cur.index}`));
+      // 一覧にないフォント（別の PC で作った文書・まだ読み込んでいない一覧）。選択肢に残す。
+      select.add(new Option(list.length > 0 ? `${cur.name}（見つかりません）` : cur.name, `${cur.path}#${cur.index}`));
       select.value = `${cur.path}#${cur.index}`;
     }
     select.addEventListener("change", () => {
-      const f = this.fonts.find((x) => `${x.path}#${x.index}` === select.value);
-      this.changed("font", f ? { name: f.name, postscriptName: f.postscriptName, path: f.path, index: f.index } : null);
+      const f = list.find((x) => `${x.path}#${x.index}` === select.value);
+      if (!f && select.value !== "") return;
+      this.changed(path, f ? { name: f.name, postscriptName: f.postscriptName, path: f.path, index: f.index } : null);
     });
+    wrap.append(title(label), select);
+    return wrap;
+  }
+
+  private buildFont(title: (t: string) => HTMLElement): HTMLElement {
+    const box = document.createElement("div");
+    box.className = "fields";
+    box.style.padding = "0";
+    const body = this.fontSelect("本文の書体", "font", this.fonts, `既定（${this.defaultFontName || "読み込み中"}）`, title);
     const hint = document.createElement("p");
     hint.className = "hint";
     hint.textContent = "PC に入っている、縦書き用の字形を持つ日本語フォントを表示しています。";
-    wrap.append(title("本文の書体"), select, hint);
-    return wrap;
+    body.append(hint);
+
+    // 合成フォント：かなと欧文だけ別の書体にする。
+    const heading = document.createElement("p");
+    heading.className = "hint";
+    heading.textContent = "合成フォント：本文の書体の字のうち、かな（ひらがな・カタカナ）と欧文（半角の英数字・記号）だけを別の書体にできます。スタイルで書体を指定した字には効きません。";
+    const kana = this.fontSelect("かなの書体", "compositeFont.kana", this.fonts, "本文の書体のまま", title);
+    const latin = this.fontSelect("欧文・数字の書体", "compositeFont.latin", this.allFonts ?? [], this.allFonts ? "本文の書体のまま" : "本文の書体のまま（一覧を読み込んでいます…）", title);
+    if (!this.allFonts && this.loadAllFonts) {
+      // 欧文の一覧は、PC のフォントをすべて調べるので、書体の欄を開いたときに初めて読み込む。
+      const load = this.loadAllFonts;
+      this.loadAllFonts = undefined;
+      void load().then((list) => {
+        this.allFonts = list;
+        this.render(this.settings);
+      });
+    }
+    box.append(body, heading, kana, latin);
+    return box;
   }
 }

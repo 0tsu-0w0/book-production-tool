@@ -213,15 +213,16 @@ export function normalizeStyles(input: unknown): StyleSheet {
 }
 
 /** 文書で使うフォント：先頭が本文の書体、続いてスタイルで指定した書体（重複なし）。 */
-export function requiredFonts(bodyFont: FontChoice | null, styles: StyleSheet): (FontChoice | null)[] {
+export function requiredFonts(bodyFont: FontChoice | null, styles: StyleSheet, extra: (FontChoice | null)[] = []): (FontChoice | null)[] {
   const out: (FontChoice | null)[] = [bodyFont];
   const seen = new Set<string>();
-  for (const s of [...styles.paragraph, ...styles.character]) {
-    if (!s.font) continue;
-    const key = fontKey(s.font);
+  // スタイルの書体に続けて、合成フォントの書体（かな・欧文）。
+  for (const font of [...styles.paragraph, ...styles.character].map((s) => s.font).concat(extra)) {
+    if (!font) continue;
+    const key = fontKey(font);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(s.font);
+    out.push(font);
   }
   return out;
 }

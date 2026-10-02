@@ -2,7 +2,7 @@ import { placeNotes } from "./notes.js";
 import { horizontalPunctuation, leftBound, toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { fontKey, type StyleSheet } from "../document/styles.js";
 import { bookPageBlocks } from "./book-pages.js";
-import { decoratePage } from "./decorate.js";
+import { BODY_START_LABEL, decoratePage, displayNumber } from "./decorate.js";
 import { Face } from "./face.js";
 import { formatText } from "./format.js";
 import { layoutDocument } from "./layout.js";
@@ -68,7 +68,7 @@ export interface LazyTypesetResult extends Omit<TypesetResult, "pages"> {
 }
 
 /** スタイルの書体を、フォントの一覧の番号にする。 */
-export function engineStyles(sheet: StyleSheet, fonts: FontTable): EngineStyles {
+export function engineStyles(sheet: StyleSheet, fonts: FontTable, composite?: { kana: FontChoice | null; latin: FontChoice | null }): EngineStyles {
   const indexOf = (f: FontChoice | null, inherit: number) => {
     if (!f) return inherit;
     const i = fonts.keys.indexOf(fontKey(f));
@@ -77,6 +77,7 @@ export function engineStyles(sheet: StyleSheet, fonts: FontTable): EngineStyles 
   return {
     paragraph: new Map(sheet.paragraph.map((p) => [p.name, { ...p, font: indexOf(p.font, 0) }])),
     character: new Map(sheet.character.map((c) => [c.name, { ...c, font: indexOf(c.font, -1) }])),
+    ...(composite ? { kanaFont: indexOf(composite.kana, -1), latinFont: indexOf(composite.latin, -1) } : {}),
     body: "本文",
     heading1: "大見出し",
     heading2: "中見出し",
@@ -108,9 +109,15 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   // 原稿の段落にだけ行の番号がある（扉・奥付などの段落は原稿にない）。
   // 注を章末か巻末に集める。
   const noted = placeNotes(body, lineOf, settings.notes.placement);
-  const source = [...book.front, ...noted.blocks, ...book.back];
-  const sourceLines = [...book.front.map(() => -1), ...noted.lines.map((n) => n ?? -1), ...book.back.map(() => -1)].map((n) => (n < 0 ? undefined : n)) as number[];
-  const styles = engineStyles(settings.styles, fonts);
+  // 前付けのあとに、本文の始まりの印（前付けと本文でノンブルを分けるため）。
+  const bodyMark: Block[] = book.front.length > 0 ? [{ kind: "anchor", name: BODY_START_LABEL }] : [];
+  const source = [...book.front, ...bodyMark, ...noted.blocks, ...book.back];
+  const sourceLines = [...book.front.map(() => -1), ...bodyMark.map(() => -1), ...noted.lines.map((n) => n ?? -1), ...book.back.map(() => -1)].map((n) => (n < 0 ? undefined : n)) as number[];
+  // 目次・ページ番号の参照に入れる番号（前付けを別の番号にするときは、本文の始まりから数える）。
+  const decor = toPageDecor(settings);
+  const bodyStartOf = (pages: PageLayout[]) => pages.find((p) => p.labels?.includes(BODY_START_LABEL))?.index ?? 0;
+  const numberOf = (pages: PageLayout[], index: number) => displayNumber(index, { ...decor, bodyStart: bodyStartOf(pages) });
+  const styles = engineStyles(settings.styles, fonts, settings.compositeFont);
   // 数式があるときだけ MathJax を使う（読み込みに時間がかかるため）。
   const hasMath = textBlocks(source).some((b) => b.atoms.some((a) => a.cells.some((c) => c.math)));
   const mathErrors: string[] = [];
@@ -125,7 +132,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   let layouts: PageLayout[];
   if (hasToc(source)) {
     // 目次があれば、見出しのページ番号が決まるまで組み直す（DTP-14）。
-    ({ blocks, pages: layouts } = layoutWithToc(source, settings.toc, spec.firstPageNumber, prepare, (bs) => layoutDocument(bs, spec, sourceLines), !!spec.horizontal));
+    ({ blocks, pages: layouts } = layoutWithToc(source, settings.toc, spec.firstPageNumber, prepare, (bs) => layoutDocument(bs, spec, sourceLines), !!spec.horizontal, numberOf));
   } else {
     prepare(blocks);
     layouts = layoutDocument(blocks, spec, sourceLines);
@@ -133,12 +140,12 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   // ページ番号の参照（［＃ページ：名前］）：番号を入れて組み直し、番号が変わらなくなるまで繰り返す。
   if (hasPageRefs(blocks)) {
     for (let pass = 0; pass < 3; pass++) {
-      if (!resolvePageRefs(blocks, layouts, spec.firstPageNumber, settings.toc.numerals, !!spec.horizontal)) break;
+      if (!resolvePageRefs(blocks, layouts, spec.firstPageNumber, settings.toc.numerals, !!spec.horizontal, numberOf)) break;
       prepare(blocks);
       layouts = layoutDocument(blocks, spec, sourceLines);
     }
   }
-  const decor = toPageDecor(settings);
+  decor.bodyStart = bodyStartOf(layouts);
   // 柱に出す章題・節題は、そのページまでに出てきた最後の見出し。
   const running = { chapter: "", section: "" };
   for (const page of layouts) {
