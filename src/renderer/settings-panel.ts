@@ -432,6 +432,7 @@ function sections(): Section[] {
               : null,
         },
         { kind: "spots" },
+        { kind: "check", path: "output.epubFonts", label: "EPUB に書体を埋め込む（使った字だけに絞る）" },
         {
           kind: "info",
           render: (s) =>
@@ -479,7 +480,7 @@ function sections(): Section[] {
         { kind: "select", path: "image.dpi", label: "画像の解像度", numeric: true, options: DPI_OPTIONS },
         { kind: "number", path: "image.jpegQuality", label: "JPEGの品質", min: 0.5, max: 1, step: 0.01, when: (s) => s.image.format === "jpeg" },
         { kind: "check", path: "output.zipImages", label: "画像を1つの ZIP にまとめる" },
-        { kind: "text", path: "image.range", label: "書き出すページ（画像。空なら全ページ）", placeholder: "例：1-10, 15, 20-" },
+        { kind: "text", path: "image.range", label: "書き出すページ（画像。空なら全ページ）", placeholder: "例：1-10, 15, 20-（前付けは i-iii）" },
         { kind: "check", path: "image.snsGroups", label: "SNS 向けに4枚ずつの組（フォルダ）に分ける" },
         { kind: "text", path: "image.credit", label: "画像にだけ入れるクレジット（下の余白に小さく）", placeholder: "例：© 山田花子／Kolophon" },
         { kind: "select", path: "output.paper", label: "本文用紙（背幅の計算）", options: [...Object.keys(PAPERS).map((k): Opt => [k, `${k}（1枚 ${PAPERS[k]}mm）`]), [CUSTOM_PAPER, CUSTOM_PAPER]] },

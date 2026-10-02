@@ -32,6 +32,8 @@ export interface Cell {
   /** 長体・平体：字形の横・縦の伸縮率（字形そのものの向きで。省略時は 1）。 */
   sx?: number;
   sy?: number;
+  /** 全角の英数字を、合成フォントの欧文の書体で組む（半角の字を1マスの中央に立てる）。 */
+  halfLatin?: boolean;
   /** 原稿の行の中での位置（紙面から原稿へ戻るのに使う。DTP-15）。 */
   src?: number;
   /** 数式（text は TeX）。display なら別行数式。pad は前後の空き（em）。 */

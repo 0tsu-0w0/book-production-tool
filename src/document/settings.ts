@@ -218,6 +218,8 @@ export interface OutputSettings {
   spotColors: SpotColor[];
   /** 入稿用 PDF で、スミ（K100%）の文字・罫をノセ（オーバープリント）にする。 */
   overprintBlack: boolean;
+  /** EPUB に書体を埋め込む（使った字だけに絞る）。 */
+  epubFonts: boolean;
 }
 
 /** 特色の登録。 */
@@ -474,7 +476,7 @@ export const DEFAULT_SETTINGS: Settings = {
   font: null,
   image: { format: "png", dpi: 350, jpegQuality: 0.92, range: "", snsGroups: false, credit: "" },
   pdfKind: "print",
-  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "", outline: false, spotColors: [], overprintBlack: true },
+  output: { color: "auto", imposition: "single", zipImages: false, paper: "書籍用紙 72.5kg", paperThicknessMm: 0.1, pdfStandard: "x1a", iccPath: "", outline: false, spotColors: [], overprintBlack: true, epubFonts: true },
 };
 
 /** 紙1枚の厚さ（mm）。 */

@@ -1,6 +1,6 @@
 {
   "name": "kolophon",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",
@@ -73,8 +73,7 @@
       "!node_modules/@pdf-lib/fontkit/{es,lib}/**",
       "!node_modules/@pdf-lib/fontkit/dist/{fontkit.es.js,fontkit.es.min.js,fontkit.umd.min.js}",
       "!node_modules/@pdf-lib/standard-fonts/dist/**",
-      "!node_modules/@pdf-lib/upng/dist/**",
-      "!node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm"
+      "!node_modules/@pdf-lib/upng/dist/**"
     ],
     "asar": true,
     "fileAssociations": [

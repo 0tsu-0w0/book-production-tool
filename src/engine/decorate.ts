@@ -154,6 +154,15 @@ export function displayNumber(index: number, d: Pick<PageDecor, "nombreStart" | 
   return d.nombreStart + index;
 }
 
+/**
+ * ページの名前（画像のファイル名や、書き出すページの範囲に使う）。前付けを別の番号にするときは、
+ * 前付けは小文字のローマ数字（i・ii…。ノンブルを付けない設定でも）、本文は本文の番号を3桁（001）。
+ */
+export function pageLabel(index: number, d: Pick<PageDecor, "nombreStart" | "nombreStyle" | "bodyStart">): string {
+  if (separateFront(d) && d.bodyStart !== undefined && index < d.bodyStart) return toRoman(index + 1);
+  return String(displayNumber(index, d)).padStart(3, "0");
+}
+
 /** ページに出すノンブルの文字（前付けはローマ数字・番号なし。本文は数字の書き方どおり）。 */
 export function nombreText(page: PageLayout, d: PageDecor): string {
   const st = d.nombreStyle ?? DEFAULT_NOMBRE_STYLE;

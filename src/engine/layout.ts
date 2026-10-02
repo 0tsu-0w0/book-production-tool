@@ -104,6 +104,9 @@ function atomWidth(a: Atom): number {
   return a.cells.reduce((sum, c) => sum + advance(c), 0);
 }
 
+/** 全角の英数字を半角にする。 */
+const toHalfWidth = (s: string) => s.replace(/[０-９Ａ-Ｚａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+
 /** 箇条書きの項目の印の幅（em）。 */
 function listMarkWidth(atoms: Atom[]): number {
   let w = 0;
@@ -1003,9 +1006,11 @@ function placeLine(
       }
       const scale = cell.scale ?? 1;
       const y = bandTop + (offset + shift) * size;
-      const kind = cell.math ? "math" : cell.rotate ? "rot" : cell.tcy ? "tcy" : "vert";
+      // 欧文の書体で組む全角の英数字は、半角の字を縦中横と同じく1マスの中央に立てる。
+      const kind = cell.math ? "math" : cell.rotate ? "rot" : cell.tcy || cell.halfLatin ? "tcy" : "vert";
+      const text = cell.halfLatin ? toHalfWidth(cell.text) : cell.text;
       // 1字ごとに作るので、使わない項目のための一時的なオブジェクトを作らない（組み直しを速くするため）。
-      const g: PlacedGlyph = { text: cell.text, kind, x, y, size: size * scale, font: cell.font, bold: cell.bold, color: cell.color };
+      const g: PlacedGlyph = { text, kind, x, y, size: size * scale, font: cell.font, bold: cell.bold, color: cell.color };
       if (cell.features) g.features = cell.features;
       if (cell.sx !== undefined) g.sx = cell.sx;
       if (cell.sy !== undefined) g.sy = cell.sy;

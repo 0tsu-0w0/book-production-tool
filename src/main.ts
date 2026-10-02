@@ -10,6 +10,7 @@ import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypes
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
+import { epubFonts } from "./output/epub-fonts.js";
 import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSION, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
 import { typesetCover } from "./engine/cover.js";
 import { checkPdfX } from "./output/check-pdfx.js";
@@ -322,6 +323,7 @@ ipcMain.handle("typeset", (_e, text: string, settings: Settings, reset: boolean,
     linesPerPage: result.linesPerPage,
     charsPerLine: result.charsPerLine,
     columns: result.columns,
+    pageLabels: result.pageLabels,
     pages,
     paths,
     caretPage,
@@ -750,7 +752,13 @@ async function exportEpubFile(text: string, settings: Settings, baseName: string
     : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.epub`, filters: [{ name: "EPUB（電子書籍）", extensions: ["epub"] }] });
   if (canceled || !filePath) return undefined;
   try {
-    const files = buildEpub(text, settings, images);
+    let files = buildEpub(text, settings, images);
+    // 書体を埋め込む：使った字を集めてから、その字だけに絞った書体を入れて作り直す。
+    if (settings.output.epubFonts) {
+      const { table, loaded } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
+      const embedded = epubFonts(files, settings, loaded, table.keys);
+      if (embedded.length > 0) files = buildEpub(text, settings, images, new Date(), embedded);
+    }
     const zip = new ZipWriter(filePath);
     writeEpub(files, (name, data) => zip.add(name, data));
     zip.close();
@@ -864,6 +872,27 @@ ipcMain.handle("window:close", () => {
   win?.close();
 });
 
+/**
+ * Kolophon の窓の中身を PNG で保存する。背景の「後ろの窓のすりガラス」の間は、OS のスクリーンショットに Kolophon が
+ * 写らないので、その代わりに使う（アプリが自分で描いた画面を保存するので、背景も含めて写る）。
+ */
+async function saveWindowImage() {
+  if (!win) return;
+  const image = await win.webContents.capturePage();
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: "画面を画像で保存",
+    defaultPath: path.join(app.getPath("pictures"), `Kolophon-${stamp}.png`),
+    filters: [{ name: "PNG 画像", extensions: ["png"] }],
+  });
+  if (canceled || !filePath) return;
+  try {
+    fs.writeFileSync(filePath, image.toPNG());
+  } catch (e) {
+    dialog.showErrorBox("保存できませんでした", String(e));
+  }
+}
+
 function buildMenu() {
   const cmd = (label: string, command: string, accelerator?: string): MenuItemConstructorOptions => ({
     label,
@@ -918,6 +947,7 @@ function buildMenu() {
         cmd("校正の補助…", "proof", "CmdOrCtrl+K"),
         { type: "separator" },
         cmd("背景…", "background"),
+        { label: "画面を画像で保存…", accelerator: "CmdOrCtrl+Shift+P", click: () => void saveWindowImage() },
         { type: "separator" },
         { role: "toggleDevTools", label: "開発者ツール" },
       ],

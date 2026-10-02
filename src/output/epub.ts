@@ -11,12 +11,29 @@ import type { Atom, Block, Cell, ImageBlock, TableBlock } from "../engine/types.
 
 // EPUB 3（リフロー型）の書き出し。原稿を Kolophon の記法で読み、段落・見出し・ルビ・圏点・縦中横・注・表・画像・
 // 数式（SVG）を XHTML にする。縦組みの本は縦書き（右から左へめくる）、横組みの本は横書き。
-// 改ページ・改丁・大見出しで XHTML を分ける。目次は見出しから作る（nav）。書体は埋め込まない（読む側の書体）。
+// 改ページ・改丁・大見出しで XHTML を分ける。目次は見出しから作る（nav）。
+// 書体は、渡されれば埋め込む（使った字だけに絞ったもの。epub-fonts.ts）。なければ読む側の書体。
 
 export interface EpubFile {
   name: string;
   data: Uint8Array;
 }
+
+/**
+ * 埋め込む書体。role：body は本文、ps・cs は段落・文字スタイル（index の番号）。
+ * range があれば、その字の範囲だけに使う（合成フォントのかな・欧文。CSS の unicode-range）。
+ */
+export interface EpubFont {
+  role: "body" | "ps" | "cs";
+  index?: number;
+  file: string;
+  mime: "font/ttf" | "font/otf";
+  data: Uint8Array;
+  range?: string;
+}
+
+/** CSS の書体の名前。 */
+const fontFamily = (f: Pick<EpubFont, "role" | "index">) => (f.role === "body" ? "kolophon-body" : `kolophon-${f.role}${f.index}`);
 
 const enc = new TextEncoder();
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
@@ -51,7 +68,7 @@ interface Heading {
 }
 
 /** 文書を EPUB のファイルの一覧にする（mimetype が先頭）。 */
-export function buildEpub(text: string, settings: Settings, images: DocImage[], now = new Date()): EpubFile[] {
+export function buildEpub(text: string, settings: Settings, images: DocImage[], now = new Date(), fonts: EpubFont[] = []): EpubFile[] {
   const vertical = !leftBound(settings);
   const opts = toParseOptions(settings);
   const tex = settings.format.markup === "tex" ? texToMarkup(text) : null;
@@ -307,7 +324,10 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   const add = (name: string, data: string | Uint8Array) => files.push({ name, data: typeof data === "string" ? enc.encode(data) : data });
   add("mimetype", "application/epub+zip");
   add("META-INF/container.xml", `<?xml version="1.0" encoding="UTF-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n<rootfiles>\n<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>\n</rootfiles>\n</container>\n`);
-  add("OEBPS/style.css", css(settings, vertical));
+  add("OEBPS/style.css", css(settings, vertical, fonts));
+  // 書体のファイルは、同じものを1つにまとめる（スタイルで同じ書体を何度使っても）。
+  const fontFiles = [...new Map(fonts.map((f) => [f.file, f])).values()];
+  for (const f of fontFiles) add(`OEBPS/fonts/${f.file}`, f.data);
   add("OEBPS/nav.xhtml", nav);
   for (const ch of chapters) add(`OEBPS/text/${ch.id}`, page(ch.title, resolve(ch.body), ch.bodyClass));
   if (coverImage) add("OEBPS/text/cover.xhtml", page(title, `<figure class="cover"><img src="../images/${imageFile.get(coverImage.name)}" alt="${esc(title)}"/></figure>`, "role-cover"));
@@ -321,6 +341,7 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
     ...(coverImage ? [`<item id="cover" href="text/cover.xhtml" media-type="application/xhtml+xml"/>`] : []),
     ...chapters.map((c, i) => `<item id="c${i + 1}" href="text/${c.id}" media-type="application/xhtml+xml"${c.hasSvg ? ' properties="svg"' : ""}/>`),
     ...images.map((img, i) => `<item id="i${i + 1}" href="images/${imageFile.get(img.name)}" media-type="${img.mime}"${img === coverImage ? ' properties="cover-image"' : ""}/>`),
+    ...fontFiles.map((f, i) => `<item id="f${i + 1}" href="fonts/${f.file}" media-type="${f.mime}"/>`),
   ];
   const spine = chapters.map((_, i) => `<itemref idref="c${i + 1}"/>`);
   if (navAt !== undefined) spine.splice(navAt, 0, `<itemref idref="nav"/>`);
@@ -375,7 +396,14 @@ function mathSvg(tex: string, display: boolean): string {
 }
 
 /** スタイルシート：組み方向、段落・文字スタイル、ルビ・圏点・縦中横・表・画像。 */
-function css(settings: Settings, vertical: boolean): string {
+function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): string {
+  // 埋め込んだ書体。合成フォント（range つき）は、同じ名前で先に書いて、その字の範囲だけに当てる。
+  const faces = [...fonts]
+    .sort((a, b) => Number(!!b.range) - Number(!!a.range))
+    .map((f) => `@font-face{font-family:"${fontFamily(f)}";src:url("fonts/${f.file}");${f.range ? `unicode-range:${f.range};` : ""}}`)
+    .join("\n");
+  const family = (role: "body" | "ps" | "cs", index?: number) =>
+    fonts.some((f) => f.role === role && (role === "body" || f.index === index)) ? `"${fontFamily({ role, index })}",` : "";
   const lineHeight = settings.layoutMode === "book" ? settings.book.lineGapPercent / 100 : 1.75;
   const p = (s: ParagraphStyle, i: number) => {
     const rules = [
@@ -387,17 +415,24 @@ function css(settings: Settings, vertical: boolean): string {
       s.color ? `color:${s.color}` : "",
       s.bold ? "font-weight:bold" : "",
       s.linePitch && s.linePitch !== 1 ? `line-height:${lineHeight * s.linePitch}` : "",
+      family("ps", i) ? `font-family:${family("ps", i)}${family("body")}serif` : "",
     ].filter(Boolean);
     return `.ps${i}{${rules.join(";")}}`;
   };
   const c = (s: CharacterStyle, i: number) => {
-    const rules = [s.scale !== 1 ? `font-size:${s.scale}em` : "", s.color ? `color:${s.color}` : "", s.bold ? "font-weight:bold" : ""].filter(Boolean);
+    const rules = [
+      s.scale !== 1 ? `font-size:${s.scale}em` : "",
+      s.color ? `color:${s.color}` : "",
+      s.bold ? "font-weight:bold" : "",
+      family("cs", i) ? `font-family:${family("cs", i)}${family("body")}serif` : "",
+    ].filter(Boolean);
     return `.cs${i}{${rules.join(";")}}`;
   };
   const mode = vertical ? "vertical-rl" : "horizontal-tb";
   return `@charset "UTF-8";
+${faces}
 html{writing-mode:${mode};-webkit-writing-mode:${mode};-epub-writing-mode:${mode};}
-body{margin:0;font-family:serif;line-height:${lineHeight};color:${settings.textColor};}
+body{margin:0;font-family:${family("body")}serif;line-height:${lineHeight};color:${settings.textColor};}
 p,h1,h2{margin:0;text-indent:0;}
 h1,h2{font-weight:normal;margin-block-start:1em;margin-block-end:1em;}
 h1{font-size:1.3em;}

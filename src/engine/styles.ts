@@ -56,6 +56,8 @@ export interface EngineStyles {
 /** 合成フォントの字の種類：かな（ひらがな・カタカナ・長音・踊り字）と欧文（半角の英数字と記号）。 */
 const KANA = /^[ぁ-ゟ゠-ヿㇰ-ㇿ]+$/u;
 const LATIN = /^[\x20-\x7e]+$/;
+/** 全角の英数字（縦組みで半角を全角にしたもの）。合成フォントの欧文の書体では、半角の字にして組む。 */
+const FULLWIDTH_ALNUM = /^[０-９Ａ-Ｚａ-ｚ]$/;
 
 export function applyStyles(blocks: Block[], styles: EngineStyles): void {
   const body = styles.paragraph.get(styles.body)!;
@@ -78,10 +80,15 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       const cs = (atom.style ? styles.character.get(atom.style) : undefined) ?? lineStyle;
       for (const cell of atom.cells) {
         cell.font = cs && cs.font >= 0 ? cs.font : ps.font;
+        cell.halfLatin = undefined;
         // 合成フォント：本文の書体（0）の字だけ、かな・欧文を別の書体にする。
         if (cell.font === 0 && !cell.math) {
           if (styles.kanaFont !== undefined && styles.kanaFont > 0 && KANA.test(cell.text)) cell.font = styles.kanaFont;
           else if (styles.latinFont !== undefined && styles.latinFont > 0 && LATIN.test(cell.text)) cell.font = styles.latinFont;
+          else if (styles.latinFont !== undefined && styles.latinFont > 0 && !cell.tcy && !cell.rotate && FULLWIDTH_ALNUM.test(cell.text)) {
+            cell.font = styles.latinFont;
+            cell.halfLatin = true;
+          }
         }
         cell.scale = ps.scale * (cs?.scale ?? 1) * (atom.note ? NOTE_MARK_SCALE : 1);
         cell.bold = ps.bold || !!cs?.bold;

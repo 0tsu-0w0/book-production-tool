@@ -13,8 +13,8 @@ import { CoverPreview } from "./cover-preview.js";
 import { PageTyping } from "./page-typing.js";
 import { InlineEditor } from "./inline-editor.js";
 import { ProofDialog, type ProofResult } from "./proof-dialog.js";
-import { combineSpread, spreadLabel, spreadPairs } from "../output/imposition.js";
-import { parsePageRange } from "../document/range.js";
+import { combineSpread, spreadPairs } from "../output/imposition.js";
+import { parseLabeledRange } from "../document/range.js";
 import type { Finding } from "../output/preflight.js";
 import { DEFAULT_SETTINGS, leftBound, normalizeSettings, spreadOutput, toFormatOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { formatText } from "../engine/format.js";
@@ -41,6 +41,8 @@ interface TypesetResult {
   linesPerPage: number;
   charsPerLine: number;
   columns: number;
+  /** ページごとの名前（前付けを別の番号にするときは i・ii…、本文は 001…）。 */
+  pageLabels: string[];
   font: FontChoice;
   fontWarning?: string;
   missingChars: string[];
@@ -730,7 +732,7 @@ function exportImages() {
     // 書き出すページ（範囲の指定。見開きなら、範囲に入るページを含む見開き）。
     let wanted: Set<number>;
     try {
-      wanted = parsePageRange(settings.image.range, first, pageCount);
+      wanted = parseLabeledRange(settings.image.range, labelsOf());
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
       return setStatus("ページの範囲を直してください。");
@@ -754,7 +756,12 @@ function exportImages() {
     const byIndex = new Map(all.pages.map((p) => [p.index, p]));
     const get = (i: number | null) => (i === null ? null : (byIndex.get(i) ?? null));
     const pages = spread ? pairs.map((p, k) => combineSpread(get(p.right), get(p.left), k)) : needed.map((i) => byIndex.get(i)!);
-    const labels = spread ? pairs.map((p) => spreadLabel(p, first, leftBound(settings))) : needed.map((i) => String(first + i).padStart(3, "0"));
+    // 名前はページのノンブル（前付けを別の番号にするときは i・ii…）。見開きは読む順につなぐ（002-003）。
+    const pageLabels = labelsOf();
+    const lb = leftBound(settings);
+    const labels = spread
+      ? pairs.map((p) => (lb ? [p.left, p.right] : [p.right, p.left]).filter((i): i is number => i !== null).map((i) => pageLabels[i]).join("-"))
+      : needed.map((i) => pageLabels[i]);
     // SNS 向け：4枚ずつの組（フォルダ「作品名_01」…）に分ける。
     const names = labels.map((l, k) => `${settings.image.snsGroups ? `${name}_${String(Math.floor(k / 4) + 1).padStart(2, "0")}/` : ""}${name}_${l}.${ext}`);
     // 画像は画面の裏（Worker）で描き、1枚できるごとに保存する（NF-04）。
@@ -791,6 +798,12 @@ function exportImages() {
       setStatus(`${done}枚の画像（${kind}）を${zip ? "ZIP にまとめて" : ""}保存しました：${target}`);
     }
   });
+}
+
+/** 今の組版のページの名前（組み終わっていなければ、ノンブルの開始番号からの通し番号）。 */
+function labelsOf(): string[] {
+  const count = result?.pageCount ?? 0;
+  return result?.pageLabels?.length === count ? result.pageLabels : Array.from({ length: count }, (_, i) => String(settings.nombreStart + i).padStart(3, "0"));
 }
 
 // ---- コマンド ----

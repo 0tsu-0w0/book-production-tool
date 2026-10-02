@@ -2,7 +2,7 @@ import { placeNotes } from "./notes.js";
 import { horizontalPunctuation, leftBound, toFormatOptions, toLayoutSpec, toPageDecor, toParseOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { fontKey, type StyleSheet } from "../document/styles.js";
 import { bookPageBlocks } from "./book-pages.js";
-import { BODY_START_LABEL, decoratePage, displayNumber } from "./decorate.js";
+import { BODY_START_LABEL, decoratePage, displayNumber, pageLabel } from "./decorate.js";
 import { Face } from "./face.js";
 import { formatText } from "./format.js";
 import { layoutDocument } from "./layout.js";
@@ -46,6 +46,8 @@ export interface TypesetResult {
   linesPerPage: number;
   charsPerLine: number;
   columns: number;
+  /** ページごとの名前（画像のファイル名・書き出す範囲に使う。前付けを別の番号にするときは i・ii…、本文は 001…）。 */
+  pageLabels: string[];
 }
 
 /** 原稿から、描画できる状態のページまでを一度に作る。 */
@@ -193,6 +195,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     linesPerPage: spec.linesPerPage,
     charsPerLine: spec.charsPerLine,
     columns: spec.columns,
+    pageLabels: layouts.map((p) => pageLabel(p.index, decor)),
   };
 }
 
@@ -213,7 +216,12 @@ function missingChars(blocks: Block[], faces: Face[]): string[] {
   };
   for (const block of textBlocks(blocks)) {
     for (const atom of block.atoms) {
-      for (const cell of atom.cells) if (!cell.math) check(cell.text, cell.rotate || cell.tcy ? "ltr" : "ttb", faces[cell.font ?? 0] ?? faces[0]);
+      for (const cell of atom.cells) {
+        if (cell.math) continue;
+        // 欧文の書体で組む全角の英数字は、半角の字があるかを調べる。
+        const text = cell.halfLatin ? cell.text.replace(/[０-９Ａ-Ｚａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)) : cell.text;
+        check(text, cell.rotate || cell.tcy || cell.halfLatin ? "ltr" : "ttb", faces[cell.font ?? 0] ?? faces[0]);
+      }
       if (atom.warichu) check(atom.warichu, "ttb", faces[atom.cells[0].font ?? 0] ?? faces[0]);
       if (atom.kenten) check(atom.kenten, "ttb", faces[atom.cells[0].font ?? 0] ?? faces[0]);
       if (atom.ruby) check(atom.ruby, "ttb", faces[atom.cells[0].font ?? 0] ?? faces[0]);
