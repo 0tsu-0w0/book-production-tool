@@ -272,6 +272,7 @@ function textOps(page: DrawPage, fontsOf: (face: number) => { vert: FontPair; ho
       if (bold) ops.push(setLineWidth(item.size * BOLD_STROKE));
     }
     // PDF の座標は左下が原点で y 軸が上向き。横倒しは、送り方向が下、字形の上が右を向くように回す。
+    // 行列の sx（横）と sy（縦）が長体・平体の倍率。縦中横を1字分に収める縮めも sx に入っている。
     const matrix = item.rotate
       ? setTextMatrix(0, -item.sx, item.sy ?? 1, 0, item.x, page.height - item.y)
       : setTextMatrix(item.sx, 0, 0, item.sy ?? 1, item.x, page.height - item.y);
@@ -571,6 +572,8 @@ function addOutline(doc: PDFDocument, pages: DrawPage[], pdfPages: PDFPage[]): v
   if (top.length === 0) return;
   const ctx = doc.context;
   const rootRef = ctx.nextRef();
+  // しおりは辞書のつながり：親は First・Last で最初と最後の子を、子どうしは Prev・Next で前後を指す。
+  // Count は開いたときに見える項目の数（子があれば、子の数も足す）。
   /** 兄弟の並びを辞書にして、最初と最後の参照と、開いたときに見える数を返す。 */
   const build = (nodes: Node[], parent: PDFRef): { first: PDFRef; last: PDFRef; count: number } => {
     const refs = nodes.map(() => ctx.nextRef());
@@ -604,7 +607,9 @@ function addLinks(doc: PDFDocument, pages: DrawPage[], pdfPages: { page: PDFPage
   pages.forEach((p, i) => {
     for (const l of p.labels ?? []) if (!labelPage.has(l)) labelPage.set(l, i);
   });
+  // 見出しの番号（本全体で出てくる順）→ ページ。目次の項目のリンク（h:番号）に使う。
   const headingPage = pages.flatMap((p, i) => (p.headings ?? []).map(() => i));
+  // 飛び先の書き方：h:番号 は見出し、l:名前 はラベル（ページ参照・注・索引の語のある場所）。
   const targetOf = (t: string): number | undefined => (t.startsWith("h:") ? headingPage[Number(t.slice(2))] : t.startsWith("l:") ? labelPage.get(t.slice(2)) : undefined);
   pages.forEach((p, i) => {
     const { page, margin } = pdfPages[i];
@@ -613,6 +618,7 @@ function addLinks(doc: PDFDocument, pages: DrawPage[], pdfPages: { page: PDFPage
       if (s.kind !== "link") continue;
       const to = targetOf(s.target);
       if (to === undefined || !pdfPages[to]) continue;
+      // 紙面の四角（左上が原点・下向き）を、PDF の座標（左下が原点・上向き）にし、塗り足しの幅（margin）だけずらす。
       const rect = [margin + s.x, margin + p.height - (s.y + s.h), margin + s.x + s.w, margin + p.height - s.y];
       annots.push(doc.context.register(doc.context.obj({ Type: "Annot", Subtype: "Link", Rect: rect, Border: [0, 0, 0], Dest: fitDest(doc, pdfPages[to].page) })));
     }

@@ -109,6 +109,7 @@ const toHalfWidth = (s: string) => s.replace(/[０-９Ａ-Ｚａ-ｚ]/g, (c) => 
 
 /** 箇条書きの項目の印の幅（em）。 */
 function listMarkWidth(atoms: Atom[]): number {
+  // 段落の頭から続く、印の Atom の長さを足す（印のあとの字は数えない）。
   let w = 0;
   for (const a of atoms) {
     if (!a.listMark) break;

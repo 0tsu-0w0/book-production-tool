@@ -446,6 +446,7 @@ function kanjiNumber(n: number): string {
 export function listNumber(format: string, n: number): string {
   // 印のあとの全角の空白は残す（項目の字と離すため）。
   const f = format.trim() ? format : "（1）";
+  // 書式の中の最初の数の字（1・１・一・①）だけを、n に置き換える。
   if (/1/.test(f)) return f.replace("1", String(n));
   if (/１/.test(f)) return f.replace("１", String(n));
   if (/一/.test(f)) return f.replace("一", kanjiNumber(n));
@@ -584,6 +585,7 @@ export function parse(src: string, opts: ParseOptions = DEFAULT_PARSE_OPTIONS, l
     let cached = cache.get(line);
     if (!cached) cache.set(line, (cached = parseLine(line, opts)));
     let block = cached;
+    // 箇条書き・番号付きの中の、字のある段落：頭に印を付ける（番号付きは番号を1つ進める）。
     if (list && block.kind === "para" && block.atoms.length > 0) {
       const mark = list.numbered ? listNumber(list.format, list.next++) : list.format.trim() ? list.format : "・";
       block = listItem(block, mark, opts);

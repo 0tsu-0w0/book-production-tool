@@ -56,7 +56,9 @@ export class Inks {
   /** 色を指定する命令と、そのときのノセの状態（特色ならその名前の色空間も）。 */
   ops(hex: string, stroking: boolean, page: PDFPage, registered: Set<string>): PDFOperator[] {
     const out: PDFOperator[] = [];
+    // 特色に登録した色か（色は小文字の #rrggbb で見分ける）。
     const spot = this.spots.get(hex.toLowerCase());
+    // ノセを使う文書では、色を変えるたびに重ね方も指定し直す（前の色の重ね方が残らないように）。
     if (this.overprinting) {
       const on = spot ? spot.spot.overprint : !!this.options.overprintBlack && isK100(hex);
       const gs = (this.gs ??= {
@@ -89,6 +91,7 @@ export class Inks {
 
   /** 特色の色空間：[/Separation /名前 /DeviceCMYK 濃度0〜1を代わりの CMYK にする関数]。 */
   private separation(spot: SpotColor): PDFRef {
+    // 代わりの CMYK（0〜100%）を 0〜1 にする。濃度 0 で C0（色なし）、濃度 1 で C1 になる。
     const c1 = spot.cmyk.map((v) => Math.round(v * 10) / 1000);
     const tint = this.doc.context.register(this.doc.context.obj({ FunctionType: 2, Domain: [0, 1], C0: [0, 0, 0, 0], C1: c1, N: 1 }));
     return this.doc.context.register(this.doc.context.obj([PDFName.of("Separation"), PDFName.of(spot.name), PDFName.of("DeviceCMYK"), tint]));

@@ -79,6 +79,7 @@ export function saddlePairs(pageCount: number, firstPageNumber: number, leftBoun
   for (let i = 0; i < pageCount; i++) order.push(i);
   while (order.length % 4 !== 0) order.push(null);
   const n = order.length;
+  // 冊子の p ページ目（1始まり）に置く元のページ（null は白ページ）。
   const at = (p: number) => order[p - 1] ?? null;
   const out: Spread[] = [];
   for (let s = 0; s < n / 4; s++) {
@@ -87,6 +88,7 @@ export function saddlePairs(pageCount: number, firstPageNumber: number, leftBoun
     const outerFront = 1 + 2 * s;
     const innerFront = 2 + 2 * s;
     const innerBack = n - 1 - 2 * s;
+    // 右綴じは、表で前のページが左・後ろのページが右。裏はその逆。左綴じは左右を入れ替える。
     if (leftBound) {
       out.push({ left: at(outerBack), right: at(outerFront) });
       out.push({ left: at(innerFront), right: at(innerBack) });

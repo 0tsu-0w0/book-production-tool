@@ -103,6 +103,7 @@ export class Backdrop {
     this.current = a;
     const root = document.documentElement;
     const on = a.kind !== "none";
+    // 欄の半透明・ぼかし・背景の薄め方は、CSS の変数で当てる（style.css の html.bg-on）。
     root.classList.toggle("bg-on", on);
     root.classList.toggle("bg-glass", a.kind === "glass");
     root.style.setProperty("--glass-alpha", `${a.panelOpacity}%`);
@@ -111,6 +112,7 @@ export class Backdrop {
     root.style.setProperty("--back-blur", `${a.backBlur}px`);
     this.layer.hidden = !on;
 
+    // 背景の層に置く中身の見分け。前と同じなら作り直さない（動画が頭から再生し直さないように）。
     const want =
       a.kind === "image" || a.kind === "video"
         ? `${a.kind}:${a.file}`

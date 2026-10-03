@@ -34,6 +34,7 @@ export function usedText(files: EpubFile[]): string {
  */
 export function epubFonts(files: EpubFile[], settings: Settings, loaded: { choice: FontChoice; bytes: Uint8Array }[], keys: string[]): EpubFont[] {
   const text = usedText(files);
+  // 書体の番号 → 絞った書体（同じ書体は1度だけ絞る）。絞れなかった書体は null。
   const subsets = new Map<number, { data: Uint8Array; mime: EpubFont["mime"]; file: string } | null>();
   const subset = (i: number) => {
     if (!subsets.has(i)) {
@@ -47,6 +48,7 @@ export function epubFonts(files: EpubFile[], settings: Settings, loaded: { choic
   };
   const indexOf = (c: FontChoice | null) => (c ? keys.indexOf(fontKey(c)) : -1);
   const out: EpubFont[] = [];
+  // 埋め込む書体を1つ足す。role は使い道（本文・段落スタイル・文字スタイル）、range は当てる字の範囲。
   const push = (i: number, role: EpubFont["role"], index?: number, range?: string) => {
     const s = i >= 0 ? subset(i) : null;
     if (s) out.push({ role, ...(index !== undefined ? { index } : {}), ...s, ...(range ? { range } : {}) });

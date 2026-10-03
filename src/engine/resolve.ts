@@ -145,7 +145,8 @@ export function resolvePage(page: PageLayout, faces: Face[], textColor: string):
 
 function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: string): DrawItem {
   const scale = g.size / face.upem;
-  // 長体・平体（字形の横・縦の伸縮率）。
+  // 長体・平体（字形の横・縦の伸縮率）。描くときの行列に入る（base の sx・sy）。
+  // 縦の倍率はベースラインの位置に、横の倍率は字を中央に置くための幅に効かせる（縮めた字がマスの真ん中に来るように）。
   const gx = g.sx ?? 1;
   const gy = g.sy ?? 1;
   const base = { text: g.text, size: g.size, color, sx: gx, ...(gy !== 1 ? { sy: gy } : {}), face: faceIndex, ...(g.bold ? { bold: true } : {}), ...(g.src ? { src: g.src } : {}) };
@@ -168,6 +169,7 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
     // 横組みの1マス：y は行の中心。仮想ボディの中心を行の中心に合わせる。fit なら1字分の幅に収める。
     const shaped = face.shape(g.text, "ltr", g.features);
     const total = totalAdvance(shaped);
+    // 横の縮め：縦中横に収める縮めと、長体の縮めを掛け合わせる。
     const sx = (g.fit ? Math.min(1, (face.upem * TCY_MAX_WIDTH) / total) : 1) * gx;
     const x = g.fit ? g.x + (g.size * gx - total * scale * sx) / 2 : g.x;
     return { ...base, font: "horiz", glyphs: withOffsets(shaped), x, y: g.y + (face.emBottom + face.upem / 2) * scale * gy, sx };
@@ -196,6 +198,7 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
     return { ...base, font: "horiz", glyphs: withOffsets(shaped), x: g.x - (total * scale * sx) / 2, y: baseline, sx };
   }
 
+  // 縦組みの字：字の幅（長体なら縮めた幅）の中心を、行の中心 g.x に合わせる。
   const shaped = face.shape(g.text, "ttb", g.features);
   const advance = shaped[0]?.advance ?? face.upem;
   return { ...base, font: "vert", glyphs: withOffsets(shaped), x: g.x - (advance * scale * gx) / 2, y: baseline };

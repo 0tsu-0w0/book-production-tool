@@ -49,16 +49,18 @@ export interface EngineStyles {
   heading2: string;
 }
 
-/**
- * 段落スタイルとして、見出しには大見出し・中見出し、それ以外には本文を当てる。行頭の［＃名前］があればそちら。
- * 記法の読み取り結果は使い回すので、毎回すべてのマスに値を書き直す（前の設定を残さない）。
- */
 /** 合成フォントの字の種類：かな（ひらがな・カタカナ・長音・踊り字）と欧文（半角の英数字と記号）。 */
 const KANA = /^[ぁ-ゟ゠-ヿㇰ-ㇿ]+$/u;
 const LATIN = /^[\x20-\x7e]+$/;
 /** 全角の英数字（縦組みで半角を全角にしたもの）。合成フォントの欧文の書体では、半角の字にして組む。 */
 const FULLWIDTH_ALNUM = /^[０-９Ａ-Ｚａ-ｚ]$/;
 
+/**
+ * 段落スタイルとして、見出しには大見出し・中見出し、それ以外には本文を当てる。行頭の［＃名前］があればそちら。
+ * 記法の読み取り結果は使い回すので、毎回すべてのマスに値を書き直す（前の設定を残さない）。
+ * マスに書くもの：書体の番号・大きさ・太字・色・字形の形（features）・プロポーショナル・長体（sx）・平体（sy）・
+ * 欧文の書体で組む全角英数字の印（halfLatin）。
+ */
 export function applyStyles(blocks: Block[], styles: EngineStyles): void {
   const body = styles.paragraph.get(styles.body)!;
   for (const block of textBlocks(blocks)) {
@@ -97,7 +99,8 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         // delete を使うとオブジェクトが遅い形に変わるので、undefined を入れる。
         cell.features = form || undefined;
         cell.proportional = !!(ps.proportional || cs?.proportional);
-        // 長体・平体：字形の横（sx）か縦（sy）を縮める。
+        // 長体・平体：字形の横（sx）か縦（sy）を縮める。文字スタイルの指定が段落スタイルより優先。
+        // ここでは倍率を書くだけ。字の取る長さは applyDeform で、字形の大きさは resolveGlyph で縮める。
         const d = cs?.deform ? cs : ps.deform ? ps : undefined;
         const r = d ? (d.deformRatio ?? 80) / 100 : 1;
         cell.sx = d?.deform === "condensed" && !cell.math ? r : undefined;

@@ -90,6 +90,14 @@ export function engineStyles(sheet: StyleSheet, fonts: FontTable, composite?: { 
 /**
  * 行とページの割り付けまでを行い、字形の割り当ては頼まれたページだけ行う。
  * 画面では見えているページしか要らないので、編集のたびの組み直しが速くなる。
+ *
+ * 流れ：
+ * 1. 原稿を整形して読む（parse）。箇条書きの印・索引の語・リンクの元はここで付く。
+ * 2. 注を章末・巻末に集める（placeNotes）。索引の語を集め、［＃索引ページ］に仮の索引を置く。
+ * 3. 組む前の準備（prepare）：スタイル → 横倒しの長さ → 約物の詰め・ルビ → プロポーショナル → 長体・平体。
+ * 4. 行とページに割り付ける（layoutDocument）。目次があれば番号が決まるまで組み直す。
+ * 5. ページ番号の参照（索引の番号も）を入れて組み直す。索引は同じページの番号をまとめて作り直す。
+ * 6. 柱・ノンブルを付ける（decoratePage）。字形の割り当て（resolvePage）は page() で頼まれたときに行う。
  */
 export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontTable | Face, images: Record<string, ImageInfo> = {}): LazyTypesetResult {
   const fonts = fontsOrFace instanceof Face ? singleFont(fontsOrFace) : fontsOrFace;
@@ -128,6 +136,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   // 数式があるときだけ MathJax を使う（読み込みに時間がかかるため）。
   const hasMath = textBlocks(source).some((b) => b.atoms.some((a) => a.cells.some((c) => c.math)));
   const mathErrors: string[] = [];
+  // 組む前の準備。組み直すたびに同じ順で行う（長体・平体は、詰めとプロポーショナルで決まった長さを縮めるので最後）。
   const prepare = (bs: Block[]) => {
     applyStyles(bs, styles);
     measureRotated(bs, faces, leftBound(settings) && settings.book.hyphenation);
@@ -165,6 +174,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     layouts = layoutDocument(blocks, spec, sourceLines);
     resolveRefs();
   }
+  // 前付けを別の番号にするときの、本文の始まりのページ（ノンブルとページの名前に使う）。
   decor.bodyStart = bodyStartOf(layouts);
   // 柱に出す章題・節題は、そのページまでに出てきた最後の見出し。
   const running = { chapter: "", section: "" };
@@ -179,6 +189,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     }
     decoratePage(page, decor, spec.fontSizePt, { ...running });
   }
+  // 字形を割り当てたページの控え（同じページを何度頼まれても、割り当ては1度だけ）。
   const resolved = new Map<number, DrawPage>();
   return {
     pageCount: layouts.length,

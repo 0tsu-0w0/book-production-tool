@@ -110,6 +110,7 @@ export function indexBlocks(entries: IndexEntry[], opts: ParseOptions, pageOf?: 
   for (const { group, entries: list } of sortIndex(entries)) {
     out.push({ kind: "para", style: INDEX_HEADING_STYLE, atoms: parseInline(group, opts) });
     for (const e of list) {
+      // 同じページに出た2つ目からの場所は外す（ページがまだ分からない1度目の組みでは、全部残す）。
       const seen = new Set<number>();
       const ids = e.ids.filter((id) => {
         const p = pageOf?.(id);
@@ -118,6 +119,7 @@ export function indexBlocks(entries: IndexEntry[], opts: ParseOptions, pageOf?: 
         seen.add(p);
         return true;
       });
+      // 番号は、語のある場所のラベルへのページ参照。組むまでは仮に「000」（縦中横の3桁）にしておく。
       const numbers: Atom[] = ids.flatMap((id, i) => [...(i > 0 ? [{ cells: [{ text: "、" }] }] : []), { cells: [{ text: "000", tcy: true }], pageRef: id }]);
       out.push({
         kind: "para",
