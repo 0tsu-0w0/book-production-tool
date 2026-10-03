@@ -53,14 +53,29 @@ export class Backdrop {
 
   private capture: MediaStream | null = null;
   private capturing = false;
+  /** 今の取り込みの縮め方（ディスプレイの大きさに対する割合）。 */
+  private captureScale = 1;
+
+  /**
+   * 取り込む大きさの割合。強くぼかすなら細かい所は見えないので、小さく取り込んで GPU の負担を減らす
+   * （ディスプレイいっぱいの映像を1秒に15回ぼかし直すのは重い）。ぼかしを弱くしたときは、くっきり見えるよう大きく。
+   */
+  private wantedScale(): number {
+    const blur = this.current?.backBlur ?? 40;
+    return blur >= 16 ? 0.25 : blur >= 4 ? 0.5 : 1;
+  }
 
   /** 後ろの窓のすりガラス：窓のあるディスプレイを取り込み、背景の動画にする（1秒に15回まで）。 */
   private startCapture() {
     const v = this.media instanceof HTMLVideoElement && this.media.classList.contains("bg-wallpaper") ? this.media : null;
     if (!v || this.capture || this.capturing || document.hidden) return;
     this.capturing = true;
+    const scale = (this.captureScale = this.wantedScale());
+    // 取り込む大きさは、ディスプレイの実際の画素（devicePixelRatio を掛けたもの）に対する割合で決める。
+    const w = Math.round(window.screen.width * window.devicePixelRatio * scale);
+    const h = Math.round(window.screen.height * window.devicePixelRatio * scale);
     navigator.mediaDevices
-      .getDisplayMedia({ video: { frameRate: { max: 15 } }, audio: false })
+      .getDisplayMedia({ video: { frameRate: { max: 15 }, width: { max: w }, height: { max: h } }, audio: false })
       .then((stream) => {
         this.capturing = false;
         if (this.current?.kind !== "behind" || this.media !== v) {
@@ -158,6 +173,10 @@ export class Backdrop {
       if (this.media) this.layer.prepend(this.media);
       this.placeWallpaper();
       if (a.kind === "behind") this.startCapture();
+    } else if (a.kind === "behind" && this.capture && this.wantedScale() !== this.captureScale) {
+      // ぼかしの強さを変えて、取り込む大きさの段階が変わったら、取り込み直す。
+      this.stopCapture();
+      this.startCapture();
     }
     if (this.media) {
       this.media.dataset.fit = a.fit;

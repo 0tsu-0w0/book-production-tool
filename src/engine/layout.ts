@@ -271,9 +271,31 @@ function slots(line: PageLine): number {
 /** 行数の足し算の誤差を丸める（行送りの端数を足していくと、整数からわずかにずれるため）。 */
 const snap = (v: number) => Math.round(v * 1e6) / 1e6;
 
-/** 原稿全体を行に分け、ページに割り付け、各文字の位置を決める。 */
-export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: number[]): PageLayout[] {
-  // 横組みは、ページを転置した縦組みとして組み、最後に転置して戻す（toHorizontal）。
+/**
+ * 段落の行分けの控え。目次やページ番号の参照で何度も組み直すとき、字の変わっていない段落は前の行分けを使う。
+ * 段落の字（マスの長さなど）を変えたら forget で消す（typesetLazy は、準備し直した段落を消す）。
+ */
+export class BreakCache {
+  private readonly map = new WeakMap<TextBlock, { key: string; lines: Line[] }>();
+
+  /** 控えてある行分け（行は写しを返す。行の情報は置く場所ごとに書き足すため）。 */
+  get(block: TextBlock, key: string): Line[] | undefined {
+    const hit = this.map.get(block);
+    return hit && hit.key === key ? hit.lines.map((l) => ({ ...l })) : undefined;
+  }
+
+  set(block: TextBlock, key: string, lines: Line[]): void {
+    this.map.set(block, { key, lines: lines.map((l) => ({ ...l })) });
+  }
+
+  forget(block: TextBlock): void {
+    this.map.delete(block);
+  }
+}
+
+/** 原稿全体を行に分け、ページに割り付け、各文字の位置を決める。breaks を渡すと、段落の行分けを控えて使い回す。 */
+export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: number[], breaks?: BreakCache): PageLayout[] {
+  // 横組みは、ページを転置した縦組みとして組み、最後に転置して戻す（horizontalGlyph・horizontalShape）。
   // 画像の縦横も入れ替えておくと、戻したときに元の縦横比になる。
   if (spec.horizontal) {
     spec = {
@@ -298,6 +320,13 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   };
   // 見出しは両端揃えにしない（字下げした短い行なので）。
   const headingOpts: BreakOptions = { ...opts, justify: false };
+  // 行分けの控えの鍵に入れる、行分けの設定（字数と禁則など）。
+  const optsKeys = new Map<BreakOptions, string>();
+  const optsKey = (o: BreakOptions) => {
+    let k = optsKeys.get(o);
+    if (k === undefined) optsKeys.set(o, (k = JSON.stringify([spec.charsPerLine, o.kinsoku, o.hanging, !!o.justify, !!o.oikomi, !!o.lineHeadHalf, [...(o.extraStart ?? [])].join(""), [...(o.extraEnd ?? [])].join("")])));
+    return k;
+  };
   // 1ページに入る行数は、1段の行数 × 段数。
   const capacity = spec.linesPerPage * spec.columns;
   const pages: PageLine[][] = [[]];
@@ -435,7 +464,14 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const lineOpts = align === "start" ? breakOpts : { ...breakOpts, justify: false };
     // 箇条書きの項目：印の幅だけ、2行目以降を下げる。
     const hang = block.atoms[0]?.listMark ? listMarkWidth(block.atoms) : 0;
-    const broken = breakLines(block.atoms, w ? widthAt : spec.charsPerLine, align !== f.align ? 0 : f.indent, lineOpts, hang);
+    const indent = align !== f.align ? 0 : f.indent;
+    // 回り込みのない段落は、行の字数がどの行も同じなので、前の行分けを使い回せる。
+    const key = breaks && !w ? `${optsKey(lineOpts)}|${indent}|${hang}` : undefined;
+    let broken = key ? breaks!.get(block, key) : undefined;
+    if (!broken) {
+      broken = breakLines(block.atoms, w ? widthAt : spec.charsPerLine, indent, lineOpts, hang);
+      if (key) breaks!.set(block, key, broken);
+    }
     const count = broken.length;
     broken.forEach((line, i) => {
       if (w?.top && inWrap(i)) line.offset = w.chars;
@@ -766,10 +802,15 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     if (masters[i]) page.master = masters[i];
     // ページのラベル：字のないラベルと、行の字に付いたラベル。
     // 索引の語のある場所も、ラベルとして数える（索引のページ番号を引くため）。
-    const labels = [
-      ...anchors[i],
-      ...lines.flatMap((l) => (typeof l === "object" ? l.atoms.flatMap((a) => [...(a.label ? [a.label] : []), ...(a.index ?? []).flatMap((e) => (e.id ? [e.id] : []))]) : [])),
-    ];
+    // 本全体の字を見るので、字ごとに配列を作らないよう、ふつうのループで足していく。
+    const labels = [...anchors[i]];
+    for (const l of lines) {
+      if (typeof l !== "object") continue;
+      for (const a of l.atoms) {
+        if (a.label) labels.push(a.label);
+        if (a.index) for (const e of a.index) if (e.id) labels.push(e.id);
+      }
+    }
     if (labels.length > 0) page.labels = labels;
     return page;
   });
@@ -858,90 +899,116 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
   }
   const right = left + blockWidth;
 
-  const glyphs: PlacedGlyph[] = [];
-  const lineShapes: Shape[] = [];
-  let slot = 0;
-  for (const line of lines) {
-    const span = slots(line);
-    if (typeof line === "object") {
-      // 行取りの行は、取った行の中央に置く。
-      const band = Math.floor(slot / spec.linesPerPage);
-      const col = (slot % spec.linesPerPage) + (span - 1) / 2;
-      const x = right - size / 2 - col * pitch;
-      const bandTop = top + band * (columnHeight + spec.columnGapPt);
-      placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
-      if (line.table) tableRules(lineShapes, line.table, x, bandTop, size, pitch * span);
-      // 注の前の区切り線：行の向きに、字数の3分の1の長さ。
-      if (line.footRule) lineShapes.push({ kind: "line", x1: x, y1: bandTop, x2: x, y2: bandTop + (spec.charsPerLine * size) / 3, width: size * 0.04, color: "" });
+  // ページの行数・見出し・ラベルは割り付けの時点で決まるが、字の位置（glyphs・shapes）は描くときまで要らない。
+  // 目次やページ参照の組み直しでは何度も割り付けるので、字を置くのは初めて glyphs・shapes を頼まれたときにする。
+  let lineCount = 0;
+  for (const line of lines) lineCount = snap(lineCount + slots(line));
+  const W = width;
+  let placed: { glyphs: PlacedGlyph[]; shapes: Shape[] } | undefined;
+  const place = () => {
+    if (placed) return placed;
+    const glyphs: PlacedGlyph[] = [];
+    const lineShapes: Shape[] = [];
+    let slot = 0;
+    for (const line of lines) {
+      const span = slots(line);
+      if (typeof line === "object") {
+        // 行取りの行は、取った行の中央に置く。
+        const band = Math.floor(slot / spec.linesPerPage);
+        const col = (slot % spec.linesPerPage) + (span - 1) / 2;
+        const x = right - size / 2 - col * pitch;
+        const bandTop = top + band * (columnHeight + spec.columnGapPt);
+        placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
+        if (line.table) tableRules(lineShapes, line.table, x, bandTop, size, pitch * span);
+        // 注の前の区切り線：行の向きに、字数の3分の1の長さ。
+        if (line.footRule) lineShapes.push({ kind: "line", x1: x, y1: bandTop, x2: x, y2: bandTop + (spec.charsPerLine * size) / 3, width: size * 0.04, color: "" });
+      }
+      slot = snap(slot + span);
     }
-    slot = snap(slot + span);
-  }
 
-  // 画像と、そのキャプション。
-  const imageShapes: Shape[] = [];
-  for (const p of pageImages) {
-    const placed = imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height);
-    imageShapes.push(placed.shape);
-    if (p.captionLines) placeCaption(glyphs, lineShapes, p.captionLines, placed.visible, spec);
-  }
+    // 画像と、そのキャプション。
+    const imageShapes: Shape[] = [];
+    for (const p of pageImages) {
+      const shape = imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height);
+      imageShapes.push(shape.shape);
+      if (p.captionLines) placeCaption(glyphs, lineShapes, p.captionLines, shape.visible, spec);
+    }
+    const shapes = [...imageShapes, ...lineShapes];
+    placed = spec.horizontal ? { glyphs: glyphs.map((g) => horizontalGlyph(g, W)), shapes: shapes.map((sh) => horizontalShape(sh, W)) } : { glyphs, shapes };
+    return placed;
+  };
 
   let lineTexts: PageLayout["lines"] | undefined;
+  let firstSrc: [number, number] | null | undefined;
+  const block = { left, top, width: blockWidth, height: blockHeight };
   const page: PageLayout = {
     index,
-    width,
-    height,
-    block: { left, top, width: blockWidth, height: blockHeight },
-    lineCount: slot,
+    // 横組みは、転置した縦組みのページを横組みのページに戻す（(x, y) → (y, W − x)）。
+    width: spec.horizontal ? height : width,
+    height: spec.horizontal ? width : height,
+    block: spec.horizontal ? { left: block.top, top: W - (block.left + block.width), width: block.height, height: block.width } : block,
+    lineCount,
     role: lines.length === 0 && role === "body" ? "blank" : role,
     headings: lines.flatMap((l) => (typeof l === "object" && l.heading ? [l.heading] : [])),
     // 行の文字（校正の補助で使う）は、頼まれたときに作る。
     get lines() {
       return (lineTexts ??= lines.flatMap((l) => (typeof l !== "object" ? [] : [{ text: lineText(l), start: !!l.start, end: !!l.end }])));
     },
-    glyphs,
-    shapes: [...imageShapes, ...lineShapes],
+    // ページで最初の字の原稿の位置（カーソルのあるページを探すのに使う。字を置かずに行から調べる）。
+    get firstSrc() {
+      if (firstSrc === undefined) {
+        firstSrc = null;
+        for (const l of lines) {
+          if (typeof l !== "object" || l.srcLine === undefined) continue;
+          const c = l.atoms.find((a) => a.cells.some((x) => x.src !== undefined))?.cells.find((x) => x.src !== undefined);
+          if (c) {
+            firstSrc = [l.srcLine, c.src!];
+            break;
+          }
+        }
+      }
+      return firstSrc ?? undefined;
+    },
+    get glyphs() {
+      return place().glyphs;
+    },
+    get shapes() {
+      return place().shapes;
+    },
     paper: "#ffffff",
   };
-  return spec.horizontal ? toHorizontal(page) : page;
+  return page;
 }
 
 /**
- * 転置した縦組みのページを、横組みのページに戻す。縦組みの行の方向（下へ）が横組みの字の方向（右へ）に、
+ * 転置した縦組みのページの字と図形を、横組みのページに戻す。縦組みの行の方向（下へ）が横組みの字の方向（右へ）に、
  * 縦組みの行の進み（左へ）が横組みの行の進み（下へ）になる：(x, y) → (y, W − x)。W は転置したページの幅。
  * ルビ・圏点（縦組みでは字の右）は字の上に、割注の右の行は上の行になる。
  */
-function toHorizontal(p: PageLayout): PageLayout {
-  const W = p.width;
-  const pt = (x: number, y: number) => ({ x: y, y: W - x });
+function horizontalGlyph(g: PlacedGlyph, W: number): PlacedGlyph {
+  const pt = { x: g.y, y: W - g.x };
+  if (g.kind === "mark") return { ...g, kind: "hmark", ...pt };
+  if (g.kind === "math") return { ...g, kind: "hmath", ...pt };
+  // vert・tcy は x がマスの中心で y がマスの上端、rot は x が行の中心で y が上端。どれも「行の中心」と「マスの始まり」。
+  return { ...g, kind: "hcell", ...(g.kind === "tcy" ? { fit: true } : {}), ...pt };
+}
+
+function horizontalShape(s: Shape, W: number): Shape {
   const rect = (r: { x: number; y: number; w: number; h: number }) => ({ x: r.y, y: W - (r.x + r.w), w: r.h, h: r.w });
-  return {
-    ...p,
-    width: p.height,
-    height: p.width,
-    block: { left: p.block.top, top: W - (p.block.left + p.block.width), width: p.block.height, height: p.block.width },
-    glyphs: p.glyphs.map((g): PlacedGlyph => {
-      if (g.kind === "mark") return { ...g, kind: "hmark", ...pt(g.x, g.y) };
-      if (g.kind === "math") return { ...g, kind: "hmath", ...pt(g.x, g.y) };
-      // vert・tcy は x がマスの中心で y がマスの上端、rot は x が行の中心で y が上端。どれも「行の中心」と「マスの始まり」。
-      return { ...g, kind: "hcell", ...(g.kind === "tcy" ? { fit: true } : {}), ...pt(g.x, g.y) };
-    }),
-    shapes: p.shapes.map((s): Shape => {
-      switch (s.kind) {
-        case "line":
-          return { ...s, x1: s.y1, y1: W - s.x1, x2: s.y2, y2: W - s.x2 };
-        case "image":
-          return { ...s, ...rect(s), ...(s.clip ? { clip: rect(s.clip) } : {}) };
-        case "rect":
-        case "link":
-          return { ...s, ...rect(s) };
-        case "circle":
-        case "diamond":
-          return { ...s, cx: s.cy, cy: W - s.cx };
-        case "path":
-          return s;
-      }
-    }),
-  };
+  switch (s.kind) {
+    case "line":
+      return { ...s, x1: s.y1, y1: W - s.x1, x2: s.y2, y2: W - s.x2 };
+    case "image":
+      return { ...s, ...rect(s), ...(s.clip ? { clip: rect(s.clip) } : {}) };
+    case "rect":
+    case "link":
+      return { ...s, ...rect(s) };
+    case "circle":
+    case "diamond":
+      return { ...s, cx: s.cy, cy: W - s.cx };
+    case "path":
+      return s;
+  }
 }
 
 /**
@@ -1376,10 +1443,12 @@ export function layoutCover(c: CoverInput): PageLayout {
     };
     const n = place(c.title, titleSize, H * 0.25);
     place(c.author, authorSize, H * 0.25 + n * titleSize * 1.4 + titleSize * 0.4);
-    const turned = toHorizontal({ index: 0, width: W, height: c.trimWidth, block: { left: 0, top: 0, width: W, height: c.trimWidth }, lineCount: 0, role: "free", headings: [], lines: [], glyphs: subGlyphs, shapes: sub, paper: "#ffffff" });
     glyphs.length = saved;
-    for (const g of turned.glyphs) glyphs.push({ ...g, x: g.x + front });
-    shapes.push(...turned.shapes);
+    for (const g of subGlyphs) {
+      const h = horizontalGlyph(g, W);
+      glyphs.push({ ...h, x: h.x + front });
+    }
+    shapes.push(...sub.map((sh) => horizontalShape(sh, W)));
   }
 
   // 背：題を上から、著者名を下に寄せて、どちらも縦に。背幅が狭ければ入れない。

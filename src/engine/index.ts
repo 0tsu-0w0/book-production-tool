@@ -5,16 +5,16 @@ import { bookPageBlocks } from "./book-pages.js";
 import { BODY_START_LABEL, decoratePage, displayNumber, pageLabel } from "./decorate.js";
 import { Face } from "./face.js";
 import { formatText } from "./format.js";
-import { layoutDocument } from "./layout.js";
+import { BreakCache, layoutDocument } from "./layout.js";
 import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
 import { applyDeform, prepareSpacing } from "./spacing.js";
-import { collectIndex, expandIndex, hasIndexPage, indexBlocks, replaceIndexContent } from "./indexing.js";
+import { collectIndex, expandIndex, hasIndexPage, indexBlocks, indexSignature, replaceIndexContent } from "./indexing.js";
 import { applyStyles, type EngineStyles } from "./styles.js";
-import { hasPageRefs, hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
+import { hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
 import { texToMarkup } from "./tex.js";
 import type { Block, DrawPage, ImageInfo, LineText, PageLayout } from "./types.js";
-import { textBlocks } from "./blocks.js";
+import { textBlocks, type TextBlock } from "./blocks.js";
 
 export { Face } from "./face.js";
 export type * from "./types.js";
@@ -125,60 +125,104 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   let source = [...book.front, ...bodyMark, ...noted.blocks, ...book.back];
   // 索引：語を集め（語のある場所にラベルを付け）、［＃索引ページ］の場所に、仮の番号で索引を入れる。
   const indexEntries = collectIndex(source);
-  const withIndex = indexEntries.length > 0 && hasIndexPage(source);
-  if (hasIndexPage(source)) source = expandIndex(source, withIndex ? indexBlocks(indexEntries, parseOpts) : []);
+  const indexPage = hasIndexPage(source);
+  const withIndex = indexEntries.length > 0 && indexPage;
+  if (indexPage) source = expandIndex(source, withIndex ? indexBlocks(indexEntries, parseOpts) : []);
   const sourceLines = [...book.front.map(() => -1), ...bodyMark.map(() => -1), ...noted.lines.map((n) => n ?? -1), ...book.back.map(() => -1)].map((n) => (n < 0 ? undefined : n)) as number[];
   // 目次・ページ番号の参照に入れる番号（前付けを別の番号にするときは、本文の始まりから数える）。
   const decor = toPageDecor(settings);
   const bodyStartOf = (pages: PageLayout[]) => pages.find((p) => p.labels?.includes(BODY_START_LABEL))?.index ?? 0;
   const numberOf = (pages: PageLayout[], index: number) => displayNumber(index, { ...decor, bodyStart: bodyStartOf(pages) });
   const styles = engineStyles(settings.styles, fonts, settings.compositeFont);
-  // 数式があるときだけ MathJax を使う（読み込みに時間がかかるため）。
-  const hasMath = textBlocks(source).some((b) => b.atoms.some((a) => a.cells.some((c) => c.math)));
+  // 原稿を1度なめて、数式とページ番号の参照があるかを調べる。
+  // 数式があるときだけ MathJax を使う（読み込みに時間がかかるため）。参照がなければ、番号を入れる組み直しは要らない。
+  let hasMath = false;
+  let hasRefs = withIndex;
+  for (const b of textBlocks(source)) {
+    for (const a of b.atoms) {
+      if (a.pageRef) hasRefs = true;
+      if (!hasMath && a.cells.some((c) => c.math)) hasMath = true;
+    }
+  }
   const mathErrors: string[] = [];
+  // 準備の結果を決める設定（同じなら、前に準備した段落はそのまま使える）。
+  const prepKey = JSON.stringify([fonts.keys, settings.styles, settings.compositeFont, leftBound(settings) && settings.book.hyphenation, spec.typography, spec.rubyScale, !!spec.horizontal]);
   // 組む前の準備。組み直すたびに同じ順で行う（長体・平体は、詰めとプロポーショナルで決まった長さを縮めるので最後）。
+  // 記法の読み取り結果は行ごとに使い回すので、同じ設定で準備済みの段落は飛ばす（1字打つたびに全段落をやり直さない）。
+  // 同じ行が何度も出てくると同じ段落が何度も並ぶので、1度だけ準備する（2度当てると、長体・平体などが重なってしまう）。
   const prepare = (bs: Block[]) => {
-    applyStyles(bs, styles);
-    measureRotated(bs, faces, leftBound(settings) && settings.book.hyphenation);
-    if (hasMath) mathErrors.push(...measureMath(bs, spec.charsPerLine, spec.lineGap, spec.mathSpaceEm));
-    prepareSpacing(bs, spec.typography, spec.rubyScale);
-    applyProportional(bs, faces);
-    applyDeform(bs, !!spec.horizontal);
+    const todo: TextBlock[] = [];
+    const seen = new Set<TextBlock>();
+    const noteBlocks = new Set<TextBlock>();
+    for (const b of textBlocks(bs)) {
+      if (seen.has(b)) continue;
+      seen.add(b);
+      for (const a of b.atoms) if (a.noteBlock) noteBlocks.add(a.noteBlock);
+      // ページごとの注の段落は、本文の段落を準備するときに一緒に準備される。
+      if (noteBlocks.has(b)) continue;
+      if (prepared.get(b) === prepKey) continue;
+      todo.push(b);
+    }
+    if (todo.length === 0) return;
+    applyStyles(todo, styles);
+    measureRotated(todo, faces, leftBound(settings) && settings.book.hyphenation);
+    if (hasMath) mathErrors.push(...measureMath(todo, spec.charsPerLine, spec.lineGap, spec.mathSpaceEm));
+    prepareSpacing(todo, spec.typography, spec.rubyScale);
+    applyProportional(todo, faces);
+    applyDeform(todo, !!spec.horizontal);
+    for (const b of todo) {
+      // 字の長さが変わったかもしれないので、前の行分けは使わない。
+      breaks.forget(b);
+      if (reusable(b)) prepared.set(b, prepKey);
+    }
   };
+  // 割り付けたページは、字の位置を頼まれるまで計算しない（途中の組み直しでは、ページ番号とラベルしか見ないため）。
   let blocks = source;
   let layouts: PageLayout[];
   if (hasToc(source)) {
     // 目次があれば、見出しのページ番号が決まるまで組み直す（DTP-14）。
-    ({ blocks, pages: layouts } = layoutWithToc(source, settings.toc, spec.firstPageNumber, prepare, (bs) => layoutDocument(bs, spec, sourceLines), !!spec.horizontal, numberOf));
+    let numbers: number[];
+    ({ blocks, pages: layouts, numbers } = layoutWithToc(source, settings.toc, spec.firstPageNumber, prepare, (bs) => layoutDocument(bs, spec, sourceLines, breaks), !!spec.horizontal, numberOf, tocHint));
+    tocHint = numbers;
   } else {
     prepare(blocks);
-    layouts = layoutDocument(blocks, spec, sourceLines);
+    layouts = layoutDocument(blocks, spec, sourceLines, breaks);
   }
   // ページ番号の参照（［＃ページ：名前］・索引の番号）：番号を入れて組み直し、番号が変わらなくなるまで繰り返す。
+  // 番号が変わった段落だけ準備し直す（ほかの段落の字は変わらない）。
   const resolveRefs = () => {
-    if (!hasPageRefs(blocks)) return;
+    if (!hasRefs) return;
     for (let pass = 0; pass < 3; pass++) {
-      if (!resolvePageRefs(blocks, layouts, spec.firstPageNumber, settings.toc.numerals, !!spec.horizontal, numberOf)) break;
-      prepare(blocks);
-      layouts = layoutDocument(blocks, spec, sourceLines);
+      const changed = resolvePageRefs(blocks, layouts, spec.firstPageNumber, settings.toc.numerals, !!spec.horizontal, numberOf);
+      if (changed.length === 0) break;
+      prepare(changed);
+      layouts = layoutDocument(blocks, spec, sourceLines, breaks);
     }
   };
-  resolveRefs();
-  if (withIndex) {
-    // 索引：語のページが分かったので、同じページに何度出た語の番号を1つにまとめて作り直す。
-    const where = new Map<string, number>();
-    for (const p of layouts) for (const l of p.labels ?? []) if (!where.has(l)) where.set(l, p.index);
-    const content = indexBlocks(indexEntries, parseOpts, (id) => where.get(id));
-    replaceIndexContent(blocks, content);
-    prepare(content);
-    layouts = layoutDocument(blocks, spec, sourceLines);
+  // 索引：語のページが分かったら、同じページに何度も出た語の番号を1つにまとめて作り直す。
+  // 番号を入れる前の組みでまとめ、番号を入れたあとで、まとめ方が変わっていないかを確かめる（変わっていれば作り直す）。
+  let shownIndex = withIndex ? indexSignature(indexEntries) : "";
+  for (let pass = 0; pass < 3; pass++) {
+    if (withIndex) {
+      const where = new Map<string, number>();
+      for (const p of layouts) for (const l of p.labels ?? []) if (!where.has(l)) where.set(l, p.index);
+      const pageOfId = (id: string) => where.get(id);
+      const signature = indexSignature(indexEntries, pageOfId);
+      if (signature !== shownIndex) {
+        shownIndex = signature;
+        const content = indexBlocks(indexEntries, parseOpts, pageOfId);
+        replaceIndexContent(blocks, content);
+        prepare(content);
+        layouts = layoutDocument(blocks, spec, sourceLines, breaks);
+      } else if (pass > 0) break;
+    } else if (pass > 0) break;
     resolveRefs();
   }
   // 前付けを別の番号にするときの、本文の始まりのページ（ノンブルとページの名前に使う）。
   decor.bodyStart = bodyStartOf(layouts);
-  // 柱に出す章題・節題は、そのページまでに出てきた最後の見出し。
+  // 柱に出す章題・節題は、そのページまでに出てきた最後の見出し。柱とノンブルは、ページを頼まれたときに付ける。
   const running = { chapter: "", section: "" };
-  for (const page of layouts) {
+  const runningOf = layouts.map((page) => {
     for (const h of page.headings) {
       if (h.level === 1) {
         running.chapter = h.text;
@@ -187,36 +231,44 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
         running.section = h.text;
       }
     }
-    decoratePage(page, decor, spec.fontSizePt, { ...running });
-  }
+    return { ...running };
+  });
   // 字形を割り当てたページの控え（同じページを何度頼まれても、割り当ては1度だけ）。
   const resolved = new Map<number, DrawPage>();
+  // 記法の読み取り結果は組むたびに使い回すので、このあと別の組版が走ると、段落のマスの値が書き換わる。
+  // そのあとで、まだ字を置いていないページを頼まれたら、この組版をやり直してから渡す。
+  const gen = ++generation;
+  let redone: LazyTypesetResult | undefined;
+  const fresh = () => (redone ??= typesetLazy(text, settings, fontsOrFace, images));
   return {
     pageCount: layouts.length,
     page(index) {
       let page = resolved.get(index);
-      if (!page) resolved.set(index, (page = resolvePage(layouts[index], faces, settings.textColor)));
+      if (page) return page;
+      if (gen !== generation || redone) return fresh().page(index);
+      const layout = layouts[index];
+      decoratePage(layout, decor, spec.fontSizePt, runningOf[index]);
+      resolved.set(index, (page = resolvePage(layout, faces, settings.textColor)));
       return page;
     },
-    lines: (index) => layouts[index]?.lines ?? [],
+    lines: (index) => (gen !== generation || redone ? fresh().lines(index) : (layouts[index]?.lines ?? [])),
     labelPages() {
       const map = new Map<string, number>();
       for (const p of layouts) for (const l of p.labels ?? []) if (!map.has(l)) map.set(l, p.index);
       return map;
     },
     pageOf(line, offset) {
+      // 原稿の位置より前に最初の字があるページのうち、最後のもの（ページは原稿の順に並ぶ）。
       let best = -1;
       for (let i = 0; i < layouts.length; i++) {
-        for (const g of layouts[i].glyphs) {
-          const s = g.src;
-          if (s && (s[0] < line || (s[0] === line && s[1] <= offset))) best = i;
-        }
+        const s = layouts[i].firstSrc;
+        if (s && (s[0] < line || (s[0] === line && s[1] <= offset))) best = i;
       }
       return best;
     },
     upems: faces.map((f) => f.upem),
     upem: faces[0].upem,
-    missingChars: missingChars(blocks, faces),
+    missingChars: missingChars(blocks, faces, `${fonts.keys.join("|")}\u0000${JSON.stringify(settings.styles)}\u0000${JSON.stringify(settings.compositeFont)}`),
     mathErrors: [...new Set(mathErrors)],
     // 本文の最後のページ（奥付などのページは除く）。
     lastPageLines: (layouts.findLast((p) => p.role === "body") ?? layouts[layouts.length - 1]).lineCount,
@@ -227,23 +279,57 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   };
 }
 
+/** 組版の通し番号（記法の読み取り結果を使い回すので、あとから別の組版が走ったかを見分ける）。 */
+let generation = 0;
+
+/** 前に組んだときの目次の番号（目次の組み直しを、その番号から始める）。 */
+let tocHint: number[] | undefined;
+
+/** 段落の行分けの控え（準備し直した段落は消す）。 */
+const breaks = new BreakCache();
+
+/** 段落ごとの、最後に準備したときの設定（prepKey）。 */
+const prepared = new WeakMap<TextBlock, string>();
+
+/**
+ * 準備の結果を次の組版でも使える段落か。組むたびに中身が変わる段落は除く：
+ * 注（番号を振り直す）・ページ番号の参照（番号が入る）・数式（組めなかった知らせを毎回出す）・ページごとの注を持つ段落。
+ */
+function reusable(b: TextBlock): boolean {
+  return !b.atoms.some((a) => a.note || a.noteBlock || a.pageRef || a.cells.some((c) => c.math));
+}
+
+/** 段落ごとの、フォントで描けない字の控え（key は書体とスタイル。同じ段落・同じ設定なら調べ直さない）。 */
+const missingCache = new WeakMap<object, { key: string; chars: string[] }>();
+
 /**
  * フォントで描けない文字を探す。字形がない文字（.notdef になる）と、
  * 字形はあるが輪郭が空の文字（フォントによっては未収録の漢字をこうしている）。空白は除く。
  * 文字ごとに、その字に当たっている書体で調べる。
+ * 記法の読み取り結果は行ごとに使い回すので、変わっていない段落は前に調べた結果を使う
+ * （ページ番号の参照のある段落は、番号の字が組むたびに変わるので毎回調べる）。
  */
-function missingChars(blocks: Block[], faces: Face[]): string[] {
+function missingChars(blocks: Block[], faces: Face[], key: string): string[] {
   const missing = new Set<string>();
+  let found: string[] = [];
   const check = (text: string, direction: "ttb" | "ltr", face: Face) => {
     // ほとんどのマスは1字。調べた結果はフォントが覚えている（Face.isMissing）。
     if (text.length === 1) {
-      if (face.isMissing(text, direction)) missing.add(text);
+      if (face.isMissing(text, direction)) found.push(text);
       return;
     }
-    for (const ch of text) if (face.isMissing(ch, direction)) missing.add(ch);
+    for (const ch of text) if (face.isMissing(ch, direction)) found.push(ch);
   };
   for (const block of textBlocks(blocks)) {
+    const cached = missingCache.get(block);
+    if (cached && cached.key === key) {
+      for (const ch of cached.chars) missing.add(ch);
+      continue;
+    }
+    found = [];
+    let refs = false;
     for (const atom of block.atoms) {
+      if (atom.pageRef) refs = true;
       for (const cell of atom.cells) {
         if (cell.math) continue;
         // 欧文の書体で組む全角の英数字は、半角の字があるかを調べる。
@@ -254,6 +340,8 @@ function missingChars(blocks: Block[], faces: Face[]): string[] {
       if (atom.kenten) check(atom.kenten, "ttb", faces[atom.cells[0].font ?? 0] ?? faces[0]);
       if (atom.ruby) check(atom.ruby, "ttb", faces[atom.cells[0].font ?? 0] ?? faces[0]);
     }
+    if (!refs) missingCache.set(block, { key, chars: found });
+    for (const ch of found) missing.add(ch);
   }
   return [...missing];
 }

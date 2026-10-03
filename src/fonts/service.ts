@@ -40,8 +40,11 @@ export class FontService {
   private catalog: FontEntry[] | undefined;
   private readonly cache = new Map<string, LoadedFont>();
 
-  /** cacheFile を渡すと、フォントを調べた結果をそのファイルに控え、次の起動で使い回す。 */
-  constructor(private readonly options: { cacheFile?: string } = {}) {}
+  /**
+   * cacheFile を渡すと、フォントを調べた結果をそのファイルに控え、次の起動で使い回す。
+   * writeCache が false なら読むだけ（組版のスレッドなど、本体と同時に書かないため）。
+   */
+  constructor(private readonly options: { cacheFile?: string; writeCache?: boolean } = {}) {}
 
   private latinCatalog: FontEntry[] | undefined;
 
@@ -79,7 +82,7 @@ export class FontService {
   }
 
   private writeCache(cache: ScanCache | undefined) {
-    if (!cache || !this.options.cacheFile) return;
+    if (!cache || !this.options.cacheFile || this.options.writeCache === false) return;
     try {
       fs.mkdirSync(path.dirname(this.options.cacheFile), { recursive: true });
       fs.writeFileSync(this.options.cacheFile, JSON.stringify({ version: CACHE_VERSION, files: cache }), "utf8");

@@ -326,7 +326,31 @@ function scheduleTypeset(delay = 60) {
   typesetTimer = window.setTimeout(() => void runTypeset(), delay);
 }
 
-async function runTypeset() {
+/**
+ * 本体で組んでいる最中の組版と、そのあとに頼まれた組版。組んでいる間に何度変更があっても、
+ * 終わってから最新の原稿で1回だけ組み直す（本体に古い組版の頼みを溜めない）。
+ * 返す Promise は、頼んだ時点の原稿を含む組版が終わったときに解決する。
+ */
+let typesetRunning: Promise<void> | null = null;
+let typesetQueued: Promise<void> | null = null;
+
+function runTypeset(): Promise<void> {
+  if (!typesetRunning) {
+    typesetRunning = typesetOnce().finally(() => {
+      typesetRunning = null;
+    });
+    return typesetRunning;
+  }
+  typesetQueued ??= typesetRunning
+    .catch(() => {})
+    .then(() => {
+      typesetQueued = null;
+      return runTypeset();
+    });
+  return typesetQueued;
+}
+
+async function typesetOnce() {
   const seq = ++typesetSeq;
   const started = performance.now();
   const caret = typing.active ? typing.caret : undefined;

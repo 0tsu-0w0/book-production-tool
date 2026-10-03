@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, screen, session, shell, type MenuItemConstructorOptions } from "electron";
+import { BrowserWindow, Menu, MessageChannelMain, app, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, screen, session, shell, utilityProcess, type MenuItemConstructorOptions, type UtilityProcess, type WebContents } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -6,9 +6,8 @@ import { Worker } from "node:worker_threads";
 import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type KolophonDocument, LEGACY_EXTENSIONS } from "./document/document.js";
 import { compositeFonts, type Settings } from "./document/settings.js";
 import { BUILTIN_TEMPLATES, LEGACY_TEMPLATE_EXTENSIONS, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
-import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypesetResult } from "./engine/index.js";
+import { glyphPaths, typesetLazy, type ImageInfo } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
-import { preflight } from "./output/preflight.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
 import { epubFonts } from "./output/epub-fonts.js";
 import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSIONS, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
@@ -17,11 +16,11 @@ import { checkPdfX } from "./output/check-pdfx.js";
 import { pdfOptions } from "./output/export-pdf.js";
 import { renderPdf } from "./output/pdf.js";
 import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js";
-import { checkLines, findVariants } from "./engine/proof.js";
 import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, type Appearance, type WindowGeometry } from "./appearance.js";
 import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
+import type { TypesetConnect } from "./typeset-worker.js";
 import { SAMPLE_TEXT } from "./sample.js";
 
 // 旧名（tategumi）のときの設定（テンプレート・既定のテンプレート・控え・最後に開いたブックなど）を、初めて起動したときに引き継ぐ。
@@ -56,7 +55,8 @@ migrateUserData();
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
 // PC のフォントを調べた結果は控えておき、次の起動では変わったファイルだけを調べる。
-const fonts = new FontService({ cacheFile: path.join(app.getPath("userData"), "font-cache.json") });
+const fontCacheFile = path.join(app.getPath("userData"), "font-cache.json");
+const fonts = new FontService({ cacheFile: fontCacheFile });
 
 // 確認用：--snapshot=<フォルダ> で起動すると、先頭のページを PNG に書き出して終了する。--doc=<文書> でその文書を開く。
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -287,57 +287,47 @@ ipcMain.handle("fonts:list", () => ({ list: fonts.list(), defaultChoice: fonts.d
 /** 合成フォントの欧文に使える書体の一覧（埋め込めるフォントすべて。初めて頼まれたときに調べる）。 */
 ipcMain.handle("fonts:list-all", () => fonts.listAll());
 
-/** 画面にすでに送った字形の輪郭（フォントごと）。同じ輪郭を毎回送り直さないため。 */
+/** 本体から送った字形の輪郭（表紙の見本の分）。画面の組版の分は、組版のプロセスが覚えている。 */
 const sentPaths = new Map<string, Set<number>>();
 
 /**
- * 最新の組版結果。全ページは本体が持ち、画面には見えているページだけを送る
- * （10万字・約300ページを毎回送ると、それだけで 10MB を超えるため）。
+ * 画面のための組版のプロセス（typeset-worker。Electron の utilityProcess）。大きな本を組んでいる間も、
+ * 窓の移動やメニューが止まらないようにする。画面とは MessagePort で直接つなぐ（本体は口を渡すだけ）。
+ * 画面が読み込まれるたびに、画面（preload）から口を頼まれる。プロセスが落ちたときは、作り直してつなぎ直す。
  */
-let latest: { version: number; result: LazyTypesetResult; fonts: FontTable } | undefined;
-let version = 0;
+let typesetter: UtilityProcess | undefined;
+/** 組版のプロセスとつないでいる画面。 */
+let typesetClient: WebContents | undefined;
 
-function pagesPayload(indices: number[]) {
-  const { result, fonts: table } = latest!;
-  const picked = [...new Set(indices)].filter((i) => i >= 0 && i < result.pageCount).map((i) => result.page(i));
-  return { pages: picked, paths: glyphPaths(picked, table, sentPaths) };
+function connectTypesetter(client: WebContents | undefined = typesetClient) {
+  if (!client || client.isDestroyed()) return;
+  typesetClient = client;
+  if (!typesetter) {
+    const child = utilityProcess.fork(path.join(here, "typeset-worker.js"), [], { serviceName: "Kolophon 組版" });
+    child.on("exit", () => {
+      if (typesetter !== child) return;
+      typesetter = undefined;
+      // 落ちたら作り直して、画面とつなぎ直す（画面は待っている頼みを失敗にして、次から新しい口を使う）。
+      if (!quitting) connectTypesetter();
+    });
+    typesetter = child;
+  }
+  const { port1, port2 } = new MessageChannelMain();
+  const connect: TypesetConnect = { type: "connect", fontCacheFile };
+  typesetter.postMessage(connect, [port1]);
+  client.postMessage("typesetter-port", null, [port2]);
+  // 新しい画面は、字形の輪郭をまだ何も持っていない（表紙の見本の分も送り直す）。
+  sentPaths.clear();
 }
 
-ipcMain.handle("typeset", (_e, text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo> = {}, caret?: [number, number]) => {
-  const started = performance.now();
-  const { table, loaded, warnings } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
-  const result = typesetLazy(text, settings, table, images);
-  if (reset) sentPaths.clear();
-  latest = { version: ++version, result, fonts: table };
-  // 紙面で入力しているときは、カーソルのあるページも一緒に送る（DTP-15）。
-  const caretPage = caret ? result.pageOf(caret[0], caret[1]) : -1;
-  const { pages, paths } = pagesPayload(caretPage >= 0 ? [...wanted, caretPage - 1, caretPage, caretPage + 1].filter((i) => i >= 0 && i < result.pageCount) : wanted);
-  return {
-    version,
-    pageCount: result.pageCount,
-    upems: result.upems,
-    fontKeys: table.keys,
-    missingChars: result.missingChars,
-    mathErrors: result.mathErrors,
-    lastPageLines: result.lastPageLines,
-    linesPerPage: result.linesPerPage,
-    charsPerLine: result.charsPerLine,
-    columns: result.columns,
-    pageLabels: result.pageLabels,
-    pages,
-    paths,
-    caretPage,
-    font: loaded[0].choice,
-    fontWarning: warnings.join(" "),
-    /** 本体での組版にかかった時間（計測用）。 */
-    engineMs: performance.now() - started,
-  };
-});
+// 画面（preload）が読み込まれたら、組版のプロセスとつなぐ口を渡す。
+ipcMain.on("typesetter:connect", (e) => connectTypesetter(e.sender));
 
-/** 指定したページを送る。組み直しで版が変わっていたら null（画面は新しい版を待つ）。 */
-ipcMain.handle("pages", (_e, v: number, indices: number[]) => {
-  if (!latest || latest.version !== v) return null;
-  return pagesPayload(indices);
+/** 終了するときは、組版のプロセスを作り直さない。 */
+let quitting = false;
+app.on("before-quit", () => {
+  quitting = true;
+  typesetter?.kill();
 });
 
 ipcMain.handle("doc:open", async () => {
@@ -830,29 +820,6 @@ ipcMain.handle("images:end", (_e, ok: boolean) => {
   imageTarget = undefined;
 });
 
-/** 校正の補助（DTP-16）：表記ゆれは原稿から、禁則違反と段落末の1文字の行は組んだ結果から探す。 */
-ipcMain.handle("proof", (_e, text: string, settings: Settings, images: Record<string, ImageInfo> = {}) => {
-  const { table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
-  const result = typesetLazy(text, settings, table, images);
-  const extra = { start: settings.advanced.kinsokuStartExtra, end: settings.advanced.kinsokuEndExtra };
-  return { variants: findVariants(text), ...checkLines(result.pageCount, (i) => result.lines(i), extra) };
-});
-
-/** 書き出す前の検査（OUT-09）。 */
-ipcMain.handle("preflight", (_e, text: string, settings: Settings, target: "pdf" | "images", images: Record<string, ImageInfo> = {}) => {
-  const { table, warnings } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
-  const result = typesetLazy(text, settings, table, images);
-  return preflight({
-    settings,
-    pageCount: result.pageCount,
-    page: (i) => result.page(i),
-    missingChars: result.missingChars,
-    fontWarnings: warnings,
-    target,
-    images,
-    mathErrors: result.mathErrors,
-  });
-});
 
 ipcMain.handle("snapshot:save", async (_e, images: ArrayBuffer[]) => {
   if (!snapshotDir) return;

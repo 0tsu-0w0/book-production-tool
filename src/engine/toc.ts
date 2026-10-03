@@ -47,30 +47,28 @@ function numberAtoms(n: number, numerals: TocSettings["numerals"], horizontal = 
   return cells.length === 1 ? [{ cells }] : cells.map((c) => ({ cells: [c] }));
 }
 
-/** 原稿の［＃ページ：名前］に、そのラベルのあるページ番号を入れる。番号が変わったら true（組み直しが要る）。ないラベルは「？」。 */
-export function resolvePageRefs(blocks: Block[], pages: PageLayout[], firstPageNumber: number, numerals: TocSettings["numerals"], horizontal = false, numberOf?: PageNumberOf): boolean {
+/** 原稿の［＃ページ：名前］に、そのラベルのあるページ番号を入れる。番号が変わった段落を返す（空なら組み直しは要らない）。ないラベルは「？」。 */
+export function resolvePageRefs(blocks: Block[], pages: PageLayout[], firstPageNumber: number, numerals: TocSettings["numerals"], horizontal = false, numberOf?: PageNumberOf): TextBlock[] {
   const where = new Map<string, number>();
   for (const p of pages) for (const l of p.labels ?? []) if (!where.has(l)) where.set(l, numberOf ? numberOf(pages, p.index) : firstPageNumber + p.index);
-  let changed = false;
+  // 番号が変わった段落（組み直す前に、この段落だけスタイルなどを当て直せばよい）。
+  const changed: TextBlock[] = [];
   for (const block of textBlocks(blocks)) {
+    let blockChanged = false;
     for (const atom of block.atoms) {
       if (!atom.pageRef) continue;
       const n = where.get(atom.pageRef);
       const cells = n === undefined ? [{ text: "？" }] : numberCells(n, numerals, horizontal);
       if (cells.map((c) => c.text).join() !== atom.cells.map((c) => c.text).join() || cells.length !== atom.cells.length) {
-        changed = true;
+        blockChanged = true;
         // 原稿の位置は前のマスのものを引き継ぐ。
         const src = atom.cells[0]?.src;
         atom.cells = cells.map((c) => (src === undefined ? c : { ...c, src }));
       }
     }
+    if (blockChanged) changed.push(block);
   }
   return changed;
-}
-
-/** ページ番号の参照があるか。 */
-export function hasPageRefs(blocks: Block[]): boolean {
-  return textBlocks(blocks).some((b) => b.atoms.some((a) => a.pageRef));
 }
 
 /** 見出しの字を写す（ルビは外す）。スタイルを当てるとマスの値が書き換わるので、元の見出しと共有しない。 */
@@ -105,7 +103,7 @@ export function expandToc(blocks: Block[], toc: Block[]): Block[] {
 
 /**
  * 目次を入れて組む。prepare は段落にスタイルや字幅を当てる処理（組むたびに目次の段落にも当てる）。
- * 見出しのページ番号が変わらなくなったら、その組版を返す。
+ * 見出しのページ番号が変わらなくなったら、その組版と番号を返す。hint は仮に入れる番号（前に組んだときの番号）。
  */
 export function layoutWithToc(
   blocks: Block[],
@@ -115,17 +113,19 @@ export function layoutWithToc(
   layout: (blocks: Block[]) => PageLayout[],
   horizontal = false,
   numberOf?: PageNumberOf,
-): { blocks: Block[]; pages: PageLayout[] } {
+  hint?: number[],
+): { blocks: Block[]; pages: PageLayout[]; numbers: number[] } {
   const headings = headingBlocks(blocks);
-  // 仮の番号：見出しの数だけ同じ幅（3桁）の番号を入れておく。
-  let numbers = headings.map(() => 100);
-  let result = { blocks, pages: [] as PageLayout[] };
+  // 仮の番号：前に組んだときの番号があればそれ（打っている間は、ほとんど変わらないので1回で決まる）。
+  // なければ、見出しの数だけ同じ幅（3桁）の番号を入れておく。
+  let numbers = hint && hint.length === headings.length ? hint : headings.map(() => 100);
+  let result = { blocks, pages: [] as PageLayout[], numbers };
   for (let pass = 0; pass < MAX_PASSES; pass++) {
     const toc = tocBlocks(headings, numbers, t, horizontal);
     const expanded = expandToc(blocks, toc);
     // 本文の段落は2回目からは変わらないので、目次の段落だけに当て直す。
     prepare(pass === 0 ? expanded : toc);
-    result = { blocks: expanded, pages: layout(expanded) };
+    result = { blocks: expanded, pages: layout(expanded), numbers };
     const next = headingPageNumbers(result.pages, firstPageNumber, numberOf);
     if (next.length === numbers.length && next.every((n, i) => n === numbers[i])) break;
     numbers = next;

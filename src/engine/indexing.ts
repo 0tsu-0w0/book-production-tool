@@ -101,6 +101,25 @@ export function sortIndex(entries: IndexEntry[]): { group: string; entries: Inde
   return out;
 }
 
+/** 番号を出す場所：同じページに出た2つ目からの場所は外す（ページがまだ分からないときは、全部残す）。 */
+function keptIds(e: IndexEntry, pageOf?: (id: string) => number | undefined): string[] {
+  const seen = new Set<number>();
+  return e.ids.filter((id) => {
+    const p = pageOf?.(id);
+    if (p === undefined) return true;
+    if (seen.has(p)) return false;
+    seen.add(p);
+    return true;
+  });
+}
+
+/**
+ * 索引に出す番号の場所の一覧を、1つの文字列にしたもの。前に作った索引と同じなら、作り直して組み直す必要はない。
+ */
+export function indexSignature(entries: IndexEntry[], pageOf?: (id: string) => number | undefined): string {
+  return entries.map((e) => keptIds(e, pageOf).join(",")).join(";");
+}
+
 /**
  * 索引のページの段落：題「索引」、行の見出し（あ・か…）、項目（語・リーダー・ページ番号）。
  * pageOf を渡すと、同じページの番号は最初の1つだけにする（組んだあとで作り直すとき）。
@@ -110,15 +129,7 @@ export function indexBlocks(entries: IndexEntry[], opts: ParseOptions, pageOf?: 
   for (const { group, entries: list } of sortIndex(entries)) {
     out.push({ kind: "para", style: INDEX_HEADING_STYLE, atoms: parseInline(group, opts) });
     for (const e of list) {
-      // 同じページに出た2つ目からの場所は外す（ページがまだ分からない1度目の組みでは、全部残す）。
-      const seen = new Set<number>();
-      const ids = e.ids.filter((id) => {
-        const p = pageOf?.(id);
-        if (p === undefined) return true;
-        if (seen.has(p)) return false;
-        seen.add(p);
-        return true;
-      });
+      const ids = keptIds(e, pageOf);
       // 番号は、語のある場所のラベルへのページ参照。組むまでは仮に「000」（縦中横の3桁）にしておく。
       const numbers: Atom[] = ids.flatMap((id, i) => [...(i > 0 ? [{ cells: [{ text: "、" }] }] : []), { cells: [{ text: "000", tcy: true }], pageRef: id }]);
       out.push({

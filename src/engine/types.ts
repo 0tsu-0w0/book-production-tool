@@ -314,6 +314,9 @@ export interface PageLayout {
   headings: { level: 1 | 2; text: string }[];
   /** このページの行の文字（ルビを除く）。段落の最初の行・最後の行か（校正の補助に使う）。 */
   lines: LineText[];
+  /** ページで最初の字の原稿の位置（行・行の中の位置）。字がなければ undefined。 */
+  firstSrc?: [number, number];
+  /** 字と図形の位置。layoutDocument が作るページでは、初めて読んだときに計算する。 */
   glyphs: PlacedGlyph[];
   shapes: Shape[];
   paper: string;
