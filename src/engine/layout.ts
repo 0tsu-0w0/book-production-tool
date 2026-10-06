@@ -1,3 +1,4 @@
+import type { ParagraphDecoration, ParagraphRule } from "../document/styles.js";
 import { isHangable, isLineEndProhibited, isLineStartProhibited } from "./kinsoku.js";
 import { GRID_TYPOGRAPHY, punctClass } from "./spacing.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
@@ -58,6 +59,8 @@ export interface Line {
   srcLine?: number;
   /** ページごとの注の前の区切り線（字はない）。 */
   footRule?: boolean;
+  /** 段落の罫線・網掛け（同じ段落の行は同じオブジェクトを指す。段落の切れ目を見分けるのにも使う）。 */
+  para?: { deco: ParagraphDecoration };
   /**
    * 表の行のとき（罫線を引くため）：欄の境目（行の頭からの字数）、行の前・後に引く罫線の範囲
    * （表の行の最初・最後の行だけ。結合した欄の所は空ける）、二重線、罫線の引き方。
@@ -473,7 +476,10 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       if (key) breaks!.set(block, key, broken);
     }
     const count = broken.length;
+    // 罫線・網掛けのある段落：この段落の行に同じ印を付ける（ページに置くとき、行をまとめて囲むため）。
+    const para = f.deco ? { deco: f.deco } : undefined;
     broken.forEach((line, i) => {
+      line.para = para;
       if (w?.top && inWrap(i)) line.offset = w.chars;
       line.start = i === 0;
       line.end = i === count - 1;
@@ -909,6 +915,8 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     if (placed) return placed;
     const glyphs: PlacedGlyph[] = [];
     const lineShapes: Shape[] = [];
+    // 罫線・網掛けのある段落の行（段落ごとにまとめて、罫や網を描く）。
+    const decoRows: DecoRow[] = [];
     let slot = 0;
     for (const line of lines) {
       const span = slots(line);
@@ -918,7 +926,13 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
         const col = (slot % spec.linesPerPage) + (span - 1) / 2;
         const x = right - size / 2 - col * pitch;
         const bandTop = top + band * (columnHeight + spec.columnGapPt);
-        placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
+        const extent = placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
+        if (line.para) {
+          // 行の太さ：いちばん大きい字の大きさ。
+          let scale = 1;
+          for (const a of line.atoms) for (const c of a.cells) scale = Math.max(scale, c.scale ?? 1);
+          decoRows.push({ para: line.para, x, half: (size * scale) / 2, band, bandTop, ...extent, start: !!line.start, end: !!line.end });
+        }
         if (line.table) tableRules(lineShapes, line.table, x, bandTop, size, pitch * span);
         // 注の前の区切り線：行の向きに、字数の3分の1の長さ。
         if (line.footRule) lineShapes.push({ kind: "line", x1: x, y1: bandTop, x2: x, y2: bandTop + (spec.charsPerLine * size) / 3, width: size * 0.04, color: "" });
@@ -933,7 +947,9 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
       imageShapes.push(shape.shape);
       if (p.captionLines) placeCaption(glyphs, lineShapes, p.captionLines, shape.visible, spec);
     }
-    const shapes = [...imageShapes, ...lineShapes];
+    // 網掛けは字と画像の下に、罫線は画像の上に描く。
+    const deco = decorationShapes(decoRows, size, spec.charsPerLine);
+    const shapes = [...deco.under, ...imageShapes, ...deco.over, ...lineShapes];
     placed = spec.horizontal ? { glyphs: glyphs.map((g) => horizontalGlyph(g, W)), shapes: shapes.map((sh) => horizontalShape(sh, W)) } : { glyphs, shapes };
     return placed;
   };
@@ -1026,7 +1042,7 @@ function placeLine(
   perLine: number,
   shapes: Shape[] = [],
   horizontal = false,
-): void {
+): { from: number; to: number } {
   const sideRuns: SideRun[] = [];
   perLine = line.limit ?? perLine;
   line = fillLeader(line, perLine);
@@ -1047,6 +1063,8 @@ function placeLine(
     offset = line.align === "center" ? line.indent + (perLine - line.indent - length) / 2 : perLine - length;
   }
   offset += line.offset ?? 0;
+  // 行の字のある範囲（行の頭からの字数）。段落の罫線・網掛けを「字のある所だけ」にするときに使う。
+  const from = offset;
   let index = 0;
   for (const atom of line.atoms) {
     const spanStart = offset;
@@ -1127,6 +1145,92 @@ function placeLine(
     }
   }
   shapes.push(...sideLineShapes(sideRuns, horizontal));
+  return { from, to: offset };
+}
+
+/** 罫線・網掛けのある段落の、ページの上の1行。 */
+interface DecoRow {
+  para: { deco: ParagraphDecoration };
+  /** 行の中心。 */
+  x: number;
+  /** 行の太さの半分（いちばん大きい字の半分）。 */
+  half: number;
+  band: number;
+  bandTop: number;
+  /** 字のある範囲（行の頭からの字数）。 */
+  from: number;
+  to: number;
+  start: boolean;
+  end: boolean;
+}
+
+/**
+ * 1本の罫を線にする（縦組みの座標。横組みはあとで転置する）。種類が二重線なら太さを3つに分けて2本、点線・破線は破線にする。
+ * 色が空なら文字の色（resolvePage が入れる）。
+ */
+function ruleLines(x1: number, y1: number, x2: number, y2: number, r: ParagraphRule, size: number): Shape[] {
+  const w = r.width;
+  const color = r.color ?? "";
+  if (r.kind === "double") {
+    // 線の向きに直角な方向へ、太さの3分の1ずつずらした2本。
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+    const nx = (-(y2 - y1) / len) * (w / 3);
+    const ny = ((x2 - x1) / len) * (w / 3);
+    return [-1, 1].map((k): Shape => ({ kind: "line", x1: x1 + nx * k, y1: y1 + ny * k, x2: x2 + nx * k, y2: y2 + ny * k, width: w / 3, color }));
+  }
+  const dash = r.kind === "dotted" ? [w, w * 1.5] : r.kind === "dashed" ? [Math.max(w * 4, size * 0.3), Math.max(w * 2, size * 0.15)] : undefined;
+  return [{ kind: "line", x1, y1, x2, y2, width: w, color, ...(dash ? { dash } : {}) }];
+}
+
+/**
+ * 段落の罫線・囲み罫・網掛け。同じ段落・同じ段の行をまとめて囲む（段落がページや段をまたぐときは、その分だけ）。
+ * 縦組みでは行が右から左へ並ぶので、前の罫は1行目の右、後の罫は最後の行の左。長さは行の長さいっぱいか、字のある所だけ。
+ * 前の罫は段落の1行目のあるページに、後の罫は最後の行のあるページにだけ引く。
+ */
+function decorationShapes(rows: DecoRow[], size: number, perLine: number): { under: Shape[]; over: Shape[] } {
+  const under: Shape[] = [];
+  const over: Shape[] = [];
+  for (let i = 0; i < rows.length; ) {
+    let j = i + 1;
+    while (j < rows.length && rows[j].para === rows[i].para && rows[j].band === rows[i].band) j++;
+    const group = rows.slice(i, j);
+    i = j;
+    const first = group[0];
+    const last = group[group.length - 1];
+    const d = first.para.deco;
+    const text = d.length === "text";
+    // 行の向きの範囲（y）。字のある所だけなら、まとめた行の字の範囲。
+    const span = (rs: DecoRow[]) =>
+      text
+        ? [first.bandTop + Math.min(...rs.map((r) => r.from)) * size, first.bandTop + Math.max(...rs.map((r) => r.to)) * size]
+        : [first.bandTop, first.bandTop + perLine * size];
+    const [y0, y1] = span(group);
+    const pad = d.pad * size;
+    // 囲む範囲：行の並びの外側に pad の空き。
+    const rightEdge = first.x + first.half + pad;
+    const leftEdge = last.x - last.half - pad;
+    if (d.shading) under.push({ kind: "rect", x: leftEdge, y: y0 - pad, w: rightEdge - leftEdge, h: y1 - y0 + pad * 2, fill: d.shading });
+    if (d.border.on) {
+      const b = d.border;
+      // 罫の太さの半分だけ外に出して、空きが pad になるようにする。
+      const o = b.width / 2;
+      const [l, r, t, btm] = [leftEdge - o, rightEdge + o, y0 - pad - o, y1 + pad + o];
+      over.push(...ruleLines(r, t, r, btm, b, size), ...ruleLines(l, t, l, btm, b, size), ...ruleLines(l, t, r, t, b, size), ...ruleLines(l, btm, r, btm, b, size));
+    }
+    if (d.ruleBefore.on && first.start) {
+      const r = d.ruleBefore;
+      const x = first.x + first.half + r.gap * size + r.width / 2;
+      const [a, b] = span([first]);
+      over.push(...ruleLines(x, a, x, b, r, size));
+    }
+    if (d.ruleAfter.on && last.end) {
+      const r = d.ruleAfter;
+      const x = last.x - last.half - r.gap * size - r.width / 2;
+      const [a, b] = span([last]);
+      over.push(...ruleLines(x, a, x, b, r, size));
+    }
+  }
+  return { under, over };
 }
 
 /** 画像を置く場所。全面は塗り足し（3mm）まで覆って切り、版面は版面に収め、行の中は取った行に置く。 */

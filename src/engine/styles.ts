@@ -1,3 +1,4 @@
+import { hasDecoration, type ParagraphDecoration } from "../document/styles.js";
 import type { Block } from "./types.js";
 import { textBlocks } from "./blocks.js";
 import { grepCellStyles, type CompiledGrep } from "./grep.js";
@@ -26,6 +27,8 @@ export interface EngineParagraphStyle {
   deformRatio?: number;
   /** 正規表現スタイル（読める規則だけ）。 */
   grep?: CompiledGrep[];
+  /** 段落の罫線・囲み罫・網掛け。 */
+  decoration?: ParagraphDecoration;
 }
 
 export interface EngineCharacterStyle {
@@ -79,6 +82,7 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       spaceAfter: ps.spaceAfter,
       keepLines: ps.keepLines,
       keepWithNext: ps.keepWithNext,
+      ...(hasDecoration(ps.decoration) ? { deco: ps.decoration } : {}),
     };
     // 行頭の［＃名前］が段落スタイルでなく文字スタイルの名前なら、その行全体に文字スタイルを当てる（閉じ忘れなど）。
     const lineStyle = block.style && !styles.paragraph.has(block.style) ? styles.character.get(block.style) : undefined;

@@ -8,6 +8,9 @@ import {
   DEFORM_RATIOS,
   GLYPH_FORMS,
   GREP_EXAMPLES,
+  RULE_KINDS,
+  type ParagraphRule,
+  type RuleKind,
   type Deform,
   fontKey,
   type GlyphForm,
@@ -204,7 +207,118 @@ export class StyleEditor {
     deformRow.append(kind, ratio);
     this.root.append(this.labeled("長体・平体", deformRow));
 
-    if (this.kind === "paragraph") this.root.append(this.grepSection(style as ParagraphStyle, sheet));
+    if (this.kind === "paragraph") {
+      this.root.append(this.decorationSection(style as ParagraphStyle));
+      this.root.append(this.grepSection(style as ParagraphStyle, sheet));
+    }
+  }
+
+  /**
+   * 段落の罫線・網掛け：前の罫・後の罫・囲み罫（それぞれ 種類・太さ・色、前後の罫は字との間）、網掛けの色、
+   * 囲み罫と網掛けの字との間、長さ（行の長さいっぱい・字のある所だけ）。使っていない罫の細かな設定は隠す。
+   */
+  private decorationSection(p: ParagraphStyle): HTMLElement {
+    const d = p.decoration;
+    const box = document.createElement("fieldset");
+    box.className = "deco-styles";
+    const legend = document.createElement("legend");
+    legend.textContent = "罫線・網掛け";
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.textContent =
+      "縦組みでは前の罫は段落の右、後の罫は左に、横組みでは上と下に引きます。色を変えなければ文字の色です。字の位置は動かないので、前後の段落と近いときは「前の空き」「後の空き」で間を空けてください。";
+    box.append(legend, help);
+
+    /** 色：文字の色か、選んだ色。 */
+    const colorControl = (value: string | null, set: (v: string | null) => void, fallback: string) => {
+      const own = document.createElement("input");
+      own.type = "checkbox";
+      own.checked = value !== null;
+      const picker = document.createElement("input");
+      picker.type = "color";
+      picker.setAttribute("list", SPOT_LIST_ID);
+      picker.value = value ?? fallback;
+      picker.disabled = !own.checked;
+      own.addEventListener("change", () => {
+        picker.disabled = !own.checked;
+        set(own.checked ? picker.value : null);
+        this.onChange();
+      });
+      picker.addEventListener("input", () => {
+        set(picker.value);
+        this.onChange();
+      });
+      const label = document.createElement("label");
+      label.className = "field check";
+      label.append(own, document.createTextNode("色を変える"), picker);
+      return label;
+    };
+
+    /** 罫1本の設定。on のときだけ細かな設定を見せる。 */
+    const ruleControls = (title: string, r: ParagraphRule, withGap: boolean) => {
+      const wrap = document.createElement("div");
+      wrap.className = "deco-rule";
+      const details = document.createElement("div");
+      details.className = "deco-rule-details";
+      details.hidden = !r.on;
+      const on = this.check(title, r.on, (v) => {
+        r.on = v;
+        details.hidden = !v;
+      });
+      const kind = this.select(RULE_KINDS, r.kind, (v) => {
+        r.kind = v as RuleKind;
+        this.onChange();
+      });
+      details.append(
+        this.labeled("種類", kind),
+        this.number("太さ", r.width, 0.1, 10, 0.1, "pt", (v) => (r.width = v)),
+        ...(withGap ? [this.number("字との間", r.gap, 0, 5, 0.1, "字", (v) => (r.gap = v))] : []),
+        colorControl(r.color, (v) => (r.color = v), "#7a5c3a"),
+      );
+      wrap.append(on, details);
+      return wrap;
+    };
+
+    const shadingDetails = document.createElement("div");
+    shadingDetails.className = "deco-rule-details";
+    shadingDetails.hidden = !d.shading;
+    const shadingColor = document.createElement("input");
+    shadingColor.type = "color";
+    shadingColor.setAttribute("list", SPOT_LIST_ID);
+    shadingColor.value = d.shading ?? "#ece6da";
+    shadingColor.addEventListener("input", () => {
+      d.shading = shadingColor.value;
+      this.onChange();
+    });
+    shadingDetails.append(this.labeled("網の色", shadingColor));
+    const shading = this.check("網掛け（段落の後ろを色で塗る）", !!d.shading, (v) => {
+      d.shading = v ? shadingColor.value : null;
+      shadingDetails.hidden = !v;
+    });
+
+    box.append(
+      ruleControls("前の罫", d.ruleBefore, true),
+      ruleControls("後の罫", d.ruleAfter, true),
+      ruleControls("囲み罫", d.border, false),
+      shading,
+      shadingDetails,
+      this.number("囲み罫・網掛けと字の間", d.pad, 0, 5, 0.1, "字", (v) => (d.pad = v)),
+      this.labeled(
+        "長さ",
+        this.select(
+          [
+            ["column", "行の長さいっぱい"],
+            ["text", "字のある所だけ"],
+          ],
+          d.length,
+          (v) => {
+            d.length = v === "text" ? "text" : "column";
+            this.onChange();
+          },
+        ),
+      ),
+    );
+    return box;
   }
 
   /**

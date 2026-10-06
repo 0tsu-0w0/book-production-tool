@@ -260,6 +260,10 @@ html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 
 .swatches .spot-swatch { border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.7); }
 
 /* 正規表現スタイル（スタイルの欄） */
+.deco-styles { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px 8px; margin: 8px 0 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.deco-styles legend { font-size: 12px; padding: 0 4px; }
+.deco-rule-details { display: flex; flex-direction: column; gap: 2px; margin-inline-start: 1.6em; }
+.deco-rule-details[hidden] { display: none; }
 .grep-styles { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px 8px; margin: 8px 0 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .grep-styles legend { font-size: 12px; padding: 0 4px; }
 .grep-rule { display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; min-width: 0; }

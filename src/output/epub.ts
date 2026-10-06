@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DocImage } from "../document/document.js";
 import { horizontalPunctuation, leftBound, toFormatOptions, toParseOptions, type Settings } from "../document/settings.js";
-import { CAPTION_STYLE, NOTE_STYLE, TABLE_HEADER_STYLE, TABLE_STYLE, type CharacterStyle, type ParagraphStyle } from "../document/styles.js";
+import { CAPTION_STYLE, NOTE_STYLE, TABLE_HEADER_STYLE, TABLE_STYLE, hasDecoration, type CharacterStyle, type ParagraphRule, type ParagraphStyle } from "../document/styles.js";
 import { bookPageBlocks } from "../engine/book-pages.js";
 import { formatText } from "../engine/format.js";
 import { compileGrep, grepCellStyles } from "../engine/grep.js";
@@ -430,6 +430,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       s.bold ? "font-weight:bold" : "",
       s.linePitch && s.linePitch !== 1 ? `line-height:${lineHeight * s.linePitch}` : "",
       family("ps", i) ? `font-family:${family("ps", i)}${family("body")}serif` : "",
+      ...decorationCss(s),
     ].filter(Boolean);
     return `.ps${i}{${rules.join(";")}}`;
   };
@@ -482,6 +483,29 @@ nav li{margin:0;}
 ${settings.styles.paragraph.map(p).join("\n")}
 ${settings.styles.character.map(c).join("\n")}
 `;
+}
+
+/**
+ * 段落の罫線・囲み罫・網掛けの CSS。前の罫・後の罫は、組みの向きに合わせた border-block-start・end
+ * （縦組みでは右と左）。囲み罫があるときは、前後の罫は囲み罫に含める（CSS では同じ辺に2本引けないため）。
+ * 長さが「字のある所だけ」なら、段落の幅を字に合わせる。em は段落の字の大きさが基準なので、倍率で割る。
+ */
+function decorationCss(s: ParagraphStyle): string[] {
+  const d = s.decoration;
+  if (!hasDecoration(d)) return [];
+  const em = (v: number) => `${Math.round((v / s.scale) * 1000) / 1000}em`;
+  const line = (r: ParagraphRule) => `${r.width}pt ${r.kind} ${r.color ?? "currentColor"}`;
+  const out: string[] = [];
+  if (d.shading) out.push(`background-color:${d.shading}`);
+  // 囲みの空きを先に書く（あとの前後の罫の空きで、その辺だけ上書きする）。
+  if (d.shading || d.border.on) out.push(`padding:${em(d.pad)}`);
+  if (d.border.on) out.push(`border:${line(d.border)}`);
+  else {
+    if (d.ruleBefore.on) out.push(`border-block-start:${line(d.ruleBefore)}`, `padding-block-start:${em(d.ruleBefore.gap)}`);
+    if (d.ruleAfter.on) out.push(`border-block-end:${line(d.ruleAfter)}`, `padding-block-end:${em(d.ruleAfter.gap)}`);
+  }
+  if (d.length === "text") out.push("inline-size:fit-content");
+  return out;
 }
 
 /** EPUB のファイルを ZIP に書く（mimetype を先頭に、無圧縮で。EPUB の決まり）。 */

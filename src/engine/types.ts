@@ -1,3 +1,4 @@
+import type { ParagraphDecoration } from "../document/styles.js";
 import type { Typography } from "./spacing.js";
 
 // 組版エンジンで共有する型。単位は特に断りがなければ pt（1pt = 1/72 インチ）。
@@ -91,6 +92,8 @@ export interface ParaFormat {
   keepLines?: boolean;
   /** 次の行と離さない（見出しがページの最後の行に取り残されないようにする）。 */
   keepWithNext?: boolean;
+  /** 段落の罫線・囲み罫・網掛け（使っているときだけ）。 */
+  deco?: ParagraphDecoration;
 }
 
 export type Block =

@@ -73,7 +73,62 @@ export interface ParagraphStyle {
   deformRatio: number;
   /** 正規表現スタイル：この段落スタイルの段落で、正規表現に合う字に文字スタイルを当てる（あとの規則が優先）。 */
   grep: GrepRule[];
+  /** 段落の罫線（前・後）・囲み罫・網掛け。 */
+  decoration: ParagraphDecoration;
 }
+
+/** 罫線の種類。 */
+export type RuleKind = "solid" | "double" | "dotted" | "dashed";
+export const RULE_KINDS: [RuleKind, string][] = [
+  ["solid", "実線"],
+  ["double", "二重線"],
+  ["dotted", "点線"],
+  ["dashed", "破線"],
+];
+
+/** 段落の罫線1本（前の罫・後の罫・囲み罫）。 */
+export interface ParagraphRule {
+  on: boolean;
+  kind: RuleKind;
+  /** 太さ（pt）。 */
+  width: number;
+  /** 色（#rrggbb）。null なら文字の色。 */
+  color: string | null;
+  /** 字との間（本文の1字の大きさに対する割合）。囲み罫では使わない（pad を使う）。 */
+  gap: number;
+}
+
+/**
+ * 段落の罫線・網掛け（InDesign の段落境界線・段落の囲み罫・段落の背景色にあたる）。
+ * 縦組みでは、前の罫は段落の右（1行目の外側）、後の罫は左（最後の行の外側）。横組みでは上と下。
+ * 字の場所は動かさない（罫や網が前後の段落に掛かるときは、段落スタイルの前後の空きで間を空ける）。
+ */
+export interface ParagraphDecoration {
+  ruleBefore: ParagraphRule;
+  ruleAfter: ParagraphRule;
+  border: ParagraphRule;
+  /** 網掛けの色（#rrggbb）。null なら網掛けなし。 */
+  shading: string | null;
+  /** 囲み罫・網掛けと字の間（字）。 */
+  pad: number;
+  /** 長さ：行の長さいっぱい（column）か、字のある所だけ（text）。 */
+  length: "column" | "text";
+}
+
+const rule = (over: Partial<ParagraphRule> = {}): ParagraphRule => ({ on: false, kind: "solid", width: 0.5, color: null, gap: 0.5, ...over });
+
+export const DEFAULT_DECORATION: ParagraphDecoration = {
+  ruleBefore: rule(),
+  ruleAfter: rule(),
+  border: rule(),
+  shading: null,
+  pad: 0.5,
+  length: "column",
+};
+
+/** 罫線・網掛けのどれかを使っているか。 */
+export const hasDecoration = (d: ParagraphDecoration | undefined): d is ParagraphDecoration =>
+  !!d && (d.ruleBefore.on || d.ruleAfter.on || d.border.on || !!d.shading);
 
 /** 正規表現スタイルの規則：pattern（JavaScript の正規表現）に合う字に、文字スタイル style を当てる。 */
 export interface GrepRule {
@@ -154,6 +209,7 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   deform: "",
   deformRatio: 80,
   grep: [],
+  decoration: structuredClone(DEFAULT_DECORATION),
   ...over,
 });
 
@@ -169,6 +225,31 @@ const character = (name: string, over: Partial<CharacterStyle> = {}): CharacterS
   deformRatio: 80,
   ...over,
 });
+
+/** 段落の罫線1本を読む。 */
+const ruleOf = (v: unknown): ParagraphRule => {
+  const r = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  return rule({
+    on: r.on === true,
+    kind: RULE_KINDS.some(([k]) => k === r.kind) ? (r.kind as RuleKind) : "solid",
+    width: Math.round(num(r.width, 0.5, 0.1, 10) * 100) / 100,
+    color: color(r.color),
+    gap: Math.round(num(r.gap, 0.5, 0, 5) * 100) / 100,
+  });
+};
+
+/** 段落の罫線・網掛けを読む。 */
+const decorationOf = (v: unknown): ParagraphDecoration => {
+  const d = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  return {
+    ruleBefore: ruleOf(d.ruleBefore),
+    ruleAfter: ruleOf(d.ruleAfter),
+    border: ruleOf(d.border),
+    shading: color(d.shading),
+    pad: Math.round(num(d.pad, 0.5, 0, 5) * 100) / 100,
+    length: d.length === "text" ? "text" : "column",
+  };
+};
 
 /** 正規表現スタイルの規則を読む（正規表現が読めない規則も、直せるように残す）。 */
 const grepRules = (v: unknown): GrepRule[] =>
@@ -251,6 +332,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         deform: deform(p.deform),
         deformRatio: Math.round(num(p.deformRatio, 80, 30, 99)),
         grep: grepRules(p.grep),
+        decoration: decorationOf(p.decoration),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {
