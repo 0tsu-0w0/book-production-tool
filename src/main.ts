@@ -11,6 +11,7 @@ import { FontService } from "./fonts/service.js";
 import { glyphVariants } from "./fonts/glyph-variants.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
 import { epubFonts } from "./output/epub-fonts.js";
+import { writePackage } from "./output/package.js";
 import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSIONS, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
 import { typesetCover } from "./engine/cover.js";
 import { checkPdfX } from "./output/check-pdfx.js";
@@ -71,6 +72,7 @@ let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 const autoPdf = snapshotDir ? arg("export-pdf") : undefined;
 const autoImages = snapshotDir ? arg("export-images") : undefined;
 const autoEpub = snapshotDir ? arg("export-epub") : undefined;
+const autoPackage = snapshotDir ? arg("export-package") : undefined;
 // 確認用：--bench を付けると、原稿の途中を何度か書き換えて組み直しの時間を測り、標準出力に書く。
 const bench = !!snapshotDir && process.argv.includes("--bench");
 
@@ -163,7 +165,8 @@ ipcMain.handle("init", () => {
     opened: startupDoc && !isBookFile(startupDoc) ? openSafely(startupDoc) : undefined,
     book: startupDoc && isBookFile(startupDoc) ? startupDoc : undefined,
     snapshot: !!snapshotDir,
-    autoExport: !!(autoPdf || autoImages || autoEpub),
+    autoExport: !!(autoPdf || autoImages || autoEpub || autoPackage),
+    autoPackage: !!autoPackage,
     bench,
     /** 確認用：--page=N で、スナップショットを N ページ目から撮る。 */
     startPage: Number(arg("page")) || 1,
@@ -591,6 +594,18 @@ async function exportPdfFile(text: string, settings: Settings, baseName: string,
     : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
   if (canceled || !filePath) return undefined;
 
+  return renderPdfFile(text, settings, images, filePath, loaded, table);
+}
+
+/** PDF を別スレッドで組んで filePath に書き出し、入稿用なら検査する（書き出しの中心。パッケージでも使う）。 */
+async function renderPdfFile(
+  text: string,
+  settings: Settings,
+  images: DocImage[],
+  filePath: string,
+  loaded: ReturnType<FontService["loadTable"]>["loaded"],
+  table: ReturnType<FontService["loadTable"]>["table"],
+): Promise<{ error: string } | { path: string; pages: number; pdfx: boolean; standard?: string; problems: string[] }> {
   const iccRead = readIccFor(settings);
   if ("error" in iccRead) return iccRead;
   const icc = iccRead.icc;
@@ -621,6 +636,48 @@ async function exportPdfFile(text: string, settings: Settings, baseName: string,
     worker.on("error", (err: Error) => resolve({ error: err.message }));
   });
 }
+
+// ---- パッケージ（InDesign のパッケージにあたるもの） ----
+
+/**
+ * 入稿に要るものを1つのフォルダにまとめる：文書・Links（画像）・Fonts（書体）・入稿用 PDF・指示書.txt。
+ * 保存先のフォルダの名前を聞く（同じ名前のフォルダがあって中身があれば、作り直さずに知らせる）。
+ * 入稿用 PDF は、閲覧用を選んでいても入稿用（トンボ付き）で書き出す。
+ */
+ipcMain.handle(
+  "package:export",
+  async (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = [], findings: { level: "error" | "warning" | "info"; message: string }[] = []) => {
+    if (snapshotDir && !autoPackage) return undefined;
+    const { canceled, filePath } = autoPackage
+      ? { canceled: false, filePath: path.resolve(autoPackage) }
+      : await dialog.showSaveDialog(win!, { title: "パッケージ（フォルダ）の保存先", defaultPath: `${baseName} フォルダ`, buttonLabel: "パッケージを作る", properties: ["createDirectory", "showOverwriteConfirmation"] });
+    if (canceled || !filePath) return undefined;
+    if (fs.existsSync(filePath) && (!fs.statSync(filePath).isDirectory() || fs.readdirSync(filePath).length > 0)) {
+      return { error: `「${path.basename(filePath)}」はもうあります（中身のあるフォルダかファイル）。別の名前にしてください。` };
+    }
+    const { loaded, table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
+    const printSettings: Settings = settings.pdfKind === "screen" ? { ...settings, pdfKind: "print" } : settings;
+    try {
+      const r = await writePackage({
+        dir: filePath,
+        name: baseName,
+        text,
+        settings,
+        images,
+        fonts: loaded.map((l) => l.choice),
+        findings,
+        appVersion: app.getVersion(),
+        pdf: async (file) => {
+          const res = await renderPdfFile(text, printSettings, images, file, loaded, table);
+          return "error" in res ? { error: res.error } : { pages: res.pages, standard: res.standard, problems: res.problems };
+        },
+      });
+      return { path: r.dir, files: r.files.length, skippedFonts: r.skippedFonts, pdf: r.pdf };
+    } catch (e) {
+      return { error: `パッケージを作れませんでした：${e instanceof Error ? e.message : String(e)}` };
+    }
+  },
+);
 
 // ---- ブック（InDesign のブック機能にあたるもの） ----
 
@@ -897,6 +954,7 @@ function buildMenu() {
         cmd("PDF を書き出す…", "export-pdf", "CmdOrCtrl+E"),
         cmd("画像を書き出す…", "export-images", "CmdOrCtrl+Shift+E"),
         cmd("EPUB（電子書籍）を書き出す…", "export-epub"),
+        cmd("パッケージ（入稿用にまとめる）…", "export-package"),
         { type: "separator" },
         process.platform === "darwin" ? { role: "close", label: "閉じる" } : { role: "quit", label: "終了" },
       ],

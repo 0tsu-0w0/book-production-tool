@@ -1,4 +1,5 @@
 import type { DrawItem, DrawPage } from "../engine/types.js";
+import type { InkPreview } from "./ink-preview.js";
 import { canvasSize, drawPage, type DrawFont } from "./draw.js";
 
 // プレビュー（OUT-01）。1ページ・見開き・一覧の3つの表示を切り替える。
@@ -40,6 +41,8 @@ export class Preview {
   leftBound = false;
   /** 仕上がり線と塗り足しを見せるときの塗り足しの幅（mm）。 */
   bleedMm = 3;
+  /** 分版プレビュー（選んだ版だけで刷った見え方）。null なら画面の色のまま。 */
+  ink: InkPreview | null = null;
   /** 紙面の字をクリック・ダブルクリックしたとき（原稿のその場所を開く。DTP-15）。 */
   onPick?: (item: DrawItem, ev: MouseEvent, double: boolean) => void;
   /** キャンバスごとに、描いたページと縮尺を覚えておく（クリックした字を探すため）。 */
@@ -179,7 +182,7 @@ export class Preview {
   private makeCanvas(page: DrawPage, cssScale: number, reuse?: HTMLCanvasElement): HTMLCanvasElement {
     const canvas = reuse ?? this.pickable(document.createElement("canvas"));
     const dpr = window.devicePixelRatio || 1;
-    const opts = { pxPerPt: cssScale * dpr, bleedPt: this.guides ? this.bleedMm * MM_PT : 0, guides: this.guides, images: this.images };
+    const opts = { pxPerPt: cssScale * dpr, bleedPt: this.guides ? this.bleedMm * MM_PT : 0, guides: this.guides, images: this.images, ink: this.ink };
     const size = canvasSize(page, opts);
     if (canvas.width !== size.width) canvas.width = size.width;
     if (canvas.height !== size.height) canvas.height = size.height;

@@ -1,4 +1,5 @@
 import type { DrawPage, Shape } from "../engine/types.js";
+import type { InkPreview } from "./ink-preview.js";
 
 // ページを Canvas に描く。画面のプレビューと、画像の書き出し（Worker 内の OffscreenCanvas）で共用する。
 
@@ -13,6 +14,8 @@ export interface DrawOptions {
   guides?: boolean;
   /** 文書の画像（名前で引く）。ないものは枠と×印で描く。 */
   images?: Map<string, CanvasImageSource>;
+  /** 分版プレビュー：選んだ版だけで刷った色にし、オーバープリントの色は下の色に重ねる。紙の色は刷らないので白。 */
+  ink?: InkPreview | null;
 }
 
 /** 1つのフォントの字形の輪郭。字形番号はフォントごとに違うので、フォントごとに1つ持つ。 */
@@ -63,13 +66,17 @@ export function drawPage(ctx: Ctx, page: DrawPage, fonts: DrawFont[], opts: Draw
   const origin = (x: number, y: number) => [(x + bleed) * px, (y + bleed) * px] as const;
   const { width, height } = canvasSize(page, opts);
 
+  const ink = opts.ink ?? null;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = page.paper;
+  ctx.fillStyle = ink ? "#ffffff" : page.paper;
   ctx.fillRect(0, 0, width, height);
 
   ctx.setTransform(px, 0, 0, px, bleed * px, bleed * px);
   for (const shape of page.shapes) {
-    if (shape.kind === "image") drawImage(ctx, shape, opts.images?.get(shape.name));
+    if (shape.kind === "image") {
+      const source = opts.images?.get(shape.name);
+      drawImage(ctx, shape, source && ink ? inkImage(source, ink) : source);
+    } else if (ink) drawShape(ctx, inkShape(shape, ink), ink, shape);
     else drawShape(ctx, shape);
   }
 
@@ -102,15 +109,20 @@ export function drawPage(ctx: Ctx, page: DrawPage, fonts: DrawFont[], opts: Draw
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   for (const { color, stroke, path } of groups.values()) {
-    ctx.fillStyle = color;
+    // 分版プレビュー：見せない版だけの色は描かない。オーバープリントの色は下の色に掛け合わせる。
+    const shown = ink ? ink.color(color) : color;
+    if (!shown) continue;
+    ctx.globalCompositeOperation = ink?.overprint(color) ? "multiply" : "source-over";
+    ctx.fillStyle = shown;
     ctx.fill(path);
     if (stroke > 0) {
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = shown;
       ctx.lineWidth = stroke;
       ctx.lineJoin = "round";
       ctx.stroke(path);
     }
   }
+  ctx.globalCompositeOperation = "source-over";
 
   if (opts.guides && bleed > 0) {
     ctx.setTransform(px, 0, 0, px, bleed * px, bleed * px);
@@ -158,10 +170,69 @@ function drawImage(ctx: Ctx, shape: Extract<Shape, { kind: "image" }>, source: C
   ctx.restore();
 }
 
-function drawShape(ctx: Ctx, shape: Shape): void {
+/**
+ * 分版プレビューの図形の色：選んだ版だけの色にする。どの版にも乗らない色は空にして描かない
+ * （線・塗りの色が空の図形は drawShape が飛ばす）。
+ */
+function inkShape(shape: Shape, ink: InkPreview): Shape {
+  const map = (c: string) => (c ? (ink.color(c) ?? "") : c);
+  switch (shape.kind) {
+    case "line":
+    case "path":
+      return { ...shape, color: map(shape.color) };
+    case "rect":
+      return { ...shape, ...(shape.fill ? { fill: map(shape.fill) } : {}), ...(shape.stroke ? { stroke: { ...shape.stroke, color: map(shape.stroke.color) } } : {}) };
+    case "circle":
+    case "diamond":
+      return { ...shape, fill: map(shape.fill) };
+    default:
+      return shape;
+  }
+}
+
+/** 分版プレビューの画像：画素ごとに、選んだ版だけで刷った色にしたもの（版の組み合わせごとに控える）。 */
+const inkImages = new WeakMap<object, { key: string; canvas: OffscreenCanvas }>();
+function inkImage(source: CanvasImageSource, ink: InkPreview): CanvasImageSource {
+  const hit = inkImages.get(source);
+  if (hit && hit.key === ink.key) return hit.canvas;
+  const s = source as { width: number | { baseVal: { value: number } }; height: number | { baseVal: { value: number } } };
+  const w = typeof s.width === "number" ? s.width : s.width.baseVal.value;
+  const h = typeof s.height === "number" ? s.height : s.height.baseVal.value;
+  if (!w || !h) return source;
+  const canvas = new OffscreenCanvas(w, h);
+  const c = canvas.getContext("2d")!;
+  c.drawImage(source, 0, 0);
+  const data = c.getImageData(0, 0, w, h);
+  const d = data.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [r, g, b] = ink.pixel(d[i], d[i + 1], d[i + 2]);
+    d[i] = r;
+    d[i + 1] = g;
+    d[i + 2] = b;
+  }
+  c.putImageData(data, 0, 0);
+  inkImages.set(source, { key: ink.key, canvas });
+  return canvas;
+}
+
+function drawShape(ctx: Ctx, shape: Shape, ink?: InkPreview, original: Shape = shape): void {
+  // 分版プレビュー：オーバープリントの色（元の色で決める）は、下の色に掛け合わせる。
+  const o = original;
+  const color = o.kind === "line" || o.kind === "path" ? o.color : o.kind === "rect" ? (o.fill ?? o.stroke?.color ?? "") : "fill" in o ? o.fill : "";
+  ctx.globalCompositeOperation = ink && color && ink.overprint(color) ? "multiply" : "source-over";
+  try {
+    drawShapeInner(ctx, shape);
+  } finally {
+    ctx.globalCompositeOperation = "source-over";
+  }
+}
+
+/** 図形を描く。色が空の所は描かない（分版プレビューで、見せない版だけの色）。 */
+function drawShapeInner(ctx: Ctx, shape: Shape): void {
   ctx.setLineDash([]);
   switch (shape.kind) {
     case "path": {
+      if (!shape.color) break;
       ctx.save();
       ctx.transform(...shape.m);
       ctx.fillStyle = shape.color;
@@ -170,6 +241,7 @@ function drawShape(ctx: Ctx, shape: Shape): void {
       break;
     }
     case "line":
+      if (!shape.color) break;
       ctx.strokeStyle = shape.color;
       ctx.lineWidth = shape.width;
       if (shape.dash) ctx.setLineDash(shape.dash);
@@ -183,13 +255,14 @@ function drawShape(ctx: Ctx, shape: Shape): void {
         ctx.fillStyle = shape.fill;
         ctx.fillRect(shape.x, shape.y, shape.w, shape.h);
       }
-      if (shape.stroke) {
+      if (shape.stroke?.color) {
         ctx.strokeStyle = shape.stroke.color;
         ctx.lineWidth = shape.stroke.width;
         ctx.strokeRect(shape.x, shape.y, shape.w, shape.h);
       }
       break;
     case "circle":
+      if (!shape.fill) break;
       ctx.fillStyle = shape.fill;
       ctx.beginPath();
       ctx.arc(shape.cx, shape.cy, shape.r, 0, Math.PI * 2);
@@ -199,6 +272,7 @@ function drawShape(ctx: Ctx, shape: Shape): void {
       // リンクの範囲は描かない（閲覧用 PDF でだけ使う）。
       break;
     case "diamond":
+      if (!shape.fill) break;
       ctx.fillStyle = shape.fill;
       ctx.beginPath();
       ctx.moveTo(shape.cx, shape.cy - shape.r);

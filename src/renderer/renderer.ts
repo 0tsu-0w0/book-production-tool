@@ -18,6 +18,7 @@ import { parseLabeledRange } from "../document/range.js";
 import type { Finding } from "../output/preflight.js";
 import { DEFAULT_SETTINGS, leftBound, normalizeSettings, spreadOutput, toFormatOptions, type FontChoice, type Settings } from "../document/settings.js";
 import { GlyphPanel, type GlyphVariantView } from "./glyph-panel.js";
+import { SeparationsPanel } from "./separations-panel.js";
 import { formatText } from "../engine/format.js";
 import type { DrawPage } from "../engine/types.js";
 import { GlyphPaths, type DrawFont } from "./draw.js";
@@ -70,6 +71,8 @@ interface Api extends TemplateApi {
     /** 起動のときに開くよう頼まれたブックのファイル。 */
     book?: string;
     autoExport: boolean;
+    /** 確認用：パッケージも書き出す（--export-package）。 */
+    autoPackage?: boolean;
     bench: boolean;
     startPage: number;
   }>;
@@ -86,6 +89,13 @@ interface Api extends TemplateApi {
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
   exportEpub(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<EpubResult>;
+  exportPackage(
+    text: string,
+    settings: Settings,
+    baseName: string,
+    images: DocImage[],
+    findings: { level: "error" | "warning" | "info"; message: string }[],
+  ): Promise<{ path: string; files: number; skippedFonts: { name: string; reason: string }[]; pdf?: { pages?: number; error?: string } } | { error: string } | undefined>;
   bookExportEpub(path: string, book: Book): Promise<EpubResult>;
   bookNew(): Promise<{ path: string; book: Book } | undefined>;
   bookOpen(file?: string): Promise<{ path: string; book: Book } | { error: string } | undefined>;
@@ -412,6 +422,8 @@ async function fetchPages(version: number, indices: number[]): Promise<DrawPage[
 
 function onSettingsChanged(s: Settings) {
   settings = s;
+  // 特色や書き出しの色が変わったら、分版プレビューの版の一覧も作り直す（開いているときだけ）。
+  separations.refresh();
   markChanged();
 }
 
@@ -517,6 +529,18 @@ function wrapLines(name: string) {
 }
 
 // 字形パネル：原稿欄のカーソルの字の、別の字形（異体字・字形の候補）を選ぶ。
+// 分版プレビュー：入稿用 PDF で刷る版を選んで、紙面を見る。
+const separations = new SeparationsPanel({
+  settings: () => settings,
+  stage,
+  apply: (ink) => {
+    preview.ink = ink;
+    $("separations").setAttribute("aria-pressed", String(!!ink));
+    preview.show();
+  },
+});
+$("separations").addEventListener("click", () => separations.toggle());
+
 const glyphPanel = new GlyphPanel({
   source,
   variants: (base) => api.glyphVariants(settings.font, base, !leftBound(settings)),
@@ -715,6 +739,27 @@ function reportEpub(r: EpubResult) {
   setStatus(`EPUB を保存しました：${r.path}`);
 }
 
+/** パッケージ：書き出す前の検査をしてから、文書・画像・書体・入稿用 PDF・指示書を1つのフォルダにまとめる。 */
+function exportPackage() {
+  return withBusy(async () => {
+    const check = await checkBeforeExport("pdf");
+    if (!check.go) return setStatus("パッケージを作るのをやめました。");
+    // 指示書に書く検査の結果（問題・注意・参考のすべて）。
+    const findings = await api.preflight(source.value, settings, "pdf", imageInfos(imageManager.images));
+    setStatus("パッケージを作っています…");
+    const r = await api.exportPackage(source.value, settings, baseName(), imageManager.images, findings);
+    if (!r) return setStatus("パッケージを作るのをやめました。");
+    if ("error" in r) {
+      setStatus(r.error);
+      if (!init.autoExport) alert(r.error);
+      return;
+    }
+    const skipped = r.skippedFonts.length > 0 ? `。入れなかった書体：${r.skippedFonts.map((f) => `${f.name}（${f.reason}）`).join("・")}` : "";
+    const pdf = r.pdf?.error ? `。入稿用 PDF は書き出せませんでした（${r.pdf.error}）` : "";
+    setStatus(`パッケージを作りました：${r.path}（${r.files}ファイル${skipped}${pdf}）`);
+  });
+}
+
 function exportEpub() {
   return withBusy(async () => {
     setStatus("EPUB を書き出しています…");
@@ -887,6 +932,8 @@ async function runCommand(command: string) {
       return exportPdf();
     case "export-epub":
       return exportEpub();
+    case "export-package":
+      return exportPackage();
     case "export-images":
       return exportImages();
     case "view-single":
@@ -1060,6 +1107,10 @@ if (init.snapshot) {
     await exportImages();
     await exportEpub();
     console.log(`[snapshot] ${status.textContent}`);
+    if (init.autoPackage) {
+      await exportPackage();
+      console.log(`[snapshot] ${status.textContent}`);
+    }
   }
   await api.saveSnapshot(shots);
 }

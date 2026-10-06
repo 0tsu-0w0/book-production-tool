@@ -290,3 +290,10 @@ html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 
 .glyph-cell svg { width: 44px; height: 44px; fill: currentColor; }
 .glyph-cell span { font-size: 10px; white-space: nowrap; }
 .glyph-cell[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* 分版プレビュー（字形パネルと同じ形の、右下の小さな窓） */
+.separations-panel { left: auto; right: 16px; }
+.plate-list { display: flex; flex-direction: column; gap: 2px; }
+.plate-list .plate { display: flex; align-items: center; gap: 6px; margin: 0; }
+.plate-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--line); }
+#separations[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
