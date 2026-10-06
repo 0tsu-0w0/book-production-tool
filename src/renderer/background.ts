@@ -26,10 +26,11 @@ export class Backdrop {
     document.body.prepend(this.layer);
     // 窓を隠している間は動画を止める（電力を食わないように）。
     document.addEventListener("visibilitychange", () => {
-      // 後ろの窓のすりガラスは、隠している間は画面の取り込みも止める。
+      // 後ろの窓のすりガラスは、隠している間は画面の取り込みを一時停止する（止めてしまうと、戻したときに
+      // 取り込みを始め直すのに時間がかかり、その間ぼかしが消えるため）。長く隠したままなら止める。
       if (this.current?.kind === "behind") {
-        if (document.hidden) this.stopCapture();
-        else this.startCapture();
+        if (document.hidden) this.pauseCapture();
+        else this.resumeCapture();
         return;
       }
       const v = this.media instanceof HTMLVideoElement ? this.media : null;
@@ -93,9 +94,37 @@ export class Backdrop {
   }
 
   private stopCapture() {
+    clearTimeout(this.pauseTimer);
     for (const t of this.capture?.getTracks() ?? []) t.stop();
     this.capture = null;
     if (this.media instanceof HTMLVideoElement) this.media.srcObject = null;
+  }
+
+  /** 隠したまま、この時間が過ぎたら取り込みを止める（電力のため）。 */
+  private static readonly PAUSE_LIMIT_MS = 60_000;
+  private pauseTimer: number | undefined;
+
+  /**
+   * 取り込みの一時停止：映像を止めて最後のコマを残し、取り込みの映像を流さない（track.enabled = false）。
+   * 先に映像を止めるのは、流さない間の黒いコマを見せないため。
+   */
+  private pauseCapture() {
+    if (!this.capture) return;
+    if (this.media instanceof HTMLVideoElement) this.media.pause();
+    for (const t of this.capture.getTracks()) t.enabled = false;
+    clearTimeout(this.pauseTimer);
+    this.pauseTimer = window.setTimeout(() => this.stopCapture(), Backdrop.PAUSE_LIMIT_MS);
+  }
+
+  /** 取り込みの再開。止めてしまっていれば、取り込みを始め直す。 */
+  private resumeCapture() {
+    clearTimeout(this.pauseTimer);
+    if (!this.capture) {
+      this.startCapture();
+      return;
+    }
+    for (const t of this.capture.getTracks()) t.enabled = true;
+    if (this.media instanceof HTMLVideoElement) void this.media.play().catch(() => {});
   }
 
   /** 壁紙が変わったとき（窓に戻ってきたときに知らされる）。 */
@@ -105,13 +134,32 @@ export class Backdrop {
     if (this.current?.kind === "wallpaper") {
       this.shownFile = null;
       this.apply(this.current);
+    } else if (this.current?.kind === "behind" && this.media) {
+      // 後ろの窓のすりガラスの、取り込みが始まるまでに見せる壁紙も替える。
+      this.media.style.backgroundImage = `url("${wallpaperUrl(version)}")`;
     }
   }
 
+  /**
+   * 壁紙・後ろの窓を敷く。ディスプレイの大きさを scale 倍に縮めた層にぼかしを掛け、transform で元の大きさに広げて、
+   * 窓の位置の分だけずらす。強くぼかすなら細かい所は見えないので、小さく描いても見た目は同じで、
+   * ぼかしの計算は scale² 倍に減る。窓を動かしたり最大化したりしても、層を動かすだけでぼかし直さない
+   * （ディスプレイいっぱいの層を窓の大きさが変わるたびにぼかし直すと、最大化などのあと数秒かかっていた）。
+   */
   private placeWallpaper() {
     const g = this.geometry;
     if (!g || !this.media?.classList.contains("bg-wallpaper")) return;
-    Object.assign(this.media.style, { left: `${-g.x}px`, top: `${-g.y}px`, width: `${g.width}px`, height: `${g.height}px` });
+    const s = this.wantedScale();
+    const blur = this.current?.backBlur ?? 40;
+    Object.assign(this.media.style, {
+      left: "0px",
+      top: "0px",
+      width: `${Math.ceil(g.width * s)}px`,
+      height: `${Math.ceil(g.height * s)}px`,
+      transformOrigin: "0 0",
+      transform: `translate(${-g.x}px, ${-g.y}px) scale(${1 / s})`,
+      filter: `blur(${Math.round(blur * s * 100) / 100}px) saturate(1.3)`,
+    });
   }
 
   apply(a: Appearance) {
@@ -168,6 +216,8 @@ export class Backdrop {
         v.muted = true;
         v.autoplay = true;
         v.playsInline = true;
+        // 取り込みが始まるまで（映像のコマがない間）は、デスクトップの壁紙を同じぼかしで見せる（後ろがくっきり透けないように）。
+        if (this.wallpaperVersion) v.style.backgroundImage = `url("${wallpaperUrl(this.wallpaperVersion)}")`;
         this.media = v;
       }
       if (this.media) this.layer.prepend(this.media);
@@ -178,6 +228,8 @@ export class Backdrop {
       this.stopCapture();
       this.startCapture();
     }
+    // ぼかしの強さが変わったときも、層の大きさとぼかしを合わせ直す。
+    this.placeWallpaper();
     if (this.media) {
       this.media.dataset.fit = a.fit;
       if (this.media instanceof HTMLVideoElement && a.kind === "video") this.media.style.objectFit = a.fit === "contain" ? "contain" : "cover";
