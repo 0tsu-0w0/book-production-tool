@@ -70,7 +70,7 @@ const bookBase = (): Settings => {
   const s = structuredClone(DEFAULT_SETTINGS);
   s.layoutMode = "book";
   s.chapterStartsOdd = true;
-  s.typography = { mode: "jis", lineHeadBracket: "full", oikomi: true, rubyOverhang: true };
+  s.typography = { mode: "jis", lineHeadBracket: "full", lineEndPunct: "full", oikomi: true, rubyOverhang: true };
   s.pages = { front: [{ kind: "title", text: "" }, { kind: "blank", text: "" }], back: [{ kind: "colophon", text: "" }], padTo: 1 };
   return s;
 };

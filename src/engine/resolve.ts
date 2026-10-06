@@ -117,6 +117,8 @@ export function applyProportional(blocks: Block[], faces: Face[]): void {
         cell.advance = advance * scale;
         cell.shift = (cell.shift ?? 0) + shift * scale;
         cell.compress = 0;
+        // 字面に合わせた長さなので、行末で取れるアキも分からない。
+        cell.endAki = 0;
       }
     }
   }

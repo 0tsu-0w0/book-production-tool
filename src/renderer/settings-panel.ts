@@ -234,6 +234,13 @@ function sections(): Section[] {
           options: [["full", "全角"], ["half", "半角（天付き）"]],
           when: (s) => s.typography.mode === "jis",
         },
+        {
+          kind: "select",
+          path: "typography.lineEndPunct",
+          label: "行末の終わり括弧・句読点",
+          options: [["full", "全角（アキを残す）"], ["half", "半角（行末約物半角）"]],
+          when: (s) => s.typography.mode === "jis",
+        },
         { kind: "check", path: "typography.oikomi", label: "行頭禁則は、まず約物を詰めて前の行に入れる（追い込み）", when: (s) => s.typography.mode === "jis" },
         { kind: "check", path: "typography.rubyOverhang", label: "長いルビを前後の仮名に掛ける", when: (s) => s.typography.mode === "jis" },
         // 文字組みアキ量（InDesign の文字組みアキ量設定にあたる）。型を選ぶか、値を自分で決める。

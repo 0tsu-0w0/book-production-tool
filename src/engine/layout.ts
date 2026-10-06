@@ -45,6 +45,8 @@ export interface Line {
   adjust?: number;
   /** 行頭の始め括弧を半角にした分（em）。 */
   headTrim?: number;
+  /** 行末の終わり括弧・句読点のアキを取った分（em。行末約物半角）。 */
+  endTrim?: number;
   /** 行取り（何行分の幅を取るか）。 */
   span?: number;
   /** 行の中での揃え。 */
@@ -94,6 +96,8 @@ interface BreakOptions {
   oikomi?: boolean;
   /** 段落の途中の行頭に来た始め括弧を半角にする。 */
   lineHeadHalf?: boolean;
+  /** 行末に来た終わり括弧・句読点を半角にする（行末約物半角）。 */
+  lineEndHalf?: boolean;
   /** 禁則に足す字。 */
   /** 禁則の字（行頭・行末・ぶら下げ・分離禁止）。なければ kinsoku の強さから作る。 */
   sets?: KinsokuSets;
@@ -107,6 +111,9 @@ const noBreakBetween = (before: string, after: string, o: BreakOptions) => {
   const s = setsOf(o).noBreak;
   return s.size > 0 && s.has(before) && s.has(after);
 };
+
+/** 行末に来たときに取るアキ（行末約物半角のとき。割注は取らない）。 */
+const endAki = (a: Atom, o: BreakOptions) => (o.lineEndHalf && !a.warichu ? (a.cells[a.cells.length - 1].endAki ?? 0) : 0);
 
 function compressible(atoms: Atom[]): number {
   return atoms.reduce((s, a) => s + a.cells.reduce((t, c) => t + (c.compress ?? 0), 0), 0);
@@ -166,8 +173,10 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
   const widthAt = typeof width === "number" ? () => width : width;
   let perLine = widthAt(0);
 
-  const push = (adjust: number) => {
-    lines.push({ atoms: cur, indent, adjust, headTrim, limit: perLine });
+  const push = (adjust: number, endTrim = 0) => {
+    const line: Line = { atoms: cur, indent, adjust, headTrim, limit: perLine };
+    if (endTrim > 0) line.endTrim = endTrim;
+    lines.push(line);
     cur = [];
     indent = firstIndent + hang;
     used = indent;
@@ -176,8 +185,10 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
   };
   const flush = (last = false) => {
     // 禁則で行を戻したあとは used が合わないので、行の中身から数え直す。
-    const length = indent - headTrim + cur.reduce((s, a) => s + atomWidth(a), 0);
-    push(!last && opts.justify && length < perLine - EPS ? perLine - length : 0);
+    // 行末約物半角：行末の終わり括弧・句読点のアキは取り、その分も字間に配る（字形が行末にそろう）。
+    const endTrim = cur.length > 0 ? endAki(cur[cur.length - 1], opts) : 0;
+    const length = indent - headTrim + cur.reduce((s, a) => s + atomWidth(a), 0) - endTrim;
+    push(!last && opts.justify && length < perLine - EPS ? perLine - length : 0, endTrim);
   };
 
   while (queue.length > 0) {
@@ -193,7 +204,8 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
       }
     }
 
-    if (used + w <= perLine + EPS) {
+    // 行末約物半角なら、終わり括弧・句読点はアキを取った長さで入れば、この行に入れる（次の字は入らないので、ここが行末になる）。
+    if (used + w <= perLine + EPS || used + w - endAki(a, opts) <= perLine + EPS) {
       cur.push(queue.shift()!);
       used += w;
       continue;
@@ -208,10 +220,13 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
 
     // 追い込み：行頭禁則の文字が次の行に出るなら、行内の約物のアキを詰めて、この行に入れる。
     if (opts.oikomi && cur.length > 0 && a.cells.length === 1 && startProhibited(first(a), opts)) {
-      const need = used + w - perLine;
-      if (need <= compressible([...cur, a]) + EPS) {
+      // 入れた字が行末になるので、行末約物半角ならそのアキは取る（詰める量には数えない）。
+      const trim = endAki(a, opts);
+      const need = used + w - trim - perLine;
+      const room = compressible([...cur, a]) - (trim > 0 ? (a.cells[a.cells.length - 1].compress ?? 0) : 0);
+      if (need <= room + EPS) {
         cur.push(queue.shift()!);
-        push(-need);
+        push(-need, trim);
         continue;
       }
     }
@@ -336,6 +351,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     justify: jis || !!spec.horizontal,
     oikomi: jis && spec.typography.oikomi,
     lineHeadHalf: jis && spec.typography.lineHeadBracket === "half",
+    lineEndHalf: jis && spec.typography.lineEndPunct === "half",
     sets: kinsokuSets(spec.kinsoku, spec.kinsokuExtra, spec.kinsokuCustom),
   };
   // 見出しは両端揃えにしない（字下げした短い行なので）。
@@ -347,7 +363,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     if (k === undefined) {
       const sets = setsOf(o);
       const list = (x: Set<string>) => [...x].join("");
-      optsKeys.set(o, (k = JSON.stringify([spec.charsPerLine, o.kinsoku, o.hanging, !!o.justify, !!o.oikomi, !!o.lineHeadHalf, list(sets.start), list(sets.end), list(sets.hang), list(sets.noBreak)])));
+      optsKeys.set(o, (k = JSON.stringify([spec.charsPerLine, o.kinsoku, o.hanging, !!o.justify, !!o.oikomi, !!o.lineHeadHalf, !!o.lineEndHalf, list(sets.start), list(sets.end), list(sets.hang), list(sets.noBreak)])));
     }
     return k;
   };
@@ -1090,7 +1106,10 @@ function placeLine(
   line = fillLeader(line, perLine);
   const cells = line.atoms.flatMap((a) => a.cells);
   const adjust = line.adjust ?? 0;
-  const totalCompress = compressible(line.atoms);
+  // 行末約物半角で取った行末のアキ：最後の字の長さから引き、詰める量には数えない。
+  const endTrim = line.endTrim ?? 0;
+  const lastCell = cells[cells.length - 1];
+  const totalCompress = compressible(line.atoms) - (endTrim > 0 ? (lastCell?.compress ?? 0) : 0);
   const shrinkRatio = adjust < 0 && totalCompress > 0 ? Math.min(1, -adjust / totalCompress) : 0;
   // 両端揃えの空きは、まず語間（半角の空白）に1つ0.5emまで配り、残りを字間に均等に配る（欧文の行が字間で広がりすぎないように）。
   const spaces = adjust > 0 ? cells.filter((c) => c.text === " ").length : 0;
@@ -1101,7 +1120,7 @@ function placeLine(
 
   let offset = line.indent - (line.headTrim ?? 0);
   if (line.align === "center" || line.align === "end") {
-    const length = cells.reduce((s, c) => s + advance(c), 0);
+    const length = cells.reduce((s, c) => s + advance(c), 0) - endTrim;
     offset = line.align === "center" ? line.indent + (perLine - line.indent - length) / 2 : perLine - length;
   }
   offset += line.offset ?? 0;
@@ -1133,7 +1152,9 @@ function placeLine(
     for (const cell of atom.cells) {
       let adv = advance(cell);
       let shift = cell.shift ?? 0;
-      if (shrinkRatio > 0 && cell.compress) {
+      if (endTrim > 0 && cell === lastCell) {
+        adv -= endTrim;
+      } else if (shrinkRatio > 0 && cell.compress) {
         const s = cell.compress * shrinkRatio;
         adv -= s;
         if (cell.compressFromStart) shift -= s;

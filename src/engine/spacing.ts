@@ -10,6 +10,11 @@ export interface Typography {
   mode: "grid" | "jis";
   /** 段落の途中の行頭に来た始め括弧を、全角のままにするか半角（天付き）にするか。 */
   lineHeadBracket: "full" | "half";
+  /**
+   * 行末に来た終わり括弧・句読点を、全角のまま（アキを残す）にするか半角（アキを取る。行末約物半角）にするか。
+   * 半角なら、取ったアキの分だけ行に字が入り、字形が行末にそろう。なければ全角。
+   */
+  lineEndPunct?: "full" | "half";
   /** 行頭禁則の文字が次の行へ出るとき、行内の約物を詰めて入れる（追い込み）。できなければ追い出す。 */
   oikomi: boolean;
   /** 親文字より長いルビを、前後の仮名に1字（ルビ文字1字分）まで掛ける。 */
@@ -66,7 +71,7 @@ const PERIODS = new Set([..."。．"]);
 /** 中点類：字形は字の中央にあり、前後にアキを持つ。 */
 const MIDDLE_DOTS = new Set([..."・：；"]);
 
-export const GRID_TYPOGRAPHY: Typography = { mode: "grid", lineHeadBracket: "full", oikomi: false, rubyOverhang: false };
+export const GRID_TYPOGRAPHY: Typography = { mode: "grid", lineHeadBracket: "full", lineEndPunct: "full", oikomi: false, rubyOverhang: false };
 
 const OPENING = new Set([..."「『（［｛〔〈《【〘〖｟“‘"]);
 const CLOSING = new Set([..."」』）］｝〕〉》】〙〗｠”’"]);
@@ -98,6 +103,7 @@ export function prepareSpacing(blocks: Block[], t: Typography, rubyScale: number
         cell.shift = 0;
         cell.compress = 0;
         cell.compressFromStart = false;
+        cell.endAki = 0;
         cells.push(cell);
       }
     }
@@ -118,6 +124,8 @@ export function prepareSpacing(blocks: Block[], t: Typography, rubyScale: number
         const aki = cls === "closing" ? k.afterClosing : PERIODS.has(cell.text) ? k.afterPeriod : k.afterComma;
         setLength(cell, 0.5 + aki, scale);
         cell.compress = k.compress ? aki * scale : 0;
+        // 行末に来たら取れるアキ（行末約物半角）。詰めてよいかに関わらず、アキの全部。
+        cell.endAki = aki * scale;
       } else if (cls === "opening") {
         // 字形は後ろ（下）の半角、アキは前。アキを減らした分だけ、字形を前へずらす。
         setLength(cell, 0.5 + k.beforeOpening, scale);
@@ -139,6 +147,7 @@ export function prepareSpacing(blocks: Block[], t: Typography, rubyScale: number
       if ((a === "closing" || a === "stop") && b !== null) {
         cells[i].advance = 0.5 * (cells[i].scale ?? 1);
         cells[i].compress = 0;
+        cells[i].endAki = 0;
         // 終わり括弧・句読点のあとの始め括弧：間のアキは「続くとき」の量（始め括弧の前に付ける）。
         if (b === "opening") {
           const next = cells[i + 1];
@@ -224,6 +233,7 @@ export function applyDeform(blocks: Block[], horizontal: boolean): void {
         if (f === 1 || cell.math) continue;
         cell.advance = (cell.advance ?? 1) * f;
         cell.compress = (cell.compress ?? 0) * f;
+        if (cell.endAki) cell.endAki *= f;
         cell.shift = (cell.shift ?? 0) * f;
         if (cell.hyph) cell.hyph = cell.hyph.map((h) => ({ at: h.at, width: h.width * f, rest: h.rest * f }));
       }

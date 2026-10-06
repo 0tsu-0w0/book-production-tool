@@ -23,6 +23,8 @@ export interface Cell {
   compress?: number;
   /** 詰めるのがマスの前（上）側か。始め括弧は前にアキがある。 */
   compressFromStart?: boolean;
+  /** 行末に来たときに取れる、字形のあとのアキ（em）。終わり括弧・句読点（行末約物半角で使う）。 */
+  endAki?: number;
   /** 使うフォントの番号（0 は本文の書体）。 */
   font?: number;
   /** 本文の文字サイズに対する倍率。 */
