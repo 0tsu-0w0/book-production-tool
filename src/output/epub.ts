@@ -83,6 +83,8 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   // 正規表現スタイル（段落スタイルの名前 → 規則）。紙面と同じ規則で、文字スタイルの span を付ける。
   const characterNames = new Set(cIndex.keys());
   const grepOf = new Map(settings.styles.paragraph.map((s) => [s.name, compileGrep(s.grep, characterNames)]));
+  // ドロップキャップを使う段落スタイル。
+  const dropCapStyles = new Set(settings.styles.paragraph.filter((s) => s.dropCap.lines >= 2).map((s) => s.name));
   const imageFile = new Map(images.map((img, i) => [img.name, `img${String(i + 1).padStart(3, "0")}.${img.mime === "image/png" ? "png" : "jpg"}`]));
 
   const chapters: Chapter[] = [];
@@ -194,9 +196,15 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
           html += `<h${b.level} id="${id}" class="${paraClass(b, fallback)}">${atomsHtml(b.atoms, paraName(b, fallback))}</h${b.level}>`;
           break;
         }
-        case "para":
-          html += `<p class="${paraClass(b, "本文")}">${b.atoms.length > 0 ? atomsHtml(b.atoms, paraName(b, "本文")) : "<br/>"}</p>`;
+        case "para": {
+          const name = paraName(b, "本文");
+          // ドロップキャップの段落は、頭の空白（字下げ）を落とす（最初の字が大きくなるように）。
+          let start = 0;
+          if (dropCapStyles.has(name)) while (start < b.atoms.length && b.atoms[start].cells.every((c) => /^\s*$/u.test(c.text))) start++;
+          const atoms = b.atoms.slice(start);
+          html += `<p class="${paraClass(b, "本文")}">${atoms.length > 0 ? atomsHtml(atoms, name) : "<br/>"}</p>`;
           break;
+        }
         case "blank":
           html += `<p class="blank"><br/></p>`;
           break;
@@ -432,7 +440,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       family("ps", i) ? `font-family:${family("ps", i)}${family("body")}serif` : "",
       ...decorationCss(s),
     ].filter(Boolean);
-    return `.ps${i}{${rules.join(";")}}`;
+    return `.ps${i}{${rules.join(";")}}${dropCapCss(s, i, settings.styles.character)}`;
   };
   const c = (s: CharacterStyle, i: number) => {
     const rules = [
@@ -506,6 +514,18 @@ function decorationCss(s: ParagraphStyle): string[] {
   }
   if (d.length === "text") out.push("inline-size:fit-content");
   return out;
+}
+
+/**
+ * ドロップキャップの CSS：段落の最初の字を initial-letter で大きくする（読む側が対応していれば）。
+ * CSS では最初の1字だけなので、2字以上の指定でも EPUB では1字になる。文字スタイルの色・太字も当てる。
+ */
+function dropCapCss(s: ParagraphStyle, i: number, characters: CharacterStyle[]): string {
+  if (s.dropCap.lines < 2) return "";
+  const cs = characters.find((c) => c.name === s.dropCap.style);
+  const rules = [`initial-letter:${s.dropCap.lines}`, `-webkit-initial-letter:${s.dropCap.lines}`, cs?.color ? `color:${cs.color}` : "", cs?.bold ? "font-weight:bold" : ""].filter(Boolean);
+  return `
+.ps${i}::first-letter{${rules.join(";")}}`;
 }
 
 /** EPUB のファイルを ZIP に書く（mimetype を先頭に、無圧縮で。EPUB の決まり）。 */

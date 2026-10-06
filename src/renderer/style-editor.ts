@@ -208,9 +208,51 @@ export class StyleEditor {
     this.root.append(this.labeled("長体・平体", deformRow));
 
     if (this.kind === "paragraph") {
+      this.root.append(this.dropCapSection(style as ParagraphStyle, sheet));
       this.root.append(this.decorationSection(style as ParagraphStyle));
       this.root.append(this.grepSection(style as ParagraphStyle, sheet));
     }
+  }
+
+  /** ドロップキャップ：またがる行数（なしで使わない）・大きくする字数・大きな字に当てる文字スタイル。 */
+  private dropCapSection(p: ParagraphStyle, sheet: StyleSheet): HTMLElement {
+    const d = p.dropCap;
+    const box = document.createElement("fieldset");
+    box.className = "deco-styles";
+    const legend = document.createElement("legend");
+    legend.textContent = "ドロップキャップ";
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.textContent = "段落の頭の字を大きくして、何行かにまたがらせます。行頭の字下げ（全角の空白）は落とします。大きな字の分だけ、またがる行を下げて始めます。";
+    const details = document.createElement("div");
+    details.className = "deco-rule-details";
+    details.hidden = d.lines < 2;
+    const lines = this.select(
+      [
+        ["0", "なし"],
+        ...[2, 3, 4, 5].map((n): [string, string] => [String(n), `${n}行にまたがる`]),
+      ],
+      String(d.lines),
+      (v) => {
+        d.lines = Number(v);
+        details.hidden = d.lines < 2;
+        this.onChange();
+      },
+    );
+    const styleOptions: [string, string][] = [["", "段落の字のまま"], ...sheet.character.map((c): [string, string] => [c.name, c.name])];
+    if (d.style && !sheet.character.some((c) => c.name === d.style)) styleOptions.push([d.style, `${d.style}（ありません）`]);
+    details.append(
+      this.number("大きくする字数", d.chars, 1, 5, 1, "字", (v) => (d.chars = Math.round(v))),
+      this.labeled(
+        "大きな字の文字スタイル（書体・色・太字）",
+        this.select(styleOptions, d.style, (v) => {
+          d.style = v;
+          this.onChange();
+        }),
+      ),
+    );
+    box.append(legend, help, this.labeled("大きさ", lines), details);
+    return box;
   }
 
   /**
@@ -448,7 +490,11 @@ export class StyleEditor {
     input.setCustomValidity("");
     // 文字スタイルの名前を変えたら、正規表現スタイルの規則もその名前に付け替える。
     if (this.kind === "character") {
-      for (const p of this.getSheet().paragraph) for (const r of p.grep) if (r.style === style.name) r.style = name;
+      for (const p of this.getSheet().paragraph) {
+        for (const r of p.grep) if (r.style === style.name) r.style = name;
+        // ドロップキャップの文字スタイルも付け替える。
+        if (p.dropCap.style === style.name) p.dropCap.style = name;
+      }
     }
     style.name = name;
     this.selected[this.kind] = name;

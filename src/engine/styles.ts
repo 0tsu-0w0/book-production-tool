@@ -1,6 +1,7 @@
 import { hasDecoration, type ParagraphDecoration } from "../document/styles.js";
 import type { Block } from "./types.js";
 import { textBlocks } from "./blocks.js";
+import { splitDropCap } from "./dropcap.js";
 import { grepCellStyles, type CompiledGrep } from "./grep.js";
 import { NOTE_MARK_SCALE } from "./notes.js";
 
@@ -29,6 +30,8 @@ export interface EngineParagraphStyle {
   grep?: CompiledGrep[];
   /** 段落の罫線・囲み罫・網掛け。 */
   decoration?: ParagraphDecoration;
+  /** ドロップキャップ。 */
+  dropCap?: { lines: number; chars: number; style: string };
 }
 
 export interface EngineCharacterStyle {
@@ -83,6 +86,7 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       keepLines: ps.keepLines,
       keepWithNext: ps.keepWithNext,
       ...(hasDecoration(ps.decoration) ? { deco: ps.decoration } : {}),
+      ...(ps.dropCap && ps.dropCap.lines >= 2 ? { dropCap: { lines: ps.dropCap.lines, chars: ps.dropCap.chars } } : {}),
     };
     // 行頭の［＃名前］が段落スタイルでなく文字スタイルの名前なら、その行全体に文字スタイルを当てる（閉じ忘れなど）。
     const lineStyle = block.style && !styles.paragraph.has(block.style) ? styles.character.get(block.style) : undefined;
@@ -119,6 +123,18 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         const r = d ? (d.deformRatio ?? 80) / 100 : 1;
         cell.sx = d?.deform === "condensed" && !cell.math ? r : undefined;
         cell.sy = d?.deform === "flat" && !cell.math ? r : undefined;
+      }
+    }
+    // ドロップキャップの大きな字：指定した文字スタイルの書体・色・太字・字形を当てる（大きさは組むときに決める）。
+    const dropStyle = block.format.dropCap && ps.dropCap?.style ? styles.character.get(ps.dropCap.style) : undefined;
+    if (dropStyle) {
+      for (const atom of splitDropCap(block.atoms, block.format.dropCap!.chars)?.cap ?? []) {
+        for (const cell of atom.cells) {
+          if (dropStyle.font >= 0) cell.font = dropStyle.font;
+          if (dropStyle.color) cell.color = dropStyle.color;
+          if (dropStyle.bold) cell.bold = true;
+          if (dropStyle.glyphForm) cell.features = dropStyle.glyphForm;
+        }
       }
     }
   }

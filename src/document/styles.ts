@@ -75,6 +75,18 @@ export interface ParagraphStyle {
   grep: GrepRule[];
   /** 段落の罫線（前・後）・囲み罫・網掛け。 */
   decoration: ParagraphDecoration;
+  /** ドロップキャップ（段落の頭の字を大きくして、何行かにまたがらせる）。 */
+  dropCap: DropCap;
+}
+
+/** ドロップキャップの設定。lines が 0 なら使わない。 */
+export interface DropCap {
+  /** またがる行数（2〜5。0 なら使わない）。 */
+  lines: number;
+  /** 大きくする字数（1〜5）。 */
+  chars: number;
+  /** 大きな字に当てる文字スタイルの名前（書体・色・太字。空なら段落の字のまま）。 */
+  style: string;
 }
 
 /** 罫線の種類。 */
@@ -210,6 +222,7 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   deformRatio: 80,
   grep: [],
   decoration: structuredClone(DEFAULT_DECORATION),
+  dropCap: { lines: 0, chars: 1, style: "" },
   ...over,
 });
 
@@ -236,6 +249,13 @@ const ruleOf = (v: unknown): ParagraphRule => {
     color: color(r.color),
     gap: Math.round(num(r.gap, 0.5, 0, 5) * 100) / 100,
   });
+};
+
+/** ドロップキャップを読む（行数は 0 か 2〜5）。 */
+const dropCapOf = (v: unknown): DropCap => {
+  const d = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const lines = Math.round(num(d.lines, 0, 0, 5));
+  return { lines: lines < 2 ? 0 : lines, chars: Math.round(num(d.chars, 1, 1, 5)), style: typeof d.style === "string" ? d.style : "" };
 };
 
 /** 段落の罫線・網掛けを読む。 */
@@ -333,6 +353,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         deformRatio: Math.round(num(p.deformRatio, 80, 30, 99)),
         grep: grepRules(p.grep),
         decoration: decorationOf(p.decoration),
+        dropCap: dropCapOf(p.dropCap),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {

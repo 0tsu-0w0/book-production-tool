@@ -94,6 +94,8 @@ export interface ParaFormat {
   keepWithNext?: boolean;
   /** 段落の罫線・囲み罫・網掛け（使っているときだけ）。 */
   deco?: ParagraphDecoration;
+  /** ドロップキャップ（使っているときだけ）。 */
+  dropCap?: { lines: number; chars: number };
 }
 
 export type Block =

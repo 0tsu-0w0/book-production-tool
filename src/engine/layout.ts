@@ -2,6 +2,7 @@ import type { ParagraphDecoration, ParagraphRule } from "../document/styles.js";
 import { isHangable, isLineEndProhibited, isLineStartProhibited } from "./kinsoku.js";
 import { GRID_TYPOGRAPHY, punctClass } from "./spacing.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
+import { dropCapScale, splitDropCap } from "./dropcap.js";
 import type { Atom, Block, Cell, ImageBlock, Kinsoku, LayoutSpec, PageLayout, PageRole, ParaFormat, PlacedGlyph, Rect, Shape, SideLine } from "./types.js";
 
 export const MM = 72 / 25.4;
@@ -62,6 +63,11 @@ export interface Line {
   /** 段落の罫線・網掛け（同じ段落の行は同じオブジェクトを指す。段落の切れ目を見分けるのにも使う）。 */
   para?: { deco: ParagraphDecoration };
   /**
+   * ドロップキャップ（段落の1行目だけ）：大きくする字・大きさ（本文の字に対する倍率）・またがる行数・下げた字数。
+   * 大きな字は、この行から lines 行にまたがって、行の頭に置く。
+   */
+  dropCap?: { atoms: Atom[]; em: number; lines: number; length: number };
+  /**
    * 表の行のとき（罫線を引くため）：欄の境目（行の頭からの字数）、行の前・後に引く罫線の範囲
    * （表の行の最初・最後の行だけ。結合した欄の所は空ける）、二重線、罫線の引き方。
    */
@@ -70,7 +76,8 @@ export interface Line {
 
 /** 行の文字列（ルビは除き、割注は含む）。 */
 function lineText(line: Line): string {
-  return line.atoms.map((a) => a.warichu ?? a.cells.map((c) => c.text).join("")).join("");
+  // ドロップキャップの大きな字も、その行の頭の字として数える（校正の補助で）。
+  return [...(line.dropCap?.atoms ?? []), ...line.atoms].map((a) => a.warichu ?? a.cells.map((c) => c.text).join("")).join("");
 }
 
 /** 見出しの文字列（ルビは除く）。 */
@@ -468,11 +475,19 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     // 箇条書きの項目：印の幅だけ、2行目以降を下げる。
     const hang = block.atoms[0]?.listMark ? listMarkWidth(block.atoms) : 0;
     const indent = align !== f.align ? 0 : f.indent;
+    // ドロップキャップ：頭の字を外して大きくし、またがる行は大きな字の長さだけ下げる（1字単位に切り上げ）。
+    const drop = f.dropCap && align === "start" ? splitDropCap(block.atoms, f.dropCap.chars) : undefined;
+    const dropLines = drop ? f.dropCap!.lines : 0;
+    const dropEm = drop ? dropCapScale(dropLines, spec.lineGap, span) : 0;
+    const dropLength = drop
+      ? Math.min(Math.ceil(drop.cap.reduce((s, a) => s + a.cells.length, 0) * dropEm - EPS), Math.max(0, spec.charsPerLine - indent - 1))
+      : 0;
+    const lineWidth = (i: number) => widthAt(i) - (i < dropLines ? dropLength : 0);
     // 回り込みのない段落は、行の字数がどの行も同じなので、前の行分けを使い回せる。
-    const key = breaks && !w ? `${optsKey(lineOpts)}|${indent}|${hang}` : undefined;
+    const key = breaks && !w ? `${optsKey(lineOpts)}|${indent}|${hang}|${dropLines},${dropLength}` : undefined;
     let broken = key ? breaks!.get(block, key) : undefined;
     if (!broken) {
-      broken = breakLines(block.atoms, w ? widthAt : spec.charsPerLine, indent, lineOpts, hang);
+      broken = breakLines(drop ? drop.rest : block.atoms, w || drop ? lineWidth : spec.charsPerLine, indent, lineOpts, hang);
       if (key) breaks!.set(block, key, broken);
     }
     const count = broken.length;
@@ -480,7 +495,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const para = f.deco ? { deco: f.deco } : undefined;
     broken.forEach((line, i) => {
       line.para = para;
-      if (w?.top && inWrap(i)) line.offset = w.chars;
+      const offset = (w?.top && inWrap(i) ? w.chars : 0) + (i < dropLines ? dropLength : 0);
+      if (offset) line.offset = offset;
+      if (i === 0 && drop) line.dropCap = { atoms: drop.cap, em: dropEm, lines: dropLines, length: dropLength };
       line.start = i === 0;
       line.end = i === count - 1;
       line.span = span;
@@ -489,6 +506,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       line.srcLine = srcLine;
       out.push(line);
     });
+    // 大きな字がまたがる行より段落が短いときは、残りの行を空けておく（次の段落と重ならないように）。
+    if (dropLines > count) out.push(snap((dropLines - count) * span));
     for (let i = 0; i < f.spaceAfter; i++) out.push("blank");
     return out;
   };
@@ -770,6 +789,13 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const text = all.slice(lead, tail);
     all.slice(0, lead).forEach(pushLine);
     const textSlots = text.reduce<number>((s, l) => s + slots(l), 0);
+    // ドロップキャップ：大きな字がまたがる行は、同じ段に置く（大きな字が段やページの外にはみ出さないように）。
+    const head = text[0];
+    if (typeof head === "object" && head.dropCap) {
+      const need = text.slice(0, head.dropCap.lines).reduce<number>((s, l) => s + slots(l), 0);
+      const room = roomInBand();
+      if (room < need - EPS && room < spec.linesPerPage) breakBand();
+    }
     if (f?.keepWithNext) {
       const room = roomInBand();
       if (room < spec.linesPerPage && room < textSlots + (all.length - tail) + after + 1) breakBand();
@@ -812,7 +838,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const labels = [...anchors[i]];
     for (const l of lines) {
       if (typeof l !== "object") continue;
-      for (const a of l.atoms) {
+      for (const a of l.dropCap ? [...l.dropCap.atoms, ...l.atoms] : l.atoms) {
         if (a.label) labels.push(a.label);
         if (a.index) for (const e of a.index) if (e.id) labels.push(e.id);
       }
@@ -927,6 +953,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
         const x = right - size / 2 - col * pitch;
         const bandTop = top + band * (columnHeight + spec.columnGapPt);
         const extent = placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
+        if (line.dropCap) placeDropCap(glyphs, line, x, bandTop, size, pitch * span);
         if (line.para) {
           // 行の太さ：いちばん大きい字の大きさ。
           let scale = 1;
@@ -976,7 +1003,8 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
         firstSrc = null;
         for (const l of lines) {
           if (typeof l !== "object" || l.srcLine === undefined) continue;
-          const c = l.atoms.find((a) => a.cells.some((x) => x.src !== undefined))?.cells.find((x) => x.src !== undefined);
+          const atoms = l.dropCap ? [...l.dropCap.atoms, ...l.atoms] : l.atoms;
+          const c = atoms.find((a) => a.cells.some((x) => x.src !== undefined))?.cells.find((x) => x.src !== undefined);
           if (c) {
             firstSrc = [l.srcLine, c.src!];
             break;
@@ -1146,6 +1174,25 @@ function placeLine(
   }
   shapes.push(...sideLineShapes(sideRuns, horizontal));
   return { from, to: offset };
+}
+
+/**
+ * ドロップキャップの大きな字を置く。字の幅は1行目からまたがる最後の行までの幅、中心はその真ん中。
+ * 行の頭（段落の字下げのあと）から、大きな字を1字ずつ並べる。linePitch はこの段落の1行の幅（行取り込み）。
+ */
+function placeDropCap(glyphs: PlacedGlyph[], line: Line, x: number, bandTop: number, size: number, linePitch: number): void {
+  const d = line.dropCap!;
+  const big = size * d.em;
+  const cx = x - ((d.lines - 1) * linePitch) / 2;
+  let y = bandTop + line.indent * size;
+  for (const a of d.atoms) {
+    for (const c of a.cells) {
+      const g: PlacedGlyph = { text: c.halfLatin ? toHalfWidth(c.text) : c.text, kind: c.tcy || c.halfLatin ? "tcy" : "vert", x: cx, y, size: big, font: c.font, bold: c.bold, color: c.color };
+      if (c.features) g.features = c.features;
+      glyphs.push(g);
+      y += big;
+    }
+  }
 }
 
 /** 罫線・網掛けのある段落の、ページの上の1行。 */
