@@ -243,6 +243,21 @@ function sections(): Section[] {
         },
         { kind: "check", path: "typography.oikomi", label: "行頭禁則は、まず約物を詰めて前の行に入れる（追い込み）", when: (s) => s.typography.mode === "jis" },
         { kind: "check", path: "typography.rubyOverhang", label: "長いルビを前後の仮名に掛ける", when: (s) => s.typography.mode === "jis" },
+        // ルビの位置（InDesign のルビの位置と間隔にあたる）。ベタ組みでも使う。
+        {
+          kind: "select",
+          path: "typography.rubyAlign",
+          label: "ルビの揃え",
+          options: [["121", "1-2-1（短いルビは親文字に均等に配る）"], ["center", "中付き（詰めて中央に）"], ["shoulder", "肩付き（詰めて親文字の頭から）"]],
+        },
+        {
+          kind: "select",
+          path: "typography.rubySide",
+          label: "ルビの側",
+          options: [["right", "右（横組みでは上）"], ["left", "左（横組みでは下）"]],
+        },
+        { kind: "number", path: "typography.rubyGap", label: "ルビを親文字から離す量（負なら近づける）", min: -0.3, max: 0.5, step: 0.05, unit: "字" },
+        { kind: "number", path: "typography.rubyShift", label: "ルビを行の向きにずらす量（正なら下・横組みでは右へ）", min: -1, max: 1, step: 0.05, unit: "字" },
         // 文字組みアキ量（InDesign の文字組みアキ量設定にあたる）。型を選ぶか、値を自分で決める。
         {
           kind: "select",
@@ -774,7 +789,9 @@ export class SettingsPanel {
         Object.assign(input, { min: String(field.min), max: String(field.max), step: String(field.step) });
         input.value = String(getPath(this.settings, field.path));
         input.addEventListener("change", () => {
-          const v = Math.min(field.max, Math.max(field.min, Number(input.value) || field.min));
+          // 空や数でない値は下限に（0 や負の数はそのまま）。
+          const n = input.value.trim() === "" ? NaN : Number(input.value);
+          const v = Math.min(field.max, Math.max(field.min, Number.isFinite(n) ? n : field.min));
           input.value = String(v);
           this.changed(field.path, v);
         });

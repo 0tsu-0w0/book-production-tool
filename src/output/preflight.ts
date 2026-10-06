@@ -22,6 +22,8 @@ export interface PreflightInput {
   images?: Record<string, { width: number; height: number }>;
   /** 組めなかった数式の知らせ。 */
   mathErrors?: string[];
+  /** 参照先のラベルがない参照の名前。 */
+  missingLabels?: string[];
 }
 
 const MM = 72 / 25.4;
@@ -49,6 +51,12 @@ export function preflight(input: PreflightInput): Finding[] {
   }
 
   for (const e of input.mathErrors ?? []) out.push({ level: "error", message: e });
+  const labels = input.missingLabels ?? [];
+  if (labels.length > 0) {
+    const names = labels.slice(0, 6).map((n) => `「${n}」`).join("・");
+    const more = labels.length > 6 ? ` ほか${labels.length - 6}件` : "";
+    out.push({ level: "warning", message: `参照先のラベルがありません：${names}${more}。参照の所は「？」になります。［＃ラベル：名前］を付けるか、参照の名前を直してください。` });
+  }
 
   if (s.layoutMode === "book") {
     const g = bookGeometry(s.book);

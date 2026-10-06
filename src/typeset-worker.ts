@@ -111,6 +111,7 @@ function handle(req: TypesetRequest): unknown {
         target: req.target,
         images,
         mathErrors: result.mathErrors,
+        missingLabels: result.missingLabels,
       });
     }
   }

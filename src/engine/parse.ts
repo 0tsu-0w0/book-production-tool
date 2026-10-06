@@ -1,4 +1,5 @@
 import type { Atom, Block, ImageBlock, SideLine } from "./types.js";
+import { XREF_KINDS } from "./xref-kinds.js";
 
 // 原稿の記法（参照元の文庫ページメーカーと互換）を読み、段落と Atom の並びにする。
 //   ルビ    ｜漢字《かんじ》 / 漢字《かんじ》 / [[rb:漢字 > かんじ]]
@@ -12,6 +13,8 @@ import type { Atom, Block, ImageBlock, SideLine } from "./types.js";
 //   目次    ［＃目次］（見出しから目次を作って、ここに入れる）
 //   数式    ［＃数式］x^2［＃／数式］（行の中）／［＃別行数式］\int f\,dx［＃／別行数式］（1行に1つ）
 //   マスター ［＃マスター：名前］（このページから使うマスターページ。［＃マスター：標準］で戻す）
+//   参照    ［＃ページ：名前］（ページ番号）・［＃見出し：名前］・［＃章：名前］・［＃参照：名前｜書式］（xref.ts）
+//   字間    ［＃字間：-50］…［＃／字間］（全角1字の 1/1000。負なら詰める）／字と字の間の［＃カーニング：-100］
 //   画像    ［＃画像：名前］（版面に1ページ）／［＃画像：名前　全面］／［＃画像：名前　5行　回り込み　地］
 
 export interface ParseOptions {
@@ -30,6 +33,17 @@ export const DEFAULT_PARSE_OPTIONS: ParseOptions = { tcyDigits: true, halfWidth:
 /** 字形の候補：字のあとの［＃字形：番号］（フォントの aalt の番号。字形パネルで選ぶ）。前の字に付ける。 */
 export const GLYPH_ALT = /^［＃字形[：:]\s*(\d{1,2})\s*］/u;
 
+/** 字間（トラッキング）：［＃字間：-50］…［＃／字間］。全角1字の 1/1000 で、負なら詰める。 */
+const TRACK_OPEN = /^［＃字間[：:]\s*([+\-＋－−]?[0-9０-９]+)\s*］/u;
+const TRACK_CLOSE = /^［＃／字間］/u;
+/** カーニング：字と字の間の［＃カーニング：-100］。前の字と次の字の間を詰める（正なら空ける）。全角1字の 1/1000。 */
+const KERN = /^［＃カーニング[：:]\s*([+\-＋－−]?[0-9０-９]+)\s*］/u;
+/** 符号付きの数（全角の数字・符号も読む）を、範囲に収める。 */
+function signedNumber(s: string, min: number, max: number): number {
+  const v = Number(s.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).replace(/[－−]/, "-").replace("＋", "+"));
+  return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : 0;
+}
+
 /** 異体字セレクタ（標準・IVS）。 */
 const VARIATION_SELECTOR = /^[\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]/u;
 /** 文字列を字に分ける（異体字セレクタは前の字に付ける）。 */
@@ -42,6 +56,10 @@ const INLINE_MATH = /^［＃数式］(.+?)［＃／数式］/;
 /** ラベルとページ番号の参照：［＃ラベル：名前］・［＃ページ：名前］。 */
 const LABEL = /^［＃ラベル[：:]([^［］]+)］/u;
 const PAGE_REF = /^［＃ページ[：:]([^［］]+)］/u;
+/** 相互参照：［＃見出し：名前］・［＃章：名前］・［＃参照：名前］（［＃参照：名前｜書式］で書式を決める）。 */
+const XREF = /^［＃(見出し|章|参照)[：:]([^［］]+)］/u;
+/** 行の中の記法（行頭にあっても、段落スタイルの名前と読まない）。 */
+const INLINE_COMMAND = /^(?:ページ|見出し|章|参照|字形|字間|カーニング|索引|注|ラベル)[：:]/u;
 const LABEL_LINE = /^\s*［＃ラベル[：:]([^［］]+)］\s*$/u;
 
 /** 索引：［＃索引］語［＃／索引］（その語を）・［＃索引：語（よみ）］（印だけ。前の字に付ける）。 */
@@ -172,6 +190,14 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     for (; styled < atoms.length; styled++) if (current && !atoms[styled].style) atoms[styled].style = current;
     styled = atoms.length;
   };
+  // 字間（［＃字間：N］…［＃／字間］）：入れ子なら内側の値。
+  const tracks: number[] = [];
+  let tracked = 0; // 字間を付け終えた Atom の数
+  const markTracked = () => {
+    const current = tracks[tracks.length - 1];
+    if (current !== undefined) for (; tracked < atoms.length; tracked++) for (const c of atoms[tracked].cells) c.tracking ??= current;
+    tracked = atoms.length;
+  };
   let pendingLabel: string | undefined;
   let pendingIndex: { term: string; reading: string }[] = [];
   /** ［＃索引］の始まりの位置（Atom の数）。 */
@@ -188,6 +214,7 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     markSrc();
     start = i;
     markStyled();
+    markTracked();
     const rest = s.slice(i);
     let m: RegExpExecArray | null;
 
@@ -201,6 +228,23 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
       // 前の字の字形を、フォントの字形の候補に替える（行頭なら何もしない）。
       const cells = atoms[atoms.length - 1]?.cells;
       if (cells?.length) cells[cells.length - 1].alt = Number(m[1]) || undefined;
+      i += m[0].length;
+      continue;
+    }
+    if ((m = KERN.exec(rest))) {
+      // 前の字と次の字の間（前の字のあと）。行頭なら何もしない。
+      const cells = atoms[atoms.length - 1]?.cells;
+      if (cells?.length) cells[cells.length - 1].kern = signedNumber(m[1], -1000, 1000) || undefined;
+      i += m[0].length;
+      continue;
+    }
+    if ((m = TRACK_OPEN.exec(rest))) {
+      tracks.push(signedNumber(m[1], -500, 1000));
+      i += m[0].length;
+      continue;
+    }
+    if ((m = TRACK_CLOSE.exec(rest))) {
+      tracks.pop();
       i += m[0].length;
       continue;
     }
@@ -239,6 +283,13 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     if ((m = PAGE_REF.exec(rest))) {
       // 番号は組んでから入れる。それまでは仮に3桁分。
       atoms.push({ cells: [{ text: "000", tcy: true }], pageRef: m[1].trim() });
+      i += m[0].length;
+      continue;
+    }
+    if ((m = XREF.exec(rest))) {
+      // 字は組む前に開く（参照先の見出しは、原稿のほかの行にあるため）。それまでは「？」。
+      const [name, ...format] = m[2].split(/[|｜]/u);
+      atoms.push({ cells: [{ text: "？" }], xref: { name: name.trim(), format: format.length > 0 ? format.join("｜") : XREF_KINDS[m[1]] } });
       i += m[0].length;
       continue;
     }
@@ -345,6 +396,7 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
   }
   markSrc();
   markStyled();
+  markTracked();
   return atoms;
 }
 
@@ -510,7 +562,7 @@ function parseLine(line: string, opts: ParseOptions): Block | Marker {
   // 行頭の［＃名前］で、同じ行に［＃／名前］がなければ、その行の段落スタイル。
   let style: string | undefined;
   const p = STYLE_OPEN.exec(line);
-  if (p && !line.includes(`［＃／${p[1]}］`)) {
+  if (p && !line.includes(`［＃／${p[1]}］`) && !INLINE_COMMAND.test(p[1])) {
     style = p[1];
     line = line.slice(p[0].length);
   }

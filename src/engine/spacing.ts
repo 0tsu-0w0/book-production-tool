@@ -19,6 +19,17 @@ export interface Typography {
   oikomi: boolean;
   /** 親文字より長いルビを、前後の仮名に1字（ルビ文字1字分）まで掛ける。 */
   rubyOverhang: boolean;
+  /**
+   * ルビの揃え。121：親文字より短いルビを親文字の長さに 1:2:1 で配る（これまでどおり）。
+   * center：中付き（ルビ文字を詰めて親文字の中央に）。shoulder：肩付き（ルビ文字を詰めて親文字の頭から）。なければ 121。
+   */
+  rubyAlign?: "121" | "center" | "shoulder";
+  /** ルビの側：right は縦組みの右（横組みの上）、left は縦組みの左（横組みの下）。なければ right。 */
+  rubySide?: "right" | "left";
+  /** ルビを親文字から離す量（本文の字の大きさを 1 とする。負なら近づける）。 */
+  rubyGap?: number;
+  /** ルビを行の向きにずらす量（本文の字の大きさを 1 とする。正なら行の後ろ＝縦組みの下・横組みの右へ）。 */
+  rubyShift?: number;
   /** 文字組みアキ量（jis のとき。なければ標準）。 */
   aki?: Mojikumi;
 }
@@ -206,8 +217,10 @@ function placeRubySpacing(atom: Atom, prev: Atom | undefined, next: Atom | undef
   const excess = rubyLength - baseLength;
   if (excess <= 0) return;
   const limit = rubyScale; // ルビ文字1字分
-  const before = t.rubyOverhang && canHangOn(prev) ? Math.min(limit, excess / 2) : 0;
-  const after = t.rubyOverhang && canHangOn(next) ? Math.min(limit, excess / 2) : 0;
+  // 肩付きは親文字の頭から始めるので、前には掛けず、後ろにだけ掛ける。
+  const shoulder = t.rubyAlign === "shoulder";
+  const before = !shoulder && t.rubyOverhang && canHangOn(prev) ? Math.min(limit, excess / 2) : 0;
+  const after = t.rubyOverhang && canHangOn(next) ? Math.min(limit, shoulder ? excess : excess / 2) : 0;
   const remaining = excess - before - after;
   atom.rubyBefore = before;
   if (remaining <= 0) return;
@@ -215,6 +228,23 @@ function placeRubySpacing(atom: Atom, prev: Atom | undefined, next: Atom | undef
   for (const cell of atom.cells) {
     cell.advance = (cell.advance ?? 1) + per;
     cell.shift = (cell.shift ?? 0) + per / 2;
+  }
+}
+
+/**
+ * 字間（トラッキング・カーニング）：字のあとに足す（負なら詰める）。量は字の大きさに対する割合なので、長体・平体では縮めない。
+ * 長体・平体のあとで呼ぶ。横倒しの欧文（語で1マス）・数式・割注には当てない。詰めすぎても字の長さの1割は残す。
+ */
+export function applyLetterSpacing(blocks: Block[]): void {
+  for (const block of textBlocks(blocks)) {
+    for (const atom of block.atoms) {
+      if (atom.warichu !== undefined) continue;
+      for (const cell of atom.cells) {
+        if (!cell.letterSpace || cell.rotate || cell.math) continue;
+        const scale = cell.scale ?? 1;
+        cell.advance = Math.max(0.1 * scale, (cell.advance ?? 1) + cell.letterSpace * scale);
+      }
+    }
   }
 }
 

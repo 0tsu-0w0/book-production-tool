@@ -77,6 +77,8 @@ export interface ParagraphStyle {
   decoration: ParagraphDecoration;
   /** ドロップキャップ（段落の頭の字を大きくして、何行かにまたがらせる）。 */
   dropCap: DropCap;
+  /** 字間（トラッキング。全角1字の 1/1000。負なら詰める）。 */
+  tracking: number;
 }
 
 /** ドロップキャップの設定。lines が 0 なら使わない。 */
@@ -181,6 +183,8 @@ export interface CharacterStyle {
   /** 空なら段落の長体・平体のまま。 */
   deform: Deform;
   deformRatio: number;
+  /** 字間（全角1字の 1/1000）。0 なら段落の字間のまま。 */
+  tracking: number;
 }
 
 /** 字形の切り替え（OpenType の機能の名前）。フォントにその機能がなければ変わらない。 */
@@ -223,6 +227,7 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   grep: [],
   decoration: structuredClone(DEFAULT_DECORATION),
   dropCap: { lines: 0, chars: 1, style: "" },
+  tracking: 0,
   ...over,
 });
 
@@ -236,6 +241,7 @@ const character = (name: string, over: Partial<CharacterStyle> = {}): CharacterS
   proportional: false,
   deform: "",
   deformRatio: 80,
+  tracking: 0,
   ...over,
 });
 
@@ -354,6 +360,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         grep: grepRules(p.grep),
         decoration: decorationOf(p.decoration),
         dropCap: dropCapOf(p.dropCap),
+        tracking: Math.round(num(p.tracking, 0, -500, 1000)),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {
@@ -371,6 +378,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         proportional: c.proportional === true,
         deform: deform(c.deform),
         deformRatio: Math.round(num(c.deformRatio, 80, 30, 99)),
+        tracking: Math.round(num(c.tracking, 0, -500, 1000)),
       }),
     );
   return { paragraph: paragraphs, character: Array.isArray(src.character) ? characters : structuredClone(DEFAULT_STYLES.character) };

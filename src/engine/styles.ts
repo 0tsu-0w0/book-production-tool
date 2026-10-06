@@ -32,6 +32,8 @@ export interface EngineParagraphStyle {
   decoration?: ParagraphDecoration;
   /** ドロップキャップ。 */
   dropCap?: { lines: number; chars: number; style: string };
+  /** 字間（トラッキング。全角1字の 1/1000）。 */
+  tracking?: number;
 }
 
 export interface EngineCharacterStyle {
@@ -45,6 +47,8 @@ export interface EngineCharacterStyle {
   /** 空なら段落の長体・平体のまま。 */
   deform?: "" | "condensed" | "flat";
   deformRatio?: number;
+  /** 字間（全角1字の 1/1000）。0 なら段落の字間のまま。 */
+  tracking?: number;
 }
 
 export interface EngineStyles {
@@ -124,6 +128,9 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         const r = d ? (d.deformRatio ?? 80) / 100 : 1;
         cell.sx = d?.deform === "condensed" && !cell.math ? r : undefined;
         cell.sy = d?.deform === "flat" && !cell.math ? r : undefined;
+        // 字間：原稿の［＃字間］→ 文字スタイル（0 なら段落のまま）→ 段落スタイル。カーニングは足す。
+        const tracking = cell.tracking ?? (cs?.tracking ? cs.tracking : (ps.tracking ?? 0));
+        cell.letterSpace = (tracking + (cell.kern ?? 0)) / 1000 || undefined;
       }
     }
     // ドロップキャップの大きな字：指定した文字スタイルの書体・色・太字・字形を当てる（大きさは組むときに決める）。

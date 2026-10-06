@@ -207,6 +207,11 @@ export class StyleEditor {
     deformRow.append(kind, ratio);
     this.root.append(this.labeled("長体・平体", deformRow));
 
+    // 字間（トラッキング）：字のあとに足す長さ。全角1字の 1/1000（InDesign と同じ単位）。
+    this.root.append(
+      this.number(this.kind === "character" ? "字間（0 なら段落と同じ）" : "字間（トラッキング）", style.tracking, -500, 1000, 10, "／1000 字", (v) => (style.tracking = Math.round(v))),
+    );
+
     if (this.kind === "paragraph") {
       this.root.append(this.dropCapSection(style as ParagraphStyle, sheet));
       this.root.append(this.decorationSection(style as ParagraphStyle));
@@ -534,7 +539,9 @@ export class StyleEditor {
     Object.assign(input, { min: String(min), max: String(max), step: String(step) });
     input.value = String(value);
     input.addEventListener("change", () => {
-      const v = Math.min(max, Math.max(min, Number(input.value) || min));
+      // 空や数でない値は下限に（0 や負の数はそのまま）。
+      const n = input.value.trim() === "" ? NaN : Number(input.value);
+      const v = Math.min(max, Math.max(min, Number.isFinite(n) ? n : min));
       input.value = String(v);
       set(v);
       this.onChange();

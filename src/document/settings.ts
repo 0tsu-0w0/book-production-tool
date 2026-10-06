@@ -428,7 +428,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   masters: [],
   // 既定は全角ベタ組み（参照元と同じ）。JIS 準拠は設定で選ぶ。
-  typography: { mode: "grid", lineHeadBracket: "full", lineEndPunct: "full", oikomi: true, rubyOverhang: true },
+  typography: { mode: "grid", lineHeadBracket: "full", lineEndPunct: "full", oikomi: true, rubyOverhang: true, rubyAlign: "121", rubySide: "right", rubyGap: 0, rubyShift: 0 },
   styles: DEFAULT_STYLES,
   bookInfo: { title: "", author: "", publisher: "", printer: "", issued: "", extra: "" },
   pages: { front: [], back: [], padTo: 1 },
@@ -662,6 +662,12 @@ export function normalizeSettings(input: unknown): Settings {
   if (!["strong", "weak", "none", "custom"].includes(s.kinsoku)) s.kinsoku = "strong";
   if (s.typography.lineHeadBracket !== "half") s.typography.lineHeadBracket = "full";
   if (s.typography.lineEndPunct !== "half") s.typography.lineEndPunct = "full";
+  // ルビの位置：揃え・側は知らない値なら既定に、離す量・ずらす量は範囲に。
+  const ty = s.typography;
+  if (ty.rubyAlign !== "center" && ty.rubyAlign !== "shoulder") ty.rubyAlign = "121";
+  if (ty.rubySide !== "left") ty.rubySide = "right";
+  ty.rubyGap = clamp(Number(ty.rubyGap) || 0, -0.3, 0.5);
+  ty.rubyShift = clamp(Number(ty.rubyShift) || 0, -1, 1);
   for (const key of ["start", "end", "hang", "noBreak"] as const) s.kinsokuCustom[key] = String(s.kinsokuCustom[key] ?? "").slice(0, 500);
   // 文字組みアキ量：字の値は 0〜1（和欧間は 0〜0.5）に。型の名前が知らないものなら、自分で決めたもの。
   const mk = s.mojikumi;

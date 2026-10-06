@@ -1,6 +1,6 @@
 import type { ParagraphDecoration, ParagraphRule } from "../document/styles.js";
 import { kinsokuSets, type KinsokuSets } from "./kinsoku.js";
-import { GRID_TYPOGRAPHY, punctClass } from "./spacing.js";
+import { GRID_TYPOGRAPHY, punctClass, type Typography } from "./spacing.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
 import { dropCapScale, splitDropCap } from "./dropcap.js";
 import type { Atom, Block, Cell, ImageBlock, Kinsoku, LayoutSpec, PageLayout, PageRole, ParaFormat, PlacedGlyph, Rect, Shape, SideLine } from "./types.js";
@@ -982,7 +982,7 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
         const col = (slot % spec.linesPerPage) + (span - 1) / 2;
         const x = right - size / 2 - col * pitch;
         const bandTop = top + band * (columnHeight + spec.columnGapPt);
-        const extent = placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal);
+        const extent = placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal, spec.typography);
         if (line.dropCap) placeDropCap(glyphs, line, x, bandTop, size, pitch * span);
         if (line.para) {
           // 行の太さ：いちばん大きい字の大きさ。
@@ -1100,6 +1100,7 @@ function placeLine(
   perLine: number,
   shapes: Shape[] = [],
   horizontal = false,
+  ruby?: Pick<Typography, "rubyAlign" | "rubySide" | "rubyGap" | "rubyShift">,
 ): { from: number; to: number } {
   const sideRuns: SideRun[] = [];
   perLine = line.limit ?? perLine;
@@ -1203,8 +1204,11 @@ function placeLine(
       const first = atom.cells[0];
       const scale = first.scale ?? 1;
       const rs = rubySize * scale;
-      const spanTop = bandTop + spanStart * size;
-      placeRuby(glyphs, atom.ruby, x + (size * scale) / 2 + rs / 2, spanTop, (spanEnd - spanStart) * size, rs, (atom.rubyBefore ?? 0) * size, first);
+      const spanTop = bandTop + spanStart * size + (ruby?.rubyShift ?? 0) * size;
+      // 親文字の右（left なら左）に、離す量だけ空けて置く。
+      const side = ruby?.rubySide === "left" ? -1 : 1;
+      const rx = x + side * ((size * scale) / 2 + rs / 2 + (ruby?.rubyGap ?? 0) * size);
+      placeRuby(glyphs, atom.ruby, rx, spanTop, (spanEnd - spanStart) * size, rs, (atom.rubyBefore ?? 0) * size, first, ruby?.rubyAlign);
     }
   }
   shapes.push(...sideLineShapes(sideRuns, horizontal));
@@ -1429,7 +1433,7 @@ function placeCaption(glyphs: PlacedGlyph[], shapes: Shape[], lines: Line[], vis
   const size = spec.fontSizePt;
   lines.forEach((line, i) => {
     const x = visible.x - size * CAPTION_GAP - size / 2 - i * size * CAPTION_PITCH;
-    placeLine(glyphs, line, x, visible.y, size, size * spec.rubyScale, Math.floor(visible.h / size) || spec.charsPerLine, shapes, !!spec.horizontal);
+    placeLine(glyphs, line, x, visible.y, size, size * spec.rubyScale, Math.floor(visible.h / size) || spec.charsPerLine, shapes, !!spec.horizontal, spec.typography);
   });
 }
 
@@ -1514,14 +1518,16 @@ function fillLeader(line: Line, perLine: number): Line {
 }
 
 /**
- * ルビを親文字の右に置く。ルビが短ければ親文字の長さに均等に配る（1:2:1）。
- * 長ければ、前の文字に掛ける長さ（before）の分だけ上から始める。掛けないなら中央そろえ。
+ * ルビを親文字の横（x がルビの行の中心）に置く。
+ * 揃え（align）：121 なら、ルビが短ければ親文字の長さに均等に配る（1:2:1）。center（中付き）は詰めて中央に、
+ * shoulder（肩付き）は詰めて親文字の頭から。ルビが長ければ、前の文字に掛ける長さ（before）の分だけ上から始める。掛けないなら中央そろえ。
  */
-function placeRuby(glyphs: PlacedGlyph[], ruby: string, x: number, spanTop: number, spanLength: number, rubySize: number, before = 0, base?: Cell) {
+function placeRuby(glyphs: PlacedGlyph[], ruby: string, x: number, spanTop: number, spanLength: number, rubySize: number, before = 0, base?: Cell, align: Typography["rubyAlign"] = "121") {
   const chars = [...ruby];
   const natural = chars.length * rubySize;
-  const step = natural < spanLength ? spanLength / chars.length : rubySize;
-  const start = natural > spanLength && before > 0 ? spanTop - before : spanTop + spanLength / 2 - (step * chars.length) / 2;
+  const step = align === "121" && natural < spanLength ? spanLength / chars.length : rubySize;
+  const start =
+    align === "shoulder" || (natural > spanLength && before > 0) ? spanTop - before : spanTop + spanLength / 2 - (step * chars.length) / 2;
   chars.forEach((ch, k) => {
     const center = start + step * (k + 0.5);
     glyphs.push({ text: ch, kind: "vert", x, y: center - rubySize / 2, size: rubySize, font: base?.font, color: base?.color });

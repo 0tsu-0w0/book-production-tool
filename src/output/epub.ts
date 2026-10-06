@@ -7,6 +7,7 @@ import { formatText } from "../engine/format.js";
 import { compileGrep, grepCellStyles } from "../engine/grep.js";
 import { renderMath } from "../engine/math.js";
 import { parse } from "../engine/parse.js";
+import { expandXrefs } from "../engine/xref.js";
 import { texToMarkup } from "../engine/tex.js";
 import type { Atom, Block, Cell, ImageBlock, TableBlock } from "../engine/types.js";
 
@@ -75,7 +76,8 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   const tex = settings.format.markup === "tex" ? texToMarkup(text) : null;
   const formatted = horizontalPunctuation(formatText(tex ? tex.text : text, toFormatOptions(settings)).text, settings);
   const book = bookPageBlocks(settings.pages, settings.bookInfo, opts);
-  const blocks = [...book.front, ...parse(formatted, opts), ...book.back];
+  // 相互参照は字に開く（ページ番号の所は除く）。
+  const blocks = expandXrefs([...book.front, ...parse(formatted, opts), ...book.back], true);
 
   // 段落スタイル・文字スタイルは番号で CSS のクラスにする。
   const pIndex = new Map(settings.styles.paragraph.map((s, i) => [s.name, i]));
@@ -175,6 +177,9 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
       if (a.ruby) inner = `<ruby>${inner}<rt>${esc(a.ruby)}</rt></ruby>`;
       if (a.kenten) inner = `<span class="em" style="text-emphasis-style:${EMPHASIS[a.kenten] ?? "filled sesame"};-webkit-text-emphasis-style:${EMPHASIS[a.kenten] ?? "filled sesame"}">${inner}</span>`;
       if (a.sideline) inner = `<span class="sl" style="text-decoration-style:${SIDELINE_STYLE[a.sideline]}">${inner}</span>`;
+      // 原稿の字間・カーニング（スタイルの字間は CSS のクラスで）。
+      const space = a.cells[0] ? (a.cells[0].tracking ?? 0) + (a.cells[0].kern ?? 0) : 0;
+      if (space) inner = `<span style="letter-spacing:${space / 1000}em">${inner}</span>`;
       out += inner;
     }
     if (style !== undefined && cIndex.has(style)) out += "</span>";
@@ -420,6 +425,16 @@ function mathSvg(tex: string, display: boolean): string {
 }
 
 /** スタイルシート：組み方向、段落・文字スタイル、ルビ・圏点・縦中横・表・画像。 */
+/** ルビの側と揃え（読む側が対応していれば）。1-2-1・右（上）なら何も書かない（読む側の標準）。 */
+function rubyCss(settings: Settings): string {
+  const t = settings.typography;
+  const rules = [
+    t.rubySide === "left" ? "ruby-position:under;-epub-ruby-position:under;-webkit-ruby-position:after" : "",
+    t.rubyAlign === "center" ? "ruby-align:center" : t.rubyAlign === "shoulder" ? "ruby-align:start" : "",
+  ].filter(Boolean);
+  return rules.length > 0 ? `ruby{${rules.join(";")};}` : "";
+}
+
 function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): string {
   // 埋め込んだ書体。合成フォント（range つき）は、同じ名前で先に書いて、その字の範囲だけに当てる。
   const faces = [...fonts]
@@ -439,6 +454,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       s.color ? `color:${s.color}` : "",
       s.bold ? "font-weight:bold" : "",
       s.linePitch && s.linePitch !== 1 ? `line-height:${lineHeight * s.linePitch}` : "",
+      s.tracking ? `letter-spacing:${s.tracking / 1000}em` : "",
       family("ps", i) ? `font-family:${family("ps", i)}${family("body")}serif` : "",
       ...decorationCss(s),
     ].filter(Boolean);
@@ -449,6 +465,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       s.scale !== 1 ? `font-size:${s.scale}em` : "",
       s.color ? `color:${s.color}` : "",
       s.bold ? "font-weight:bold" : "",
+      s.tracking ? `letter-spacing:${s.tracking / 1000}em` : "",
       family("cs", i) ? `font-family:${family("cs", i)}${family("body")}serif` : "",
     ].filter(Boolean);
     return `.cs${i}{${rules.join(";")}}`;
@@ -464,6 +481,7 @@ h1{font-size:1.3em;}
 h2{font-size:1.15em;}
 p.blank{min-height:1em;}
 ruby rt{font-size:${settings.advanced.rubyPercent / 100}em;}
+${rubyCss(settings)}
 .em{-epub-text-emphasis-position:${vertical ? "right" : "over right"};text-emphasis-position:${vertical ? "over right" : "over right"};}
 .sl{text-decoration-line:underline;-webkit-text-decoration-line:underline;text-underline-position:${vertical ? "right" : "under"};-epub-text-underline-position:${vertical ? "right" : "under"};}
 .tcy{text-combine-upright:all;-webkit-text-combine:horizontal;-epub-text-combine:horizontal;}

@@ -10,6 +10,12 @@ export interface Cell {
   text: string;
   /** フォントの字形の候補（OpenType の aalt の番号）。原稿の［＃字形：番号］。 */
   alt?: number;
+  /** 字間（トラッキング。全角1字の 1/1000）。原稿の［＃字間：N］…［＃／字間］。スタイルの字間より優先。 */
+  tracking?: number;
+  /** カーニング（この字と次の字の間。全角1字の 1/1000）。原稿の字のあとの［＃カーニング：N］。 */
+  kern?: number;
+  /** 字のあとに足す長さ（em。負なら詰める）。字間とカーニングから、スタイルを当てるたびに決める。 */
+  letterSpace?: number;
   tcy?: boolean;
   /** 半角英数字を横倒しで組む。advance はそのときの長さ（em）。 */
   rotate?: boolean;
@@ -66,6 +72,8 @@ export interface Atom {
   label?: string;
   /** ページ番号の参照（［＃ページ：名前］）。cells は組むたびに、そのラベルのページ番号にする。 */
   pageRef?: string;
+  /** 相互参照（［＃見出し：名前］・［＃章：名前］・［＃参照：名前｜書式］）。組む前に、書式どおりの字に開く（xref.ts）。 */
+  xref?: { name: string; format: string };
   /** ページごとの注のとき、そのページの終わりに置く注の段落（組むたびに作る）。 */
   noteBlock?: { kind: "para"; atoms: Atom[]; style?: string; format?: ParaFormat };
   /** 注（［＃注：…］）の中身。cells は本文に入れる小さな注番号（「注」と番号。番号は組むたびに入れる）。 */

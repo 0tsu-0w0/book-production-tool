@@ -10,13 +10,14 @@ import { isVariationSelector } from "../fonts/ivs.js";
 import { BreakCache, layoutDocument } from "./layout.js";
 import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
-import { applyDeform, prepareSpacing } from "./spacing.js";
+import { applyDeform, applyLetterSpacing, prepareSpacing } from "./spacing.js";
 import { collectIndex, expandIndex, hasIndexPage, indexBlocks, indexSignature, replaceIndexContent } from "./indexing.js";
 import { applyStyles, type EngineStyles } from "./styles.js";
 import { hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
 import { texToMarkup } from "./tex.js";
 import type { Block, DrawPage, ImageInfo, LineText, PageLayout } from "./types.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
+import { expandXrefs, missingLabels } from "./xref.js";
 
 export { Face } from "./face.js";
 export type * from "./types.js";
@@ -44,6 +45,8 @@ export interface TypesetResult {
   missingChars: string[];
   /** 組めなかった数式の知らせ（重複なし）。 */
   mathErrors: string[];
+  /** 参照先のラベルがない参照（［＃ページ：］・［＃見出し：］など）の名前。 */
+  missingLabels: string[];
   /** 最終ページに入っている行数（IN-01 の表示用）。 */
   lastPageLines: number;
   linesPerPage: number;
@@ -125,7 +128,8 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
   const noted = placeNotes(body, lineOf, settings.notes.placement);
   // 前付けのあとに、本文の始まりの印（前付けと本文でノンブルを分けるため）。
   const bodyMark: Block[] = book.front.length > 0 ? [{ kind: "anchor", name: BODY_START_LABEL }] : [];
-  let source = [...book.front, ...bodyMark, ...noted.blocks, ...book.back];
+  // 相互参照（［＃見出し：］・［＃参照：］など）を字に開く（参照のある段落だけ新しくなる）。
+  let source = expandXrefs([...book.front, ...bodyMark, ...noted.blocks, ...book.back]);
   // 索引：語を集め（語のある場所にラベルを付け）、［＃索引ページ］の場所に、仮の番号で索引を入れる。
   const indexEntries = collectIndex(source);
   const indexPage = hasIndexPage(source);
@@ -173,6 +177,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     prepareSpacing(todo, spec.typography, spec.rubyScale);
     applyProportional(todo, faces);
     applyDeform(todo, !!spec.horizontal);
+    applyLetterSpacing(todo);
     for (const b of todo) {
       // 字の長さが変わったかもしれないので、前の行分けは使わない。
       breaks.forget(b);
@@ -255,11 +260,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
       return page;
     },
     lines: (index) => (gen !== generation || redone ? fresh().lines(index) : (layouts[index]?.lines ?? [])),
-    labelPages() {
-      const map = new Map<string, number>();
-      for (const p of layouts) for (const l of p.labels ?? []) if (!map.has(l)) map.set(l, p.index);
-      return map;
-    },
+    labelPages: () => labelPagesOf(layouts),
     pageOf(line, offset) {
       // 原稿の位置より前に最初の字があるページのうち、最後のもの（ページは原稿の順に並ぶ）。
       let best = -1;
@@ -273,6 +274,10 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     upem: faces[0].upem,
     missingChars: missingChars(blocks, faces, `${fonts.keys.join("|")}\u0000${JSON.stringify(settings.styles)}\u0000${JSON.stringify(settings.compositeFont)}`),
     mathErrors: [...new Set(mathErrors)],
+    // 参照先のないラベル（書き出す前の検査で使うだけなので、頼まれたときに調べる）。
+    get missingLabels() {
+      return missingLabels(blocks, labelPagesOf(layouts));
+    },
     // 本文の最後のページ（奥付などのページは除く）。
     lastPageLines: (layouts.findLast((p) => p.role === "body") ?? layouts[layouts.length - 1]).lineCount,
     linesPerPage: spec.linesPerPage,
@@ -280,6 +285,13 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     columns: spec.columns,
     pageLabels: layouts.map((p) => pageLabel(p.index, decor)),
   };
+}
+
+/** ラベルごとの、それがある最初のページ（0始まり）。 */
+function labelPagesOf(layouts: PageLayout[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const p of layouts) for (const l of p.labels ?? []) if (!map.has(l)) map.set(l, p.index);
+  return map;
 }
 
 /** 組版の通し番号（記法の読み取り結果を使い回すので、あとから別の組版が走ったかを見分ける）。 */
