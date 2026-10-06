@@ -1,11 +1,13 @@
 import type { FontChoice } from "../document/settings.js";
 import { SPOT_LIST_ID } from "./spot-editor.js";
 import { PAGE_COMMANDS } from "../engine/parse.js";
+import { grepError } from "../engine/grep.js";
 import {
   BUILTIN_PARAGRAPH_STYLES,
   DEFORMS,
   DEFORM_RATIOS,
   GLYPH_FORMS,
+  GREP_EXAMPLES,
   type Deform,
   fontKey,
   type GlyphForm,
@@ -201,6 +203,86 @@ export class StyleEditor {
     deformRow.className = "row";
     deformRow.append(kind, ratio);
     this.root.append(this.labeled("長体・平体", deformRow));
+
+    if (this.kind === "paragraph") this.root.append(this.grepSection(style as ParagraphStyle, sheet));
+  }
+
+  /**
+   * 正規表現スタイル：この段落スタイルの段落で、正規表現に合う字に文字スタイルを当てる規則の一覧。
+   * 1つの規則は「正規表現・文字スタイル・削除」の1行。例を選ぶと正規表現の欄に入る。
+   */
+  private grepSection(p: ParagraphStyle, sheet: StyleSheet): HTMLElement {
+    const box = document.createElement("fieldset");
+    box.className = "grep-styles";
+    const legend = document.createElement("legend");
+    legend.textContent = "正規表現スタイル";
+    box.append(legend);
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.textContent =
+      "この段落スタイルの段落で、正規表現に合う字に文字スタイルを当てます（原稿で［＃名前］を書かなくても、数字だけ・かぎかっこの中だけなどに当たる）。原稿で文字スタイルを当てた字はそちらが優先。規則が重なった字には、下の規則が当たります。";
+    box.append(help);
+    const characterNames = sheet.character.map((c) => c.name);
+    if (characterNames.length === 0) {
+      const none = document.createElement("p");
+      none.className = "hint";
+      none.textContent = "先に文字スタイルを作ってください（「種類」で文字スタイルを選んで「追加」）。";
+      box.append(none);
+      return box;
+    }
+    p.grep.forEach((rule, i) => {
+      const row = document.createElement("div");
+      row.className = "row grep-rule";
+      const pattern = document.createElement("input");
+      pattern.type = "text";
+      pattern.className = "grep-pattern";
+      pattern.placeholder = "正規表現（例：[0-9]+）";
+      pattern.spellcheck = false;
+      pattern.value = rule.pattern;
+      const error = document.createElement("span");
+      error.className = "grep-error";
+      const check = () => {
+        const e = grepError(pattern.value);
+        pattern.setCustomValidity(e ?? "");
+        error.textContent = e ? `使えません：${e}` : "";
+      };
+      check();
+      pattern.addEventListener("input", check);
+      pattern.addEventListener("change", () => {
+        rule.pattern = pattern.value;
+        this.onChange();
+      });
+      const styleOptions: [string, string][] = characterNames.map((n) => [n, n]);
+      if (!characterNames.includes(rule.style)) styleOptions.unshift([rule.style, rule.style ? `${rule.style}（ありません）` : "（文字スタイルを選ぶ）"]);
+      const target = this.select(styleOptions, rule.style, (v) => {
+        rule.style = v;
+        this.onChange();
+      });
+      const del = this.button("削除", () => {
+        p.grep.splice(i, 1);
+        this.onChange();
+        this.render();
+      });
+      del.classList.add("danger");
+      row.append(pattern, target, del);
+      box.append(row, error);
+    });
+    // 規則を足す：例から選ぶか、空の規則を足す。
+    const examples = this.select([["", "例から足す…"], ...GREP_EXAMPLES.map(([label, re]): [string, string] => [re, `${label}　${re}`])], "", (v) => {
+      if (!v) return;
+      p.grep.push({ pattern: v, style: characterNames[0] });
+      this.onChange();
+      this.render();
+    });
+    const add = this.button("規則を足す", () => {
+      p.grep.push({ pattern: "", style: characterNames[0] });
+      this.render();
+    });
+    const addRow = document.createElement("div");
+    addRow.className = "grep-add";
+    addRow.append(add, examples);
+    box.append(addRow);
+    return box;
   }
 
   private check(label: string, value: boolean, set: (v: boolean) => void): HTMLElement {
@@ -250,6 +332,10 @@ export class StyleEditor {
       return;
     }
     input.setCustomValidity("");
+    // 文字スタイルの名前を変えたら、正規表現スタイルの規則もその名前に付け替える。
+    if (this.kind === "character") {
+      for (const p of this.getSheet().paragraph) for (const r of p.grep) if (r.style === style.name) r.style = name;
+    }
     style.name = name;
     this.selected[this.kind] = name;
     this.onChange();

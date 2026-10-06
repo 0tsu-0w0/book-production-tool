@@ -5,6 +5,7 @@ import { bookPageBlocks } from "./book-pages.js";
 import { BODY_START_LABEL, decoratePage, displayNumber, pageLabel } from "./decorate.js";
 import { Face } from "./face.js";
 import { formatText } from "./format.js";
+import { compileGrep } from "./grep.js";
 import { BreakCache, layoutDocument } from "./layout.js";
 import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
@@ -72,13 +73,14 @@ export interface LazyTypesetResult extends Omit<TypesetResult, "pages"> {
 
 /** スタイルの書体を、フォントの一覧の番号にする。 */
 export function engineStyles(sheet: StyleSheet, fonts: FontTable, composite?: { kana: FontChoice | null; latin: FontChoice | null }): EngineStyles {
+  const characterNames = new Set(sheet.character.map((c) => c.name));
   const indexOf = (f: FontChoice | null, inherit: number) => {
     if (!f) return inherit;
     const i = fonts.keys.indexOf(fontKey(f));
     return i >= 0 ? i : 0;
   };
   return {
-    paragraph: new Map(sheet.paragraph.map((p) => [p.name, { ...p, font: indexOf(p.font, 0) }])),
+    paragraph: new Map(sheet.paragraph.map((p) => [p.name, { ...p, font: indexOf(p.font, 0), grep: compileGrep(p.grep, characterNames) }])),
     character: new Map(sheet.character.map((c) => [c.name, { ...c, font: indexOf(c.font, -1) }])),
     ...(composite ? { kanaFont: indexOf(composite.kana, -1), latinFont: indexOf(composite.latin, -1) } : {}),
     body: "本文",

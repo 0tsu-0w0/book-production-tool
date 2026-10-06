@@ -71,7 +71,27 @@ export interface ParagraphStyle {
   deform: Deform;
   /** 長体・平体の割合（%）。 */
   deformRatio: number;
+  /** 正規表現スタイル：この段落スタイルの段落で、正規表現に合う字に文字スタイルを当てる（あとの規則が優先）。 */
+  grep: GrepRule[];
 }
+
+/** 正規表現スタイルの規則：pattern（JavaScript の正規表現）に合う字に、文字スタイル style を当てる。 */
+export interface GrepRule {
+  pattern: string;
+  style: string;
+}
+
+/** 正規表現スタイルの例（設定欄で選ぶと、正規表現の欄に入る）。 */
+export const GREP_EXAMPLES: [string, string][] = [
+  ["数字（半角・全角）", "[0-9０-９]+"],
+  ["欧文の単語", "[A-Za-zＡ-Ｚａ-ｚ]+"],
+  ["かぎかっこの中（かっこを含む）", "「[^」]*」"],
+  ["かぎかっこの中（かっこを除く）", "(?<=「)[^」]+(?=」)"],
+  ["丸かっこの中", "（[^）]*）"],
+  ["三点リーダー・ダッシュ", "[…―]+"],
+  ["カタカナ", "[ァ-ヶー]+"],
+  ["行頭の1字", "^."],
+];
 
 /** 長体・平体。文字スタイルの空は「段落と同じ」。 */
 export type Deform = "" | "condensed" | "flat";
@@ -133,6 +153,7 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   proportional: false,
   deform: "",
   deformRatio: 80,
+  grep: [],
   ...over,
 });
 
@@ -148,6 +169,13 @@ const character = (name: string, over: Partial<CharacterStyle> = {}): CharacterS
   deformRatio: 80,
   ...over,
 });
+
+/** 正規表現スタイルの規則を読む（正規表現が読めない規則も、直せるように残す）。 */
+const grepRules = (v: unknown): GrepRule[] =>
+  (Array.isArray(v) ? v : [])
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+    .map((r) => ({ pattern: typeof r.pattern === "string" ? r.pattern.slice(0, 500) : "", style: typeof r.style === "string" ? r.style : "" }))
+    .slice(0, 30);
 
 const deform = (v: unknown): Deform => (v === "condensed" || v === "flat" ? v : "");
 const glyphForm = (v: unknown): GlyphForm => (GLYPH_FORMS.some(([k]) => k === v) ? (v as GlyphForm) : "");
@@ -222,6 +250,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         proportional: p.proportional === true,
         deform: deform(p.deform),
         deformRatio: Math.round(num(p.deformRatio, 80, 30, 99)),
+        grep: grepRules(p.grep),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {

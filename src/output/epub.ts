@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import type { DocImage } from "../document/document.js";
 import { horizontalPunctuation, leftBound, toFormatOptions, toParseOptions, type Settings } from "../document/settings.js";
-import type { CharacterStyle, ParagraphStyle } from "../document/styles.js";
+import { CAPTION_STYLE, NOTE_STYLE, TABLE_HEADER_STYLE, TABLE_STYLE, type CharacterStyle, type ParagraphStyle } from "../document/styles.js";
 import { bookPageBlocks } from "../engine/book-pages.js";
 import { formatText } from "../engine/format.js";
+import { compileGrep, grepCellStyles } from "../engine/grep.js";
 import { renderMath } from "../engine/math.js";
 import { parse } from "../engine/parse.js";
 import { texToMarkup } from "../engine/tex.js";
@@ -79,6 +80,9 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   // 段落スタイル・文字スタイルは番号で CSS のクラスにする。
   const pIndex = new Map(settings.styles.paragraph.map((s, i) => [s.name, i]));
   const cIndex = new Map(settings.styles.character.map((s, i) => [s.name, i]));
+  // 正規表現スタイル（段落スタイルの名前 → 規則）。紙面と同じ規則で、文字スタイルの span を付ける。
+  const characterNames = new Set(cIndex.keys());
+  const grepOf = new Map(settings.styles.paragraph.map((s) => [s.name, compileGrep(s.grep, characterNames)]));
   const imageFile = new Map(images.map((img, i) => [img.name, `img${String(i + 1).padStart(3, "0")}.${img.mime === "image/png" ? "png" : "jpg"}`]));
 
   const chapters: Chapter[] = [];
@@ -124,14 +128,21 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
     return esc(c.text);
   };
 
-  const atomsHtml = (atoms: Atom[]): string => {
+  /**
+   * 字の並びを HTML にする。paraStyle は段落スタイルの名前（正規表現スタイルを当てるため）。
+   * EPUB では、正規表現スタイルは Atom ごとに当てる（ルビの親文字の一部だけが合ったときは、合った字のスタイルを親文字全体に）。
+   */
+  const atomsHtml = (atoms: Atom[], paraStyle?: string): string => {
     let out = "";
     let style: string | undefined;
-    for (const a of atoms) {
-      // 文字スタイルの切り替え。
-      if (a.style !== style) {
+    const rules = paraStyle ? grepOf.get(paraStyle) : undefined;
+    const grep = rules ? grepCellStyles(atoms, rules) : undefined;
+    for (const [ai, a] of atoms.entries()) {
+      // 文字スタイルの切り替え。原稿で当てた文字スタイルが優先、なければ正規表現スタイル。
+      const want = a.style && cIndex.has(a.style) ? a.style : (grep?.[ai].find((s) => s !== undefined) ?? a.style);
+      if (want !== style) {
         if (style !== undefined && cIndex.has(style)) out += "</span>";
-        style = a.style;
+        style = want;
         if (style !== undefined && cIndex.has(style)) out += `<span class="cs${cIndex.get(style)}">`;
       }
       if (a.label) {
@@ -142,7 +153,7 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
       if (a.note) {
         noteNo++;
         const n = noteNo;
-        const body = `<p id="note-${n}"><a href="${notesAtEnd ? currentFile() : ""}#noteref-${n}">注${n}</a>　${atomsHtml(a.note)}</p>`;
+        const body = `<p id="note-${n}"><a href="${notesAtEnd ? currentFile() : ""}#noteref-${n}">注${n}</a>　${atomsHtml(a.note, NOTE_STYLE)}</p>`;
         out += `<a epub:type="noteref" class="noteref" id="noteref-${n}" href="${notesAtEnd ? "notes.xhtml" : ""}#note-${n}">注${n}</a>`;
         if (notesAtEnd) endNotes.push(`<aside epub:type="endnote" id="note-${n}">${body.replace(` id="note-${n}"`, "")}</aside>`);
         else notes.push(`<aside epub:type="footnote" id="note-${n}">${body.replace(` id="note-${n}"`, "")}</aside>`);
@@ -166,10 +177,9 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
     return out;
   };
 
-  const paraClass = (b: { style?: string }, fallback: string) => {
-    const name = b.style && pIndex.has(b.style) ? b.style : fallback;
-    return `ps${pIndex.get(name) ?? 0}`;
-  };
+  /** 段落に当たる段落スタイルの名前（行頭の［＃名前］がなければ fallback）。 */
+  const paraName = (b: { style?: string }, fallback: string) => (b.style && pIndex.has(b.style) ? b.style : fallback);
+  const paraClass = (b: { style?: string }, fallback: string) => `ps${pIndex.get(paraName(b, fallback)) ?? 0}`;
 
   const emit = (list: Block[]) => {
     for (const b of list) {
@@ -180,11 +190,12 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
           const id = `h${++headingNo}`;
           const t = plainText(b.atoms);
           headings.push({ level: b.level, text: t, file: currentFile(), id });
-          html += `<h${b.level} id="${id}" class="${paraClass(b, b.level === 1 ? "大見出し" : "中見出し")}">${atomsHtml(b.atoms)}</h${b.level}>`;
+          const fallback = b.level === 1 ? "大見出し" : "中見出し";
+          html += `<h${b.level} id="${id}" class="${paraClass(b, fallback)}">${atomsHtml(b.atoms, paraName(b, fallback))}</h${b.level}>`;
           break;
         }
         case "para":
-          html += `<p class="${paraClass(b, "本文")}">${b.atoms.length > 0 ? atomsHtml(b.atoms) : "<br/>"}</p>`;
+          html += `<p class="${paraClass(b, "本文")}">${b.atoms.length > 0 ? atomsHtml(b.atoms, paraName(b, "本文")) : "<br/>"}</p>`;
           break;
         case "blank":
           html += `<p class="blank"><br/></p>`;
@@ -233,7 +244,7 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   const imageHtml = (b: ImageBlock): string => {
     const file = imageFile.get(b.name);
     if (!file) return `<p class="missing">［画像：${esc(b.name)}］</p>`;
-    const caption = b.caption ? `<figcaption>${atomsHtml(b.caption.atoms)}</figcaption>` : "";
+    const caption = b.caption ? `<figcaption>${atomsHtml(b.caption.atoms, paraName(b.caption, CAPTION_STYLE))}</figcaption>` : "";
     const size = b.scale ? ` style="width:${Math.round(b.scale * 100)}%"` : "";
     return `<figure class="img-${b.mode}"><img src="../images/${file}" alt="${esc(b.caption ? plainText(b.caption.atoms) : b.name)}"${size}/>${caption}</figure>`;
   };
@@ -273,7 +284,7 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
         const tag = r < t.header ? "th" : "td";
         const cells = gs
           .filter((g) => !g.up)
-          .map((g) => `<${tag}${g.to - g.from > 1 ? ` colspan="${g.to - g.from}"` : ""}${g.rowspan > 1 ? ` rowspan="${g.rowspan}"` : ""}${align(g.from)}>${atomsHtml(g.atoms)}</${tag}>`)
+          .map((g) => `<${tag}${g.to - g.from > 1 ? ` colspan="${g.to - g.from}"` : ""}${g.rowspan > 1 ? ` rowspan="${g.rowspan}"` : ""}${align(g.from)}>${atomsHtml(g.atoms, r < t.header ? TABLE_HEADER_STYLE : TABLE_STYLE)}</${tag}>`)
           .join("");
         return `<tr>${cells}</tr>`;
       })

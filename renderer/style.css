@@ -258,3 +258,17 @@ html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 
 .spot-cmyk label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); }
 .spot-cmyk input[type="number"] { width: 100%; min-width: 0; padding: 4px 2px 4px 6px; }
 .swatches .spot-swatch { border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.7); }
+
+/* 正規表現スタイル（スタイルの欄） */
+.grep-styles { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px 8px; margin: 8px 0 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.grep-styles legend { font-size: 12px; padding: 0 4px; }
+.grep-rule { display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; min-width: 0; }
+.grep-rule .grep-pattern { flex: 1 1 0; width: 0; min-width: 4em; font-family: "Cascadia Mono", Consolas, Menlo, monospace; }
+.grep-rule .grep-pattern:invalid { border-color: var(--danger); }
+.grep-rule select { flex: 0 1 auto; width: auto; max-width: 8em; min-width: 0; }
+.grep-rule button { flex: 0 0 auto; }
+.grep-add { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; }
+.grep-add button { flex: 0 0 auto; }
+.grep-add select { flex: 1 1 0; width: 0; min-width: 0; }
+.grep-error { color: var(--danger); font-size: 11px; }
+.grep-error:empty { display: none; }

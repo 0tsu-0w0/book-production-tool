@@ -1,5 +1,6 @@
 import type { Block } from "./types.js";
 import { textBlocks } from "./blocks.js";
+import { grepCellStyles, type CompiledGrep } from "./grep.js";
 import { NOTE_MARK_SCALE } from "./notes.js";
 
 // 段落スタイル・文字スタイルを、段落とマスに当てる（DTP-04）。
@@ -23,6 +24,8 @@ export interface EngineParagraphStyle {
   deform?: "" | "condensed" | "flat";
   /** 長体・平体の割合（%）。 */
   deformRatio?: number;
+  /** 正規表現スタイル（読める規則だけ）。 */
+  grep?: CompiledGrep[];
 }
 
 export interface EngineCharacterStyle {
@@ -60,6 +63,7 @@ const FULLWIDTH_ALNUM = /^[０-９Ａ-Ｚａ-ｚ]$/;
  * 記法の読み取り結果は使い回すので、毎回すべてのマスに値を書き直す（前の設定を残さない）。
  * マスに書くもの：書体の番号・大きさ・太字・色・字形の形（features）・プロポーショナル・長体（sx）・平体（sy）・
  * 欧文の書体で組む全角英数字の印（halfLatin）。
+ * 文字スタイルは、原稿で当てたもの → 段落スタイルの正規表現スタイル → 行頭の［＃名前］が文字スタイルのとき、の順に決める。
  */
 export function applyStyles(blocks: Block[], styles: EngineStyles): void {
   const body = styles.paragraph.get(styles.body)!;
@@ -78,9 +82,15 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
     };
     // 行頭の［＃名前］が段落スタイルでなく文字スタイルの名前なら、その行全体に文字スタイルを当てる（閉じ忘れなど）。
     const lineStyle = block.style && !styles.paragraph.has(block.style) ? styles.character.get(block.style) : undefined;
-    for (const atom of block.atoms) {
-      const cs = (atom.style ? styles.character.get(atom.style) : undefined) ?? lineStyle;
-      for (const cell of atom.cells) {
+    // 正規表現スタイル：マスごとに当てる文字スタイルの名前（当たる規則がなければ undefined）。
+    const grep = ps.grep?.length ? grepCellStyles(block.atoms, ps.grep) : undefined;
+    for (let ai = 0; ai < block.atoms.length; ai++) {
+      const atom = block.atoms[ai];
+      const own = atom.style ? styles.character.get(atom.style) : undefined;
+      for (let ci = 0; ci < atom.cells.length; ci++) {
+        const cell = atom.cells[ci];
+        const byGrep = !own && grep?.[ai][ci];
+        const cs = own ?? (byGrep ? styles.character.get(byGrep) : undefined) ?? lineStyle;
         cell.font = cs && cs.font >= 0 ? cs.font : ps.font;
         cell.halfLatin = undefined;
         // 合成フォント：本文の書体（0）の字だけ、かな・欧文を別の書体にする。
