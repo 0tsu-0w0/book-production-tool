@@ -14,7 +14,57 @@ export interface Typography {
   oikomi: boolean;
   /** 親文字より長いルビを、前後の仮名に1字（ルビ文字1字分）まで掛ける。 */
   rubyOverhang: boolean;
+  /** 文字組みアキ量（jis のとき。なければ標準）。 */
+  aki?: Mojikumi;
 }
+
+/**
+ * 文字組みアキ量（InDesign の文字組みアキ量設定にあたる）。値は字（全角1字 = 1）。
+ * 括弧・句読点は「半角の字形＋アキ」とみなし、そのアキの量を決める。
+ */
+export interface Mojikumi {
+  /** 終わり括弧（」』）など）のあと。 */
+  afterClosing: number;
+  /** 読点（、，）のあと。 */
+  afterComma: number;
+  /** 句点（。．）のあと。 */
+  afterPeriod: number;
+  /** 始め括弧（「『（など）の前。 */
+  beforeOpening: number;
+  /** 終わり括弧・句読点のあとに始め括弧が続くとき（」「・。「など）の間。 */
+  between: number;
+  /** 中点（・：；）の前後それぞれ。 */
+  middleDot: number;
+  /** 和欧間：和文と欧文（横倒し・横組みの欧文）の間。 */
+  latin: number;
+  /** 約物のアキを詰めて行の長さを合わせてよい（追い込み・両端揃え）。 */
+  compress: boolean;
+}
+
+/** 標準（JIS X 4051 の考え方。これまでの組み方と同じ）。 */
+export const MOJIKUMI_STANDARD: Mojikumi = {
+  afterClosing: 0.5,
+  afterComma: 0.5,
+  afterPeriod: 0.5,
+  beforeOpening: 0.5,
+  between: 0.5,
+  middleDot: 0.25,
+  latin: 0,
+  compress: true,
+};
+
+/** 文字組みアキ量の型（名前・説明・値）。 */
+export const MOJIKUMI_PRESETS: { id: string; label: string; value: Mojikumi }[] = [
+  { id: "standard", label: "標準（約物は半角＋半角のアキ）", value: MOJIKUMI_STANDARD },
+  { id: "latin-quarter", label: "和欧間四分（和文と欧文の間を四分空ける）", value: { ...MOJIKUMI_STANDARD, latin: 0.25 } },
+  { id: "full", label: "約物全角（続く約物も詰めない）", value: { ...MOJIKUMI_STANDARD, between: 1, compress: false } },
+  { id: "half", label: "約物半角（句読点・括弧のアキをなくす）", value: { afterClosing: 0, afterComma: 0, afterPeriod: 0, beforeOpening: 0, between: 0, middleDot: 0, latin: 0, compress: false } },
+];
+
+/** 句点か（それ以外の句読点は読点）。 */
+const PERIODS = new Set([..."。．"]);
+/** 中点類：字形は字の中央にあり、前後にアキを持つ。 */
+const MIDDLE_DOTS = new Set([..."・：；"]);
 
 export const GRID_TYPOGRAPHY: Typography = { mode: "grid", lineHeadBracket: "full", oikomi: false, rubyOverhang: false };
 
@@ -53,15 +103,31 @@ export function prepareSpacing(blocks: Block[], t: Typography, rubyScale: number
     }
     if (t.mode === "grid") continue;
 
-    // 約物のアキは、あとで行を合わせるために詰められる（最大で半角）。
+    // 約物のアキ（文字組みアキ量）。字形は半角で、アキはあとで行を合わせるために詰められる（詰めてよいとき）。
+    const k = t.aki ?? MOJIKUMI_STANDARD;
+    /** マスの長さ（字）。標準と同じ全角なら、これまでどおり値を持たない（倍率が1のとき）。 */
+    const setLength = (cell: Cell, length: number, scale: number) => {
+      cell.advance = length === 1 && scale === 1 ? undefined : length * scale;
+    };
     for (const cell of cells) {
       if (cell.rotate || cell.tcy || cell.text === "") continue;
       const cls = punctClass(cell.text);
-      const half = 0.5 * (cell.scale ?? 1);
-      if (cls === "closing" || cls === "stop") cell.compress = half;
-      else if (cls === "opening") {
-        cell.compress = half;
+      const scale = cell.scale ?? 1;
+      if (cls === "closing" || cls === "stop") {
+        // 字形は前（上）の半角、アキは後ろ。
+        const aki = cls === "closing" ? k.afterClosing : PERIODS.has(cell.text) ? k.afterPeriod : k.afterComma;
+        setLength(cell, 0.5 + aki, scale);
+        cell.compress = k.compress ? aki * scale : 0;
+      } else if (cls === "opening") {
+        // 字形は後ろ（下）の半角、アキは前。アキを減らした分だけ、字形を前へずらす。
+        setLength(cell, 0.5 + k.beforeOpening, scale);
+        cell.shift = -(0.5 - k.beforeOpening) * scale;
+        cell.compress = k.compress ? k.beforeOpening * scale : 0;
         cell.compressFromStart = true;
+      } else if (MIDDLE_DOTS.has(cell.text) && k.middleDot !== 0.25) {
+        // 中点類：字形は真ん中の半角、前後に同じアキ（標準の四分ずつなら全角のまま）。
+        setLength(cell, 0.5 + k.middleDot * 2, scale);
+        cell.shift = (k.middleDot - 0.25) * scale;
       }
     }
 
@@ -73,12 +139,38 @@ export function prepareSpacing(blocks: Block[], t: Typography, rubyScale: number
       if ((a === "closing" || a === "stop") && b !== null) {
         cells[i].advance = 0.5 * (cells[i].scale ?? 1);
         cells[i].compress = 0;
+        // 終わり括弧・句読点のあとの始め括弧：間のアキは「続くとき」の量（始め括弧の前に付ける）。
+        if (b === "opening") {
+          const next = cells[i + 1];
+          const scale = next.scale ?? 1;
+          setLength(next, 0.5 + k.between, scale);
+          next.shift = -(0.5 - k.between) * scale;
+          next.compress = k.compress ? k.between * scale : 0;
+        }
       } else if (a === "opening" && b === "opening") {
         const next = cells[i + 1];
         const scale = next.scale ?? 1;
         next.advance = 0.5 * scale;
         next.shift = -0.5 * scale;
         next.compress = 0;
+      }
+    }
+
+    // 和欧間：和文の字と欧文（横倒しの字）が隣り合う所に、欧文の側の前後にアキを付ける
+    // （欧文の字の長さは組むたびに測り直すので、和文の側のプロポーショナルなどに消されない）。
+    if (k.latin > 0) {
+      const latin = (c: Cell) => !!c.rotate && !c.math && c.text.trim() !== "";
+      const japanese = (c: Cell) => !c.rotate && !c.tcy && !c.math && c.text !== "" && c.text.trim() !== "" && punctClass(c.text) === null;
+      for (let i = 0; i + 1 < cells.length; i++) {
+        const a = cells[i];
+        const b = cells[i + 1];
+        if (japanese(a) && latin(b)) {
+          const add = k.latin * (b.scale ?? 1);
+          b.advance = (b.advance ?? 1) + add;
+          b.shift = (b.shift ?? 0) + add;
+        } else if (latin(a) && japanese(b)) {
+          a.advance = (a.advance ?? 1) + k.latin * (a.scale ?? 1);
+        }
       }
     }
 

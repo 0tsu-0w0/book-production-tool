@@ -95,7 +95,8 @@ function handle(req: TypesetRequest): unknown {
       // 校正の補助（DTP-16）：表記ゆれは原稿から、禁則違反と段落末の1文字の行は組んだ結果から探す。
       const { result } = resultFor(req.text, req.settings, req.images ?? {});
       const extra = { start: req.settings.advanced.kinsokuStartExtra, end: req.settings.advanced.kinsokuEndExtra };
-      return { variants: findVariants(req.text), ...checkLines(result.pageCount, (i) => result.lines(i), extra) };
+      const custom = req.settings.kinsoku === "custom" ? req.settings.kinsokuCustom : undefined;
+      return { variants: findVariants(req.text), ...checkLines(result.pageCount, (i) => result.lines(i), extra, custom) };
     }
     case "preflight": {
       // 書き出す前の検査（OUT-09）。

@@ -1,5 +1,5 @@
 import type { ParagraphDecoration, ParagraphRule } from "../document/styles.js";
-import { isHangable, isLineEndProhibited, isLineStartProhibited } from "./kinsoku.js";
+import { kinsokuSets, type KinsokuSets } from "./kinsoku.js";
 import { GRID_TYPOGRAPHY, punctClass } from "./spacing.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
 import { dropCapScale, splitDropCap } from "./dropcap.js";
@@ -95,12 +95,18 @@ interface BreakOptions {
   /** 段落の途中の行頭に来た始め括弧を半角にする。 */
   lineHeadHalf?: boolean;
   /** 禁則に足す字。 */
-  extraStart?: Set<string>;
-  extraEnd?: Set<string>;
+  /** 禁則の字（行頭・行末・ぶら下げ・分離禁止）。なければ kinsoku の強さから作る。 */
+  sets?: KinsokuSets;
 }
 
-const startProhibited = (t: string, o: BreakOptions) => isLineStartProhibited(t, o.kinsoku) || (o.kinsoku !== "none" && !!o.extraStart?.has(t));
-const endProhibited = (t: string, o: BreakOptions) => isLineEndProhibited(t, o.kinsoku) || (o.kinsoku !== "none" && !!o.extraEnd?.has(t));
+const setsOf = (o: BreakOptions) => (o.sets ??= kinsokuSets(o.kinsoku));
+const startProhibited = (t: string, o: BreakOptions) => setsOf(o).start.has(t);
+const endProhibited = (t: string, o: BreakOptions) => setsOf(o).end.has(t);
+/** 分離禁止：分離禁止の字どうしが続くなら、その間で改行しない（――・……など）。 */
+const noBreakBetween = (before: string, after: string, o: BreakOptions) => {
+  const s = setsOf(o).noBreak;
+  return s.size > 0 && s.has(before) && s.has(after);
+};
 
 function compressible(atoms: Atom[]): number {
   return atoms.reduce((s, a) => s + a.cells.reduce((t, c) => t + (c.compress ?? 0), 0), 0);
@@ -194,7 +200,7 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
     }
 
     const lineFull = used >= perLine - EPS;
-    if (opts.hanging && a.cells.length === 1 && w <= 1 + EPS && lineFull && cur.length > 0 && isHangable(first(a))) {
+    if (opts.hanging && a.cells.length === 1 && w <= 1 + EPS && lineFull && cur.length > 0 && setsOf(opts).hang.has(first(a))) {
       cur.push(queue.shift()!);
       push(0);
       continue;
@@ -255,7 +261,12 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
     while (keep > 0) {
       const nextHead = keep < cur.length ? cur[keep] : a;
       // 注番号は、前の字から離して行頭に出さない。
-      if (startProhibited(first(nextHead), opts) || (opts.kinsoku !== "none" && !!nextHead.note) || endProhibited(last(cur[keep - 1]), opts)) {
+      if (
+        startProhibited(first(nextHead), opts) ||
+        (opts.kinsoku !== "none" && !!nextHead.note) ||
+        endProhibited(last(cur[keep - 1]), opts) ||
+        noBreakBetween(last(cur[keep - 1]), first(nextHead), opts)
+      ) {
         keep--;
       } else {
         break;
@@ -325,8 +336,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     justify: jis || !!spec.horizontal,
     oikomi: jis && spec.typography.oikomi,
     lineHeadHalf: jis && spec.typography.lineHeadBracket === "half",
-    extraStart: new Set([...(spec.kinsokuExtra?.start ?? "")]),
-    extraEnd: new Set([...(spec.kinsokuExtra?.end ?? "")]),
+    sets: kinsokuSets(spec.kinsoku, spec.kinsokuExtra, spec.kinsokuCustom),
   };
   // 見出しは両端揃えにしない（字下げした短い行なので）。
   const headingOpts: BreakOptions = { ...opts, justify: false };
@@ -334,7 +344,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   const optsKeys = new Map<BreakOptions, string>();
   const optsKey = (o: BreakOptions) => {
     let k = optsKeys.get(o);
-    if (k === undefined) optsKeys.set(o, (k = JSON.stringify([spec.charsPerLine, o.kinsoku, o.hanging, !!o.justify, !!o.oikomi, !!o.lineHeadHalf, [...(o.extraStart ?? [])].join(""), [...(o.extraEnd ?? [])].join("")])));
+    if (k === undefined) {
+      const sets = setsOf(o);
+      const list = (x: Set<string>) => [...x].join("");
+      optsKeys.set(o, (k = JSON.stringify([spec.charsPerLine, o.kinsoku, o.hanging, !!o.justify, !!o.oikomi, !!o.lineHeadHalf, list(sets.start), list(sets.end), list(sets.hang), list(sets.noBreak)])));
+    }
     return k;
   };
   // 1ページに入る行数は、1段の行数 × 段数。

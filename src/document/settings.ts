@@ -1,7 +1,8 @@
 import { DEFAULT_NOMBRE_STYLE, type Decoration, type HeadSource, type MasterSettings, type NamedMaster, type NombreStyle, type PageDecor, type Placement } from "../engine/decorate.js";
 import type { FormatOptions } from "../engine/format.js";
 import type { ParseOptions } from "../engine/parse.js";
-import type { Typography } from "../engine/spacing.js";
+import { MOJIKUMI_PRESETS, MOJIKUMI_STANDARD, type Mojikumi, type Typography } from "../engine/spacing.js";
+import { KINSOKU_PRESETS, type KinsokuCustom } from "../engine/kinsoku.js";
 import type { Kinsoku, LayoutSpec } from "../engine/types.js";
 import { DEFAULT_STYLES, normalizeStyles, type StyleSheet } from "./styles.js";
 
@@ -312,6 +313,10 @@ export interface Settings {
   /** 詳細設定。 */
   advanced: AdvancedSettings;
   kinsoku: Kinsoku;
+  /** 自分で決めた禁則（kinsoku が custom のとき）。 */
+  kinsokuCustom: KinsokuCustom;
+  /** 文字組みアキ量（約物の組み方が JIS 準拠のとき）。preset は型の名前（自分で変えたら custom）。 */
+  mojikumi: Mojikumi & { preset: string };
   hanging: boolean;
   headingBlankAfter: number;
   format: FormatSettings;
@@ -445,6 +450,8 @@ export const DEFAULT_SETTINGS: Settings = {
     safeMarginMm: 3,
   },
   kinsoku: "strong",
+  kinsokuCustom: { ...KINSOKU_PRESETS.strong },
+  mojikumi: { preset: "standard", ...MOJIKUMI_STANDARD },
   hanging: true,
   headingBlankAfter: 0,
   format: {
@@ -523,13 +530,15 @@ export function toLayoutSpec(s: Settings): LayoutSpec {
     hanging: s.hanging,
     rubyScale: s.advanced.rubyPercent / 100,
     kinsokuExtra: { start: s.advanced.kinsokuStartExtra, end: s.advanced.kinsokuEndExtra },
+    ...(s.kinsoku === "custom" ? { kinsokuCustom: s.kinsokuCustom } : {}),
     wrapGapChars: s.advanced.wrapGapChars,
     mathSpaceEm: s.advanced.mathSpaceEm,
     bleedMm: s.advanced.bleedMm,
     headingBlankAfter: s.headingBlankAfter,
     firstPageNumber: s.nombreStart,
     chapterStartsOdd: s.chapterStartsOdd,
-    typography: s.typography,
+    // 文字組みアキ量は、約物の組み方（typography）と一緒に渡す（標準なら渡さない。これまでと同じ組み方）。
+    typography: s.mojikumi.preset === "standard" ? s.typography : { ...s.typography, aki: mojikumiOf(s.mojikumi) },
   };
   if (s.layoutMode === "book") {
     const b = s.book;
@@ -587,6 +596,20 @@ export function customGrid(c: CustomLayout): { fontSizePt: number; charsPerLine:
  * 読み込んだ設定を、今の形式にそろえる。欠けている項目は既定値で埋め、知らない項目は捨てる。
  * 古い文書ファイルを開いたときや、設定の項目が増えたときのため。
  */
+/** 設定の文字組みアキ量から、組版で使う値だけを取り出す。 */
+export function mojikumiOf(m: Mojikumi): Mojikumi {
+  return {
+    afterClosing: m.afterClosing,
+    afterComma: m.afterComma,
+    afterPeriod: m.afterPeriod,
+    beforeOpening: m.beforeOpening,
+    between: m.between,
+    middleDot: m.middleDot,
+    latin: m.latin,
+    compress: m.compress,
+  };
+}
+
 export function normalizeSettings(input: unknown): Settings {
   const src = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const out = structuredClone(DEFAULT_SETTINGS) as unknown as Record<string, unknown>;
@@ -636,6 +659,13 @@ export function normalizeSettings(input: unknown): Settings {
   a.imagePpi = clamp(a.imagePpi, 150, 1200);
   a.safeMarginMm = clamp(a.safeMarginMm, 0, 10);
   if (s.output.pdfStandard !== "x4") s.output.pdfStandard = "x1a";
+  if (!["strong", "weak", "none", "custom"].includes(s.kinsoku)) s.kinsoku = "strong";
+  for (const key of ["start", "end", "hang", "noBreak"] as const) s.kinsokuCustom[key] = String(s.kinsokuCustom[key] ?? "").slice(0, 500);
+  // 文字組みアキ量：字の値は 0〜1（和欧間は 0〜0.5）に。型の名前が知らないものなら、自分で決めたもの。
+  const mk = s.mojikumi;
+  for (const key of ["afterClosing", "afterComma", "afterPeriod", "beforeOpening", "between", "middleDot"] as const) mk[key] = clamp(Number(mk[key]) || 0, 0, 1);
+  mk.latin = clamp(Number(mk.latin) || 0, 0, 0.5);
+  if (mk.preset !== "custom" && !MOJIKUMI_PRESETS.some((p) => p.id === mk.preset)) mk.preset = "custom";
   if (s.notes.placement !== "end" && s.notes.placement !== "page") s.notes.placement = "chapter";
   if (!isFontChoice(s.compositeFont.kana)) s.compositeFont.kana = null;
   if (!isFontChoice(s.compositeFont.latin)) s.compositeFont.latin = null;

@@ -1,4 +1,6 @@
 import { MasterEditor } from "./master-editor.js";
+import { KINSOKU_PRESETS } from "../engine/kinsoku.js";
+import { MOJIKUMI_PRESETS } from "../engine/spacing.js";
 import { SPOT_LIST_ID, SpotEditor, updateSpotList } from "./spot-editor.js";
 import { PageStructureEditor } from "./page-structure-editor.js";
 import { StyleEditor } from "./style-editor.js";
@@ -33,6 +35,11 @@ export interface FontOption extends FontChoice {
 
 type Path = string;
 type Opt = [value: string, label: string];
+
+/** 約物の組み方が JIS 準拠か（文字組みアキ量を使うとき）。 */
+const isJis = (s: Settings) => s.typography.mode === "jis";
+/** 禁則を自分で決めるか。 */
+const isCustomKinsoku = (s: Settings) => s.kinsoku === "custom";
 
 type Field =
   | { kind: "select"; path: Path; label: string; options: Opt[] | ((s: Settings) => Opt[]); numeric?: boolean; when?: (s: Settings) => boolean }
@@ -176,7 +183,29 @@ function sections(): Section[] {
             return `${g.charsPerLine}字×${g.linesPerPage}行＝${g.charsPerLine * g.linesPerPage}字／ページ`;
           },
         },
-        { kind: "select", path: "kinsoku", label: "行頭禁則", options: [["strong", "強い（小書きの仮名を含む）"], ["weak", "弱い"], ["none", "なし"]] },
+        {
+          kind: "select",
+          path: "kinsoku",
+          label: "行頭禁則",
+          options: [
+            ["strong", "強い（小書きの仮名を含む）"],
+            ["weak", "弱い"],
+            ["none", "なし"],
+            ["custom", "自分で決める"],
+          ],
+        },
+        // 禁則を自分で決める（InDesign の禁則処理セットにあたる）。字を並べて書く。
+        { kind: "text", path: "kinsokuCustom.start", label: "行頭に置かない字", multiline: true, when: isCustomKinsoku },
+        { kind: "text", path: "kinsokuCustom.end", label: "行末に置かない字", when: isCustomKinsoku },
+        { kind: "text", path: "kinsokuCustom.hang", label: "行末からはみ出させてよい字（ぶら下げ）", when: isCustomKinsoku },
+        { kind: "text", path: "kinsokuCustom.noBreak", label: "分離禁止（この字どうしの間では改行しない）", placeholder: "例：―…‥", when: isCustomKinsoku },
+        {
+          kind: "info",
+          when: isCustomKinsoku,
+          render: () => "ここに並べた字だけで禁則を組みます（詳細設定の「足す」字は使いません）。ぶら下げは「行末の句読点をぶら下げる」を入れたときだけです。",
+        },
+        { kind: "button", label: "強い禁則の字に戻す", action: "kinsoku-strong", when: isCustomKinsoku },
+        { kind: "button", label: "弱い禁則の字に戻す", action: "kinsoku-weak", when: isCustomKinsoku },
         { kind: "check", path: "hanging", label: "行末の句読点をぶら下げる" },
         { kind: "select", path: "headingBlankAfter", label: "見出しの後の空行", numeric: true, options: [["0", "なし"], ["1", "1行"], ["2", "2行"]] },
       ],
@@ -207,6 +236,27 @@ function sections(): Section[] {
         },
         { kind: "check", path: "typography.oikomi", label: "行頭禁則は、まず約物を詰めて前の行に入れる（追い込み）", when: (s) => s.typography.mode === "jis" },
         { kind: "check", path: "typography.rubyOverhang", label: "長いルビを前後の仮名に掛ける", when: (s) => s.typography.mode === "jis" },
+        // 文字組みアキ量（InDesign の文字組みアキ量設定にあたる）。型を選ぶか、値を自分で決める。
+        {
+          kind: "select",
+          path: "mojikumi.preset",
+          label: "文字組みアキ量",
+          options: [...MOJIKUMI_PRESETS.map((p): Opt => [p.id, p.label]), ["custom", "自分で決める"]],
+          when: isJis,
+        },
+        {
+          kind: "info",
+          when: isJis,
+          render: () => "括弧と句読点は半角の字形と、それに付くアキでできているとみなします。アキの量を字（全角1字＝1）で決めます。値を変えると「自分で決める」になります。",
+        },
+        { kind: "number", path: "mojikumi.afterClosing", label: "終わり括弧のあと", min: 0, max: 1, step: 0.125, unit: "字", when: isJis },
+        { kind: "number", path: "mojikumi.afterComma", label: "読点のあと", min: 0, max: 1, step: 0.125, unit: "字", when: isJis },
+        { kind: "number", path: "mojikumi.afterPeriod", label: "句点のあと", min: 0, max: 1, step: 0.125, unit: "字", when: isJis },
+        { kind: "number", path: "mojikumi.beforeOpening", label: "始め括弧の前", min: 0, max: 1, step: 0.125, unit: "字", when: isJis },
+        { kind: "number", path: "mojikumi.between", label: "終わり括弧・句読点のあとの始め括弧（」「 など）の間", min: 0, max: 1, step: 0.125, unit: "字", when: isJis },
+        { kind: "number", path: "mojikumi.middleDot", label: "中点（・：；）の前後", min: 0, max: 1, step: 0.125, unit: "字", when: isJis },
+        { kind: "number", path: "mojikumi.latin", label: "和欧間（和文と、横倒し・横組みの欧文の間）", min: 0, max: 0.5, step: 0.125, unit: "字", when: isJis },
+        { kind: "check", path: "mojikumi.compress", label: "約物のアキを詰めて行の長さを合わせてよい", when: isJis },
       ],
     },
     {
@@ -646,6 +696,15 @@ export class SettingsPanel {
 
   private changed(path: Path, value: unknown) {
     setPath(this.settings, path, value);
+    // 文字組みアキ量：型を選んだらその値にし、値を自分で変えたら「自分で決める」にする（欄を書き直す）。
+    if (path === "mojikumi.preset") {
+      const preset = MOJIKUMI_PRESETS.find((p) => p.id === value);
+      if (preset) Object.assign(this.settings.mojikumi, preset.value);
+      this.render(this.settings);
+    } else if (String(path).startsWith("mojikumi.") && this.settings.mojikumi.preset !== "custom") {
+      this.settings.mojikumi.preset = "custom";
+      this.render(this.settings);
+    }
     if (path === "book.writingMode") {
       // 組み方向を変えたら、字数と行数を版面に収まるように決め直す（欄の数字も書き直す）。
       fitBookToWritingMode(this.settings.book);
@@ -763,7 +822,11 @@ export class SettingsPanel {
         button.type = "button";
         button.textContent = field.label;
         button.addEventListener("click", () => {
-          if (field.action === "reset-advanced") {
+          if (field.action === "kinsoku-strong" || field.action === "kinsoku-weak") {
+            this.settings.kinsokuCustom = { ...KINSOKU_PRESETS[field.action === "kinsoku-strong" ? "strong" : "weak"] };
+            this.render(this.settings);
+            this.onChange(this.settings);
+          } else if (field.action === "reset-advanced") {
             this.settings.advanced = structuredClone(DEFAULT_SETTINGS.advanced);
             this.render(this.settings);
             this.onChange(this.settings);

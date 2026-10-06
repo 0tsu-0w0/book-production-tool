@@ -156,7 +156,11 @@ export function checkLines(
   pageCount: number,
   linesOf: (page: number) => LineText[],
   extra: { start: string; end: string } = { start: "", end: "" },
+  custom?: { start: string; end: string },
 ): { kinsoku: LineIssue[]; shortLast: LineIssue[] } {
+  // 自分で決めた禁則なら、その字で調べる。そうでなければ強い禁則と、足した字。
+  const startBad = (c: string) => (custom ? custom.start.includes(c) : isLineStartProhibited(c, "strong") || extra.start.includes(c));
+  const endBad = (c: string) => (custom ? custom.end.includes(c) : isLineEndProhibited(c, "strong") || extra.end.includes(c));
   const kinsoku: LineIssue[] = [];
   const shortLast: LineIssue[] = [];
   for (let p = 0; p < pageCount; p++) {
@@ -166,10 +170,10 @@ export function checkLines(
       const head = chars[0];
       const tail = chars[chars.length - 1];
       // 段落の頭の行の始めの字は、字下げの空白などなので行頭禁則とは見ない。
-      if (!l.start && (isLineStartProhibited(head, "strong") || extra.start.includes(head))) {
+      if (!l.start && startBad(head)) {
         kinsoku.push({ page: p, line: i + 1, text: l.text, reason: `行頭に「${head}」` });
       }
-      if (!l.end && (isLineEndProhibited(tail, "strong") || extra.end.includes(tail))) {
+      if (!l.end && endBad(tail)) {
         kinsoku.push({ page: p, line: i + 1, text: l.text, reason: `行末に「${tail}」` });
       }
       if (l.end && !l.start) {

@@ -1,4 +1,5 @@
 import type { ParagraphDecoration } from "../document/styles.js";
+import type { KinsokuCustom } from "./kinsoku.js";
 import type { Typography } from "./spacing.js";
 
 // 組版エンジンで共有する型。単位は特に断りがなければ pt（1pt = 1/72 インチ）。
@@ -188,7 +189,8 @@ export interface ImageInfo {
 /** ページの種類。本文以外（扉・奥付など）には柱とノンブルを付けない（隠しノンブル）。 */
 export type PageRole = "body" | "blank" | "tobira" | "title" | "colophon" | "free" | "toc" | "index" | "image";
 
-export type Kinsoku = "strong" | "weak" | "none";
+/** 禁則の強さ。custom は、行頭禁則・行末禁則・ぶら下げ・分離禁止の字を自分で決める（kinsokuCustom）。 */
+export type Kinsoku = "strong" | "weak" | "none" | "custom";
 
 export interface LayoutSpec {
   pageWidthMm: number;
@@ -225,6 +227,8 @@ export interface LayoutSpec {
   horizontal?: boolean;
   /** 禁則に足す字（行頭に置かない字・行末に置かない字）。 */
   kinsokuExtra?: { start: string; end: string };
+  /** 自分で決めた禁則（kinsoku が custom のとき）。 */
+  kinsokuCustom?: KinsokuCustom;
   /** 画像の回り込みで、画像と本文の間に空ける字数（既定 1）。 */
   wrapGapChars?: number;
   /** 行の中の数式と和文の間（em。既定 0.25）。 */
