@@ -114,8 +114,9 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         cell.bold = ps.bold || !!cs?.bold;
         cell.color = cs?.color ?? ps.color ?? undefined;
         const form = cs?.glyphForm || ps.glyphForm || "";
+        // 字形の候補（［＃字形：番号］）は、スタイルの字形に足す。
         // delete を使うとオブジェクトが遅い形に変わるので、undefined を入れる。
-        cell.features = form || undefined;
+        cell.features = cell.alt ? (form ? `${form},aalt=${cell.alt}` : `aalt=${cell.alt}`) : form || undefined;
         cell.proportional = !!(ps.proportional || cs?.proportional);
         // 長体・平体：字形の横（sx）か縦（sy）を縮める。文字スタイルの指定が段落スタイルより優先。
         // ここでは倍率を書くだけ。字の取る長さは applyDeform で、字形の大きさは resolveGlyph で縮める。

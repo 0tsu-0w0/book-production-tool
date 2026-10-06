@@ -4,10 +4,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { DocumentFormatError, FILE_EXTENSION, imageInfos, parseDocument, serializeDocument, type DocImage, type KolophonDocument, LEGACY_EXTENSIONS } from "./document/document.js";
-import { compositeFonts, type Settings } from "./document/settings.js";
+import { compositeFonts, type FontChoice, type Settings } from "./document/settings.js";
 import { BUILTIN_TEMPLATES, LEGACY_TEMPLATE_EXTENSIONS, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
 import { glyphPaths, typesetLazy, type ImageInfo } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
+import { glyphVariants } from "./fonts/glyph-variants.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
 import { epubFonts } from "./output/epub-fonts.js";
 import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSIONS, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
@@ -286,6 +287,17 @@ ipcMain.handle("appearance:choose", async (_e, kind: "image" | "video") => {
 ipcMain.handle("fonts:list", () => ({ list: fonts.list(), defaultChoice: fonts.defaultChoice() }));
 /** 合成フォントの欧文に使える書体の一覧（埋め込めるフォントすべて。初めて頼まれたときに調べる）。 */
 ipcMain.handle("fonts:list-all", () => fonts.listAll());
+
+/** 字形パネル：本文の書体（font）で、字 base の別の字形（異体字・字形の候補）を調べる。vertical なら縦組みの字形で。 */
+ipcMain.handle("glyphs:variants", (_e, font: FontChoice | null, base: string, vertical: boolean) => {
+  const l = fonts.load(font);
+  return {
+    upem: l.face.upem,
+    emBottom: l.face.emBottom,
+    font: l.choice.name,
+    variants: glyphVariants(l.face, l.bytes, l.choice.index ?? 0, base, vertical),
+  };
+});
 
 /** 本体から送った字形の輪郭（表紙の見本の分）。画面の組版の分は、組版のプロセスが覚えている。 */
 const sentPaths = new Map<string, Set<number>>();

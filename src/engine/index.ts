@@ -6,6 +6,7 @@ import { BODY_START_LABEL, decoratePage, displayNumber, pageLabel } from "./deco
 import { Face } from "./face.js";
 import { formatText } from "./format.js";
 import { compileGrep } from "./grep.js";
+import { isVariationSelector } from "../fonts/ivs.js";
 import { BreakCache, layoutDocument } from "./layout.js";
 import { parse } from "./parse.js";
 import { applyProportional, measureMath, measureRotated, resolvePage } from "./resolve.js";
@@ -320,7 +321,8 @@ function missingChars(blocks: Block[], faces: Face[], key: string): string[] {
       if (face.isMissing(text, direction)) found.push(text);
       return;
     }
-    for (const ch of text) if (face.isMissing(ch, direction)) found.push(ch);
+    // 異体字セレクタ（IVS など）は前の字の字形を選ぶだけの字なので、それだけでは調べない。
+    for (const ch of text) if (!isVariationSelector(ch.codePointAt(0)!) && face.isMissing(ch, direction)) found.push(ch);
   };
   for (const block of textBlocks(blocks)) {
     const cached = missingCache.get(block);

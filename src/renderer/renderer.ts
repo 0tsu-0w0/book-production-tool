@@ -17,6 +17,7 @@ import { combineSpread, spreadPairs } from "../output/imposition.js";
 import { parseLabeledRange } from "../document/range.js";
 import type { Finding } from "../output/preflight.js";
 import { DEFAULT_SETTINGS, leftBound, normalizeSettings, spreadOutput, toFormatOptions, type FontChoice, type Settings } from "../document/settings.js";
+import { GlyphPanel, type GlyphVariantView } from "./glyph-panel.js";
 import { formatText } from "../engine/format.js";
 import type { DrawPage } from "../engine/types.js";
 import { GlyphPaths, type DrawFont } from "./draw.js";
@@ -114,6 +115,7 @@ interface Api extends TemplateApi {
   endImages(ok: boolean): Promise<void>;
   preflight(text: string, settings: Settings, target: "pdf" | "images", images: Record<string, ImageInfo>): Promise<Finding[]>;
   proof(text: string, settings: Settings, images: Record<string, ImageInfo>): Promise<ProofResult>;
+  glyphVariants(font: FontChoice | null, base: string, vertical: boolean): Promise<{ upem: number; emBottom: number; font: string; variants: GlyphVariantView[] }>;
   saveSnapshot(images: ArrayBuffer[]): Promise<void>;
   closeWindow(): Promise<void>;
   getAppearance(): Promise<{ appearance: Appearance; platform: string; wallpaper: number; transparentWindow: boolean; frameless: boolean; maximized: boolean }>;
@@ -514,6 +516,18 @@ function wrapLines(name: string) {
   insert(`${open}\n${body}\n［＃／${name}］`, open.length + 1, open.length + 1 + body.length);
 }
 
+// 字形パネル：原稿欄のカーソルの字の、別の字形（異体字・字形の候補）を選ぶ。
+const glyphPanel = new GlyphPanel({
+  source,
+  variants: (base) => api.glyphVariants(settings.font, base, !leftBound(settings)),
+  replace: (start, end, text) => {
+    source.focus();
+    source.setSelectionRange(start, end);
+    // execCommand を使うと、元に戻す（Ctrl+Z）の履歴に残る（input が起きて組み直される）。
+    document.execCommand("insertText", false, text);
+  },
+});
+
 const assists: Record<string, () => void> = {
   ruby: () => {
     const base = selectedText();
@@ -525,6 +539,7 @@ const assists: Record<string, () => void> = {
     if (base) insert(`｜${base}《圏》`);
     else insert("｜《圏》", 1);
   },
+  glyphs: () => glyphPanel.toggle(),
   index: () => {
     // 選んだ語を索引に入れる（読みはルビから。ルビがなければ、あとで［＃索引：語（よみ）］で読みを書く）。
     const base = selectedText();

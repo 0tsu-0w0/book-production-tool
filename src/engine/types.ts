@@ -7,6 +7,8 @@ import type { Typography } from "./spacing.js";
 /** 版面の1マスに入るもの。縦中横なら複数の文字が1マスに入る。 */
 export interface Cell {
   text: string;
+  /** フォントの字形の候補（OpenType の aalt の番号）。原稿の［＃字形：番号］。 */
+  alt?: number;
   tcy?: boolean;
   /** 半角英数字を横倒しで組む。advance はそのときの長さ（em）。 */
   rotate?: boolean;

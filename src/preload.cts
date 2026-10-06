@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld("api", {
   init: invoke("init"),
   listFonts: invoke("fonts:list"),
   listAllFonts: invoke("fonts:list-all"),
+  glyphVariants: invoke("glyphs:variants"),
   typeset: typesetter("typeset", ["text", "settings", "reset", "wanted", "images", "caret"]),
   pages: typesetter("pages", ["version", "indices"]),
   openDocument: invoke("doc:open"),

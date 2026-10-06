@@ -27,6 +27,9 @@ export interface ParseOptions {
 
 export const DEFAULT_PARSE_OPTIONS: ParseOptions = { tcyDigits: true, halfWidth: "fullwidth", pageBreakMark: true };
 
+/** 字形の候補：字のあとの［＃字形：番号］（フォントの aalt の番号。字形パネルで選ぶ）。前の字に付ける。 */
+export const GLYPH_ALT = /^［＃字形[：:]\s*(\d{1,2})\s*］/u;
+
 /** 異体字セレクタ（標準・IVS）。 */
 const VARIATION_SELECTOR = /^[\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]/u;
 /** 文字列を字に分ける（異体字セレクタは前の字に付ける）。 */
@@ -191,6 +194,13 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     if ((m = INLINE_MATH.exec(rest))) {
       // 数式は横倒しの欧文と同じく組む（字の長さは数式を組んでから決める）。
       atoms.push({ cells: [{ text: m[1], rotate: true, math: { display: false } }] });
+      i += m[0].length;
+      continue;
+    }
+    if ((m = GLYPH_ALT.exec(rest))) {
+      // 前の字の字形を、フォントの字形の候補に替える（行頭なら何もしない）。
+      const cells = atoms[atoms.length - 1]?.cells;
+      if (cells?.length) cells[cells.length - 1].alt = Number(m[1]) || undefined;
       i += m[0].length;
       continue;
     }

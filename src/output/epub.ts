@@ -126,8 +126,10 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
       hasSvg = true;
       return mathSvg(c.text, c.math.display);
     }
-    if (c.tcy && vertical) return `<span class="tcy">${esc(c.text)}</span>`;
-    return esc(c.text);
+    // 字形の候補（［＃字形：番号］）は、OpenType の aalt で選ぶ（読む側の書体にその候補があれば）。
+    const text = c.alt ? `<span style="font-feature-settings:'aalt' ${c.alt}">${esc(c.text)}</span>` : esc(c.text);
+    if (c.tcy && vertical) return `<span class="tcy">${text}</span>`;
+    return text;
   };
 
   /**
