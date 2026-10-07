@@ -5,6 +5,7 @@ import { CAPTION_STYLE, NOTE_STYLE, TABLE_HEADER_STYLE, TABLE_STYLE, hasDecorati
 import { bookPageBlocks } from "../engine/book-pages.js";
 import { formatText } from "../engine/format.js";
 import { compileGrep, grepCellStyles } from "../engine/grep.js";
+import { nestedCellStyles } from "../engine/nested.js";
 import { renderMath } from "../engine/math.js";
 import { parse } from "../engine/parse.js";
 import { expandXrefs } from "../engine/xref.js";
@@ -143,9 +144,12 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
     let style: string | undefined;
     const rules = paraStyle ? grepOf.get(paraStyle) : undefined;
     const grep = rules ? grepCellStyles(atoms, rules) : undefined;
+    // 先頭文字スタイル（段落の頭の字だけ。段落スタイルの規則で）。
+    const nestedRules = paraStyle ? settings.styles.paragraph.find((p) => p.name === paraStyle)?.nested : undefined;
+    const nested = nestedRules?.length ? nestedCellStyles(atoms, nestedRules) : undefined;
     for (const [ai, a] of atoms.entries()) {
       // 文字スタイルの切り替え。原稿で当てた文字スタイルが優先、なければ正規表現スタイル。
-      const want = a.style && cIndex.has(a.style) ? a.style : (grep?.[ai].find((s) => s !== undefined) ?? a.style);
+      const want = a.style && cIndex.has(a.style) ? a.style : (grep?.[ai].find((s) => s !== undefined) ?? nested?.[ai].find((s) => s !== undefined) ?? a.style);
       if (want !== style) {
         if (style !== undefined && cIndex.has(style)) out += "</span>";
         style = want;
@@ -425,6 +429,14 @@ function mathSvg(tex: string, display: boolean): string {
 }
 
 /** スタイルシート：組み方向、段落・文字スタイル、ルビ・圏点・縦中横・表・画像。 */
+/** 行スタイル：EPUB では読む側が行を分けるので、1行目だけ（::first-line）に当てる。 */
+function lineStyleCss(s: ParagraphStyle, i: number, characters: CharacterStyle[]): string {
+  const cs = s.lineStyle.lines > 0 ? characters.find((c) => c.name === s.lineStyle.style) : undefined;
+  if (!cs) return "";
+  const rules = [cs.color ? `color:${cs.color}` : "", cs.bold ? "font-weight:bold" : ""].filter(Boolean);
+  return rules.length > 0 ? `.ps${i}::first-line{${rules.join(";")}}` : "";
+}
+
 /** ルビの側と揃え（読む側が対応していれば）。1-2-1・右（上）なら何も書かない（読む側の標準）。 */
 function rubyCss(settings: Settings): string {
   const t = settings.typography;
@@ -458,7 +470,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       family("ps", i) ? `font-family:${family("ps", i)}${family("body")}serif` : "",
       ...decorationCss(s),
     ].filter(Boolean);
-    return `.ps${i}{${rules.join(";")}}${dropCapCss(s, i, settings.styles.character)}`;
+    return `.ps${i}{${rules.join(";")}}${dropCapCss(s, i, settings.styles.character)}${lineStyleCss(s, i, settings.styles.character)}`;
   };
   const c = (s: CharacterStyle, i: number) => {
     const rules = [

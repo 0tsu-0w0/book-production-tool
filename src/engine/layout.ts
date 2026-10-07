@@ -3,7 +3,7 @@ import { kinsokuSets, type KinsokuSets } from "./kinsoku.js";
 import { GRID_TYPOGRAPHY, punctClass, type Typography } from "./spacing.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
 import { dropCapScale, splitDropCap } from "./dropcap.js";
-import type { Atom, Block, Cell, ImageBlock, Kinsoku, LayoutSpec, PageLayout, PageRole, ParaFormat, PlacedGlyph, Rect, Shape, SideLine } from "./types.js";
+import type { Atom, Block, Cell, ImageBlock, Kinsoku, LayoutSpec, LineStyleFormat, PageLayout, PageRole, ParaFormat, PlacedGlyph, Rect, Shape, SideLine } from "./types.js";
 
 export const MM = 72 / 25.4;
 const EPS = 1e-6;
@@ -64,6 +64,8 @@ export interface Line {
   footRule?: boolean;
   /** 段落の罫線・網掛け（同じ段落の行は同じオブジェクトを指す。段落の切れ目を見分けるのにも使う）。 */
   para?: { deco: ParagraphDecoration };
+  /** 行スタイル（段落の最初の何行か）：文字スタイルの当たっていない字に当てる書体・色・太字・字形。 */
+  lineStyle?: LineStyleFormat;
   /**
    * ドロップキャップ（段落の1行目だけ）：大きくする字・大きさ（本文の字に対する倍率）・またがる行数・下げた字数。
    * 大きな字は、この行から lines 行にまたがって、行の頭に置く。
@@ -525,6 +527,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const para = f.deco ? { deco: f.deco } : undefined;
     broken.forEach((line, i) => {
       line.para = para;
+      if (f.lineStyle && i < f.lineStyle.lines) line.lineStyle = f.lineStyle;
       const offset = (w?.top && inWrap(i) ? w.chars : 0) + (i < dropLines ? dropLength : 0);
       if (offset) line.offset = offset;
       if (i === 0 && drop) line.dropCap = { atoms: drop.cap, em: dropEm, lines: dropLines, length: dropLength };
@@ -1168,6 +1171,14 @@ function placeLine(
       // 1字ごとに作るので、使わない項目のための一時的なオブジェクトを作らない（組み直しを速くするため）。
       const g: PlacedGlyph = { text, kind, x, y, size: size * scale, font: cell.font, bold: cell.bold, color: cell.color };
       if (cell.features) g.features = cell.features;
+      // 行スタイル：文字スタイルの当たっていない字だけ（字の長さは変えないので、行分けはそのまま）。
+      const ls = line.lineStyle;
+      if (ls && !cell.charStyled && !cell.math) {
+        if (ls.font >= 0) g.font = ls.font;
+        if (ls.bold) g.bold = true;
+        if (ls.color) g.color = ls.color;
+        if (ls.features) g.features = ls.features;
+      }
       if (cell.sx !== undefined) g.sx = cell.sx;
       if (cell.sy !== undefined) g.sy = cell.sy;
       if (cell.math) {

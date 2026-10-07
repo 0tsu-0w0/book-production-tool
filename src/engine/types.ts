@@ -16,6 +16,8 @@ export interface Cell {
   kern?: number;
   /** 字のあとに足す長さ（em。負なら詰める）。字間とカーニングから、スタイルを当てるたびに決める。 */
   letterSpace?: number;
+  /** 文字スタイルが当たっている（原稿・正規表現スタイル・先頭文字スタイル・行頭の［＃名前］）。行スタイルはこの字に当てない。 */
+  charStyled?: boolean;
   tcy?: boolean;
   /** 半角英数字を横倒しで組む。advance はそのときの長さ（em）。 */
   rotate?: boolean;
@@ -109,6 +111,17 @@ export interface ParaFormat {
   deco?: ParagraphDecoration;
   /** ドロップキャップ（使っているときだけ）。 */
   dropCap?: { lines: number; chars: number };
+  /** 行スタイル（使っているときだけ）：最初の lines 行の、文字スタイルの当たっていない字に当てる書体・色・太字・字形。 */
+  lineStyle?: LineStyleFormat;
+}
+
+/** 行スタイルで字に当てるもの（書体は番号。-1 なら変えない）。 */
+export interface LineStyleFormat {
+  lines: number;
+  font: number;
+  color?: string;
+  bold: boolean;
+  features?: string;
 }
 
 export type Block =

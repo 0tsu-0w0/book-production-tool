@@ -18,6 +18,7 @@ import {
   newParagraphStyle,
   type CharacterStyle,
   type ParagraphStyle,
+  type NestedStyle,
   type StyleSheet,
 } from "../document/styles.js";
 
@@ -215,6 +216,7 @@ export class StyleEditor {
     if (this.kind === "paragraph") {
       this.root.append(this.dropCapSection(style as ParagraphStyle, sheet));
       this.root.append(this.decorationSection(style as ParagraphStyle));
+      this.root.append(this.nestedSection(style as ParagraphStyle, sheet));
       this.root.append(this.grepSection(style as ParagraphStyle, sheet));
     }
   }
@@ -443,6 +445,127 @@ export class StyleEditor {
     addRow.className = "grep-add";
     addRow.append(add, examples);
     box.append(addRow);
+    return box;
+  }
+
+  /**
+   * 先頭文字スタイル（段落の頭から順に、決めた範囲の字に文字スタイルを当てる）と、
+   * 行スタイル（段落の最初の何行かに文字スタイルを当てる）。
+   */
+  private nestedSection(p: ParagraphStyle, sheet: StyleSheet): HTMLElement {
+    const box = document.createElement("fieldset");
+    box.className = "grep-styles";
+    const legend = document.createElement("legend");
+    legend.textContent = "先頭文字スタイル・行スタイル";
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.textContent =
+      "先頭文字スタイル：段落の頭から順に、決めた範囲の字に文字スタイルを当てます（上の規則の範囲が終わると、続きの字から次の規則）。区切りの字が見つからなければ段落の終わりまで。行スタイル：段落の最初の何行かの字に当てます（書体・色・太字・字形だけ。大きさなどの字の長さは変えません）。原稿の文字スタイルと正規表現スタイルが優先します。";
+    box.append(legend, help);
+    const names = sheet.character.map((c) => c.name);
+    const styleOptions = (current: string): [string, string][] => {
+      const opts: [string, string][] = [["", "（なし）"], ...names.map((n): [string, string] => [n, n])];
+      if (current && !names.includes(current)) opts.push([current, `${current}（ありません）`]);
+      return opts;
+    };
+    p.nested.forEach((rule, i) => {
+      const row = document.createElement("div");
+      row.className = "row grep-rule";
+      const style = this.select(styleOptions(rule.style), rule.style, (v) => {
+        rule.style = v;
+        this.onChange();
+      });
+      const count = document.createElement("input");
+      count.type = "number";
+      Object.assign(count, { min: "1", max: "999", step: "1" });
+      count.value = String(rule.count);
+      count.className = "nested-count";
+      count.setAttribute("aria-label", "数");
+      count.addEventListener("change", () => {
+        rule.count = Math.min(999, Math.max(1, Math.round(Number(count.value) || 1)));
+        count.value = String(rule.count);
+        this.onChange();
+      });
+      const chars = document.createElement("input");
+      chars.type = "text";
+      chars.className = "nested-chars";
+      chars.value = rule.chars;
+      chars.placeholder = "区切りの字";
+      chars.title = "区切りの字（いくつか並べてよい。全角の空白も書ける）";
+      // 空白は欄の中で見えないので、区切りの字を言葉でも見せる。
+      const shown = document.createElement("span");
+      shown.className = "hint nested-shown";
+      const describe = () => {
+        shown.textContent = rule.chars
+          ? `区切り：${[...rule.chars].map((ch) => (ch === "　" ? "全角の空白" : ch === " " ? "半角の空白" : ch === "	" ? "タブ" : ch)).join("・")}`
+          : "区切り：全角の空白";
+      };
+      describe();
+      chars.hidden = shown.hidden = rule.until === "chars";
+      chars.addEventListener("change", () => {
+        rule.chars = chars.value.slice(0, 20);
+        describe();
+        this.onChange();
+      });
+      const until = this.select(
+        [
+          ["chars", "字まで"],
+          ["through", "個目の区切りまで"],
+          ["before", "個目の区切りの前まで"],
+        ],
+        rule.until,
+        (v) => {
+          rule.until = v as NestedStyle["until"];
+          chars.hidden = shown.hidden = rule.until === "chars";
+          this.onChange();
+        },
+      );
+      const up = this.button("↑", () => {
+        if (i === 0) return;
+        [p.nested[i - 1], p.nested[i]] = [p.nested[i], p.nested[i - 1]];
+        this.onChange();
+        this.render();
+      });
+      up.title = "上へ（先に当てる）";
+      const del = this.button("削除", () => {
+        p.nested.splice(i, 1);
+        this.onChange();
+        this.render();
+      });
+      del.classList.add("danger");
+      row.append(style, count, until, chars, up, del, shown);
+      box.append(row);
+    });
+    const add = this.button("先頭文字スタイルを足す", () => {
+      p.nested.push({ style: names[0] ?? "", until: "through", count: 1, chars: "　" });
+      this.onChange();
+      this.render();
+    });
+    const addRow = document.createElement("div");
+    addRow.className = "grep-add";
+    addRow.append(add);
+    box.append(addRow);
+
+    // 行スタイル：文字スタイルと行数。
+    const lineRow = document.createElement("div");
+    lineRow.className = "row";
+    const lineStyle = this.select(styleOptions(p.lineStyle.style), p.lineStyle.style, (v) => {
+      p.lineStyle.style = v;
+      this.onChange();
+    });
+    const lines = this.select(
+      [
+        ["0", "使わない"],
+        ...[1, 2, 3, 4, 5].map((n): [string, string] => [String(n), `最初の${n}行`]),
+      ],
+      String(p.lineStyle.lines),
+      (v) => {
+        p.lineStyle.lines = Number(v);
+        this.onChange();
+      },
+    );
+    lineRow.append(lines, lineStyle);
+    box.append(this.labeled("行スタイル", lineRow));
     return box;
   }
 

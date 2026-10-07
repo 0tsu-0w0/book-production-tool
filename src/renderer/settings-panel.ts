@@ -23,6 +23,7 @@ import {
   PAPERS,
   paperThickness,
   spineWidthMm,
+  spotInks,
   type FontChoice,
   type Settings,
 } from "../document/settings.js";
@@ -895,16 +896,18 @@ export class SettingsPanel {
       for (const [i, b] of buttons.entries()) b.setAttribute("aria-pressed", String(palette[i][1] === current()));
     });
     // 登録した特色も、ここから選べるようにする。
-    const spotButtons = this.settings.output.spotColors.map((spot) => {
+    // 濃さを変えた色（平網）も並べる。
+    const spotButtons = spotInks(this.settings.output.spotColors).map((ink) => {
+      const label = `特色：${ink.spot.name}${ink.tint < 1 ? ` ${Math.round(ink.tint * 100)}%` : ""}`;
       const b = document.createElement("button");
       b.type = "button";
       b.className = "spot-swatch";
-      b.title = `特色：${spot.name}`;
-      b.setAttribute("aria-label", `特色：${spot.name}`);
-      b.style.background = spot.color;
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.style.background = ink.hex;
       b.addEventListener("click", () => {
-        picker.value = spot.color;
-        this.changed(path, spot.color);
+        picker.value = ink.hex;
+        this.changed(path, ink.hex);
       });
       return b;
     });

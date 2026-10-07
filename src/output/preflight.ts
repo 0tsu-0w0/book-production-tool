@@ -1,4 +1,4 @@
-import { bookGeometry, saddleOutput, spreadOutput, type Settings } from "../document/settings.js";
+import { bookGeometry, saddleOutput, spotInks, spreadOutput, type Settings } from "../document/settings.js";
 import type { DrawPage } from "../engine/types.js";
 import { hexToCmyk } from "./color.js";
 
@@ -120,8 +120,10 @@ export function preflight(input: PreflightInput): Finding[] {
 
   // 特色：使った特色は版が増える。登録したのに使っていない特色も知らせる。
   const spots = s.output.spotColors ?? [];
-  const spotColors = new Set(spots.map((sp) => sp.color));
-  const usedSpots = spots.filter((sp) => colored.has(sp.color));
+  // 濃さを変えた色（平網）も、その特色を使ったことになる。
+  const inks = spotInks(spots);
+  const spotColors = new Set(inks.map((i) => i.hex));
+  const usedSpots = spots.filter((sp) => inks.some((i) => i.spot === sp && colored.has(i.hex)));
   if (target === "pdf" && usedSpots.length > 0) {
     if (print && !gray) {
       out.push({
@@ -132,7 +134,7 @@ export function preflight(input: PreflightInput): Finding[] {
       out.push({ level: "info", message: `特色（${usedSpots.map((sp) => sp.name).join("・")}）は、${gray ? "グレースケールではグレーの濃淡" : "閲覧用 PDF では画面の色"}で書き出します。` });
     }
   }
-  const unusedSpots = spots.filter((sp) => !colored.has(sp.color));
+  const unusedSpots = spots.filter((sp) => !usedSpots.includes(sp));
   if (print && unusedSpots.length > 0) {
     out.push({ level: "info", message: `登録した特色（${unusedSpots.map((sp) => sp.name).join("・")}）は、どこにも使っていません。` });
   }

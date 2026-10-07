@@ -1,4 +1,4 @@
-import type { SpotColor } from "../document/settings.js";
+import { tintHex, type SpotColor } from "../document/settings.js";
 
 // 設定欄の「特色」。画面で使う色と、印刷所に伝えるインキの名前（DIC 156 など）・代わりの CMYK・ノセを登録する。
 // 入稿用 PDF では、その色で描いた文字・罫・飾りを特色の版で刷る。
@@ -14,10 +14,13 @@ export function updateSpotList(spots: SpotColor[]): void {
     document.body.append(list);
   }
   list.replaceChildren(
-    ...spots.map((s) => {
+    ...spots.flatMap((s) => [
+      { value: s.color, label: `特色：${s.name}` },
+      ...(s.tints ?? []).map((t) => ({ value: tintHex(s.color, t), label: `特色：${s.name} ${t}%` })),
+    ]).map(({ value, label }) => {
       const o = document.createElement("option");
-      o.value = s.color;
-      o.label = `特色：${s.name}`;
+      o.value = value;
+      o.label = label;
       return o;
     }),
   );
@@ -57,7 +60,7 @@ export class SpotEditor {
     const hint = document.createElement("p");
     hint.className = "hint";
     hint.textContent =
-      "登録した色で描いた文字・罫・飾りを、入稿用 PDF では特色の版で刷ります。色を選ぶ欄の候補に出ます。インキの名前は印刷所の指定どおりに（例：DIC 156）。CMYK は特色を使えないときの代わりの色です。";
+      "登録した色で描いた文字・罫・飾りを、入稿用 PDF では特色の版で刷ります。色を選ぶ欄の候補に出ます。インキの名前は印刷所の指定どおりに（例：DIC 156）。CMYK は特色を使えないときの代わりの色です。濃さ（%）を並べると（例：50, 30）、その濃さの色（平網）も候補に出て、入稿用 PDF では同じ特色の版をその濃さで刷ります。";
     this.element.replaceChildren(...rows, add, hint);
   }
 
@@ -126,6 +129,35 @@ export class SpotEditor {
       cmyk.append(l);
     });
 
+    // 濃さ（平網）：「50, 30」のように % を並べる。それぞれの色が、色を選ぶ欄の候補に出る。
+    const tints = document.createElement("input");
+    tints.type = "text";
+    tints.className = "spot-tints";
+    tints.value = (spot.tints ?? []).join(", ");
+    tints.placeholder = "例：50, 30";
+    tints.setAttribute("aria-label", "濃さ（%）");
+    tints.addEventListener("change", () => {
+      const values = tints.value
+        .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0))
+        .split(/[,、，\s]+/u)
+        .map((v) => Math.round(Number(v.replace(/[%％]/g, ""))))
+        .filter((n) => n >= 1 && n <= 99);
+      spot.tints = [...new Set(values)].sort((a, b) => b - a).slice(0, 8);
+      tints.value = spot.tints.join(", ");
+      this.render();
+      this.changed();
+    });
+    const tintRow = document.createElement("label");
+    tintRow.className = "row spot-tint-row";
+    const chips = (spot.tints ?? []).map((t) => {
+      const chip = document.createElement("span");
+      chip.className = "plate-swatch";
+      chip.style.background = tintHex(spot.color, t);
+      chip.title = `${t}%`;
+      return chip;
+    });
+    tintRow.append(document.createTextNode("濃さ（%）"), tints, ...chips);
+
     const over = document.createElement("label");
     over.className = "field check";
     const box2 = document.createElement("input");
@@ -136,7 +168,7 @@ export class SpotEditor {
       this.changed();
     });
     over.append(box2, document.createTextNode("ノセ（下の色を抜かずに重ねて刷る）"));
-    box.append(head, cmyk, over);
+    box.append(head, cmyk, tintRow, over);
     return box;
   }
 }

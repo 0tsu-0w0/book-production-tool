@@ -56,7 +56,7 @@ describe("特色とオーバープリント", () => {
       { name: "", color: "#123456" },
       { name: "銀", color: "red" },
     ]);
-    assert.deepEqual(spots, [{ name: "DIC 156", color: "#e4007f", cmyk: [0, 100, 0, 0], overprint: true }]);
+    assert.deepEqual(spots, [{ name: "DIC 156", color: "#e4007f", cmyk: [0, 100, 0, 0], overprint: true, tints: [] }]);
     assert.deepEqual(normalizeSettings({}).output.spotColors, []);
     assert.equal(normalizeSettings({}).output.overprintBlack, true);
   });

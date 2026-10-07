@@ -3,7 +3,9 @@ import type { Block } from "./types.js";
 import { textBlocks } from "./blocks.js";
 import { splitDropCap } from "./dropcap.js";
 import { grepCellStyles, type CompiledGrep } from "./grep.js";
+import { nestedCellStyles } from "./nested.js";
 import { NOTE_MARK_SCALE } from "./notes.js";
+import type { LineStyle, NestedStyle } from "../document/styles.js";
 
 // 段落スタイル・文字スタイルを、段落とマスに当てる（DTP-04）。
 // フォントは番号で指定する（0 は本文の書体）。どの番号がどのフォントかは呼び出し側が決める。
@@ -34,6 +36,10 @@ export interface EngineParagraphStyle {
   dropCap?: { lines: number; chars: number; style: string };
   /** 字間（トラッキング。全角1字の 1/1000）。 */
   tracking?: number;
+  /** 先頭文字スタイル。 */
+  nested?: NestedStyle[];
+  /** 行スタイル。 */
+  lineStyle?: LineStyle;
 }
 
 export interface EngineCharacterStyle {
@@ -92,17 +98,33 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       ...(hasDecoration(ps.decoration) ? { deco: ps.decoration } : {}),
       ...(ps.dropCap && ps.dropCap.lines >= 2 ? { dropCap: { lines: ps.dropCap.lines, chars: ps.dropCap.chars } } : {}),
     };
+    // 行スタイル：どの行に当たるかは行に分けてから決まるので、ここでは当てるものだけを段落に書く（組むときに行の字へ当てる）。
+    const ls = ps.lineStyle && ps.lineStyle.lines > 0 ? styles.character.get(ps.lineStyle.style) : undefined;
+    if (ls) {
+      block.format.lineStyle = {
+        lines: ps.lineStyle!.lines,
+        font: ls.font,
+        bold: ls.bold,
+        ...(ls.color ? { color: ls.color } : {}),
+        ...(ls.glyphForm ? { features: ls.glyphForm } : {}),
+      };
+    }
     // 行頭の［＃名前］が段落スタイルでなく文字スタイルの名前なら、その行全体に文字スタイルを当てる（閉じ忘れなど）。
     const lineStyle = block.style && !styles.paragraph.has(block.style) ? styles.character.get(block.style) : undefined;
     // 正規表現スタイル：マスごとに当てる文字スタイルの名前（当たる規則がなければ undefined）。
     const grep = ps.grep?.length ? grepCellStyles(block.atoms, ps.grep) : undefined;
+    // 先頭文字スタイル：段落の頭から順に当てる文字スタイルの名前。
+    const nested = ps.nested?.length ? nestedCellStyles(block.atoms, ps.nested) : undefined;
     for (let ai = 0; ai < block.atoms.length; ai++) {
       const atom = block.atoms[ai];
       const own = atom.style ? styles.character.get(atom.style) : undefined;
       for (let ci = 0; ci < atom.cells.length; ci++) {
         const cell = atom.cells[ci];
+        // 当てる順：原稿の文字スタイル → 正規表現スタイル → 先頭文字スタイル → 行頭の［＃名前］。
         const byGrep = !own && grep?.[ai][ci];
-        const cs = own ?? (byGrep ? styles.character.get(byGrep) : undefined) ?? lineStyle;
+        const byNested = !own && !byGrep && nested?.[ai][ci];
+        const cs = own ?? (byGrep ? styles.character.get(byGrep) : undefined) ?? (byNested ? styles.character.get(byNested) : undefined) ?? lineStyle;
+        cell.charStyled = !!cs || undefined;
         cell.font = cs && cs.font >= 0 ? cs.font : ps.font;
         cell.halfLatin = undefined;
         // 合成フォント：本文の書体（0）の字だけ、かな・欧文を別の書体にする。

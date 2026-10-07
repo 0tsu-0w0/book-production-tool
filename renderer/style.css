@@ -297,3 +297,10 @@ html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 
 .plate-list .plate { display: flex; align-items: center; gap: 6px; margin: 0; }
 .plate-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--line); }
 #separations[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* 先頭文字スタイルの規則（数と区切りの字は短い欄） */
+.grep-rule .nested-count { width: 4.5em; flex: none; }
+.grep-rule .nested-chars { width: 5em; flex: none; }
+.grep-rule:has(.nested-count) { flex-wrap: wrap; }
+.grep-rule .nested-shown { flex-basis: 100%; margin: 0; }
+.grep-rule:has(.nested-count) select { max-width: 11em; }

@@ -1,4 +1,4 @@
-import type { SpotColor } from "../document/settings.js";
+import { spotInks, type SpotColor } from "../document/settings.js";
 import { cmykToRgb, hexToCmyk, hexToGray, rgbToCmyk } from "../engine/ink-color.js";
 
 // 分版プレビュー：入稿用 PDF で刷られる版（C・M・Y・K と特色）のうち、選んだ版だけを重ねた見え方にする。
@@ -37,7 +37,8 @@ const toHex = ([r, g, b]: [number, number, number]) => `#${hex2(r)}${hex2(g)}${h
 export function inkPreview(o: InkPreviewOptions): InkPreview {
   const on = (p: string) => (o.plates.has(p) ? 1 : 0);
   const [c, m, y, k] = PROCESS_PLATES.map(on);
-  const spots = new Map(o.spots.map((s) => [s.color.toLowerCase(), s]));
+  // 特色の色（濃さを変えた色も）→ その特色。
+  const spots = new Map(spotInks(o.spots).map((i) => [i.hex, i.spot]));
   const cache = new Map<string, string | null>();
   /** CMYK（0〜1）を、選んだ版だけにして画面の色にする。どの版にも乗らなければ null。 */
   const process = (cc: number, mm: number, yy: number, kk: number): [number, number, number] | null => {
@@ -53,7 +54,7 @@ export function inkPreview(o: InkPreviewOptions): InkPreview {
       let out: string | null;
       const spot = !o.gray ? spots.get(key) : undefined;
       if (spot) {
-        // 特色は、その特色の版だけに乗る（画面では登録した色で見せる）。
+        // 特色は、その特色の版だけに乗る（画面では登録した色・濃さを変えた色で見せる）。
         out = o.plates.has(spot.name) ? key : null;
       } else if (o.gray) {
         const rgb = process(0, 0, 0, 1 - hexToGray(key));
@@ -84,13 +85,13 @@ export function inkPreview(o: InkPreviewOptions): InkPreview {
 
 /**
  * 画面の色（分版プレビューで描いた画素）から、インキの量を目安で読む（カーソルの所の表示に使う）。
- * 特色は、登録した色とちょうど同じ画素なら、その特色 100% とみなす。
+ * 特色は、登録した色（濃さを変えた色）とちょうど同じ画素なら、その特色のその濃さとみなす。
  */
 export function readInks(r: number, g: number, b: number, o: Pick<InkPreviewOptions, "gray" | "spots">): { name: string; percent: number }[] {
   const hex = toHex([r, g, b]);
   if (!o.gray) {
-    const spot = o.spots.find((s) => s.color.toLowerCase() === hex);
-    if (spot) return [{ name: spot.name, percent: 100 }];
+    const ink = spotInks(o.spots).find((i) => i.hex === hex);
+    if (ink) return [{ name: ink.spot.name, percent: Math.round(ink.tint * 100) }];
   }
   if (o.gray) return [{ name: "K", percent: Math.round((1 - hexToGray(hex)) * 100) }];
   const v = rgbToCmyk(r / 255, g / 255, b / 255);

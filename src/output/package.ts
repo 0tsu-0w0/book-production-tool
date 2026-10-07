@@ -145,7 +145,13 @@ export async function writePackage(p: PackageInput): Promise<PackageResult> {
     "■ 色",
     `  ${s.output.color === "gray" ? "グレースケール（K の版だけ）" : "CMYK"}。スミ（K100%）のオーバープリント：${s.output.overprintBlack ? "する" : "しない"}`,
     ...(spots.length > 0
-      ? ["  特色：", ...spots.map((sp) => `    ${sp.name}（画面の色 ${sp.color}、代わりの CMYK ${sp.cmyk.join("/")}、オーバープリント${sp.overprint ? "する" : "しない"}）`)]
+      ? [
+          "  特色：",
+          ...spots.map(
+            (sp) =>
+              `    ${sp.name}（画面の色 ${sp.color}、代わりの CMYK ${sp.cmyk.join("/")}、オーバープリント${sp.overprint ? "する" : "しない"}${sp.tints?.length ? `、平網 ${sp.tints.join("・")}%` : ""}）`,
+          ),
+        ]
       : ["  特色：なし"]),
     "",
     "■ 書体",

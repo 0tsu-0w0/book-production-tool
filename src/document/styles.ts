@@ -79,6 +79,27 @@ export interface ParagraphStyle {
   dropCap: DropCap;
   /** 字間（トラッキング。全角1字の 1/1000。負なら詰める）。 */
   tracking: number;
+  /** 先頭文字スタイル：段落の頭から順に、決めた範囲の字に文字スタイルを当てる（上の規則から順に）。 */
+  nested: NestedStyle[];
+  /** 行スタイル：段落の最初の何行かに文字スタイルを当てる（書体・色・太字・字形だけ。0行なら使わない）。 */
+  lineStyle: LineStyle;
+}
+
+/** 先頭文字スタイルの規則1つ。 */
+export interface NestedStyle {
+  /** 当てる文字スタイル（空なら当てずに範囲だけ進める）。 */
+  style: string;
+  /** chars：count 字まで。through：区切りの字の count 個目まで（含む）。before：count 個目の前まで。 */
+  until: "chars" | "through" | "before";
+  count: number;
+  /** 区切りの字（いくつか並べてよい。どれかが来たら区切り）。 */
+  chars: string;
+}
+
+/** 行スタイル。 */
+export interface LineStyle {
+  style: string;
+  lines: number;
 }
 
 /** ドロップキャップの設定。lines が 0 なら使わない。 */
@@ -228,6 +249,8 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   decoration: structuredClone(DEFAULT_DECORATION),
   dropCap: { lines: 0, chars: 1, style: "" },
   tracking: 0,
+  nested: [],
+  lineStyle: { style: "", lines: 0 },
   ...over,
 });
 
@@ -262,6 +285,24 @@ const dropCapOf = (v: unknown): DropCap => {
   const d = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
   const lines = Math.round(num(d.lines, 0, 0, 5));
   return { lines: lines < 2 ? 0 : lines, chars: Math.round(num(d.chars, 1, 1, 5)), style: typeof d.style === "string" ? d.style : "" };
+};
+
+/** 先頭文字スタイルの規則を読む（8つまで）。 */
+const nestedOf = (v: unknown): NestedStyle[] =>
+  (Array.isArray(v) ? v : [])
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .slice(0, 8)
+    .map((x) => ({
+      style: typeof x.style === "string" ? x.style : "",
+      until: x.until === "through" || x.until === "before" ? x.until : "chars",
+      count: Math.round(num(x.count, 1, 1, 999)),
+      chars: typeof x.chars === "string" ? x.chars.slice(0, 20) : "　",
+    }));
+
+/** 行スタイルを読む。 */
+const lineStyleOf = (v: unknown): LineStyle => {
+  const l = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  return { style: typeof l.style === "string" ? l.style : "", lines: Math.round(num(l.lines, 0, 0, 20)) };
 };
 
 /** 段落の罫線・網掛けを読む。 */
@@ -361,6 +402,8 @@ export function normalizeStyles(input: unknown): StyleSheet {
         decoration: decorationOf(p.decoration),
         dropCap: dropCapOf(p.dropCap),
         tracking: Math.round(num(p.tracking, 0, -500, 1000)),
+        nested: nestedOf(p.nested),
+        lineStyle: lineStyleOf(p.lineStyle),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {

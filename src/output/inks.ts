@@ -1,5 +1,5 @@
 import { PDFDict, PDFName, PDFNumber, PDFOperator, PDFOperatorNames, setGraphicsState, type PDFDocument, type PDFPage, type PDFRef } from "pdf-lib";
-import type { SpotColor } from "../document/settings.js";
+import { spotInks, type SpotColor } from "../document/settings.js";
 import { fillColor, hexToCmyk, strokeColor, type ColorMode } from "./color.js";
 
 // 入稿用 PDF のインキ：特色とオーバープリント（ノセ）。
@@ -28,7 +28,10 @@ const isK100 = (hex: string) => hexToCmyk(hex).join(",") === "0,0,0,1";
 
 /** 文書全体のインキ（色空間とノセの状態は1度だけ作り、ページごとに Resources へ登録する）。 */
 export class Inks {
-  private readonly spots = new Map<string, { index: number; spot: SpotColor; ref?: PDFRef }>();
+  /** 画面の色 → 特色（index は特色の番号。濃さを変えた色も同じ特色の色空間を使う）と濃さ。 */
+  private readonly spots = new Map<string, { index: number; spot: SpotColor; tint: number }>();
+  /** 特色ごとの色空間（使ったときに作る）。 */
+  private readonly refs = new Map<number, PDFRef>();
   private gs?: { on: PDFRef; off: PDFRef };
   /** ノセを切り替えるか（CMYK で、スミのノセか、ノセの特色があるとき）。 */
   private readonly overprinting: boolean;
@@ -39,7 +42,11 @@ export class Inks {
     private readonly options: InkOptions = {},
   ) {
     // 特色は CMYK（入稿用）のときだけ。グレースケール・RGB では、画面の色のまま。
-    if (mode === "cmyk") (options.spots ?? []).forEach((spot, index) => this.spots.set(spot.color.toLowerCase(), { index, spot }));
+    // 濃さを変えた色（平網）は、同じ特色の版をその濃さで刷る。
+    if (mode === "cmyk") {
+      const spots = options.spots ?? [];
+      for (const ink of spotInks(spots)) this.spots.set(ink.hex, { index: spots.indexOf(ink.spot), spot: ink.spot, tint: ink.tint });
+    }
     this.overprinting = mode === "cmyk" && (!!options.overprintBlack || [...this.spots.values()].some((s) => s.spot.overprint));
   }
 
@@ -50,7 +57,7 @@ export class Inks {
 
   /** 使った特色の名前（重ならない）。 */
   usedSpots(): string[] {
-    return [...this.spots.values()].filter((s) => s.ref).map((s) => s.spot.name);
+    return [...new Set([...this.spots.values()].filter((s) => this.refs.has(s.index)).map((s) => s.spot.name))];
   }
 
   /** 色を指定する命令と、そのときのノセの状態（特色ならその名前の色空間も）。 */
@@ -76,15 +83,16 @@ export class Inks {
       out.push(stroking ? strokeColor(hex, this.mode) : fillColor(hex, this.mode));
       return out;
     }
-    spot.ref ??= this.separation(spot.spot);
+    let ref = this.refs.get(spot.index);
+    if (!ref) this.refs.set(spot.index, (ref = this.separation(spot.spot)));
     const name = `SP${spot.index}`;
     if (!registered.has(name)) {
-      addResource(page, "ColorSpace", name, spot.ref);
+      addResource(page, "ColorSpace", name, ref);
       registered.add(name);
     }
     out.push(
       PDFOperator.of(stroking ? PDFOperatorNames.StrokingColorspace : PDFOperatorNames.NonStrokingColorspace, [PDFName.of(name)]),
-      PDFOperator.of(stroking ? PDFOperatorNames.StrokingColorN : PDFOperatorNames.NonStrokingColorN, [PDFNumber.of(1)]),
+      PDFOperator.of(stroking ? PDFOperatorNames.StrokingColorN : PDFOperatorNames.NonStrokingColorN, [PDFNumber.of(spot.tint)]),
     );
     return out;
   }

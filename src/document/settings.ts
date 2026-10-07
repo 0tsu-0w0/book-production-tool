@@ -233,6 +233,38 @@ export interface SpotColor {
   cmyk: [number, number, number, number];
   /** ノセ（下の色を抜かずに重ねて刷る）。 */
   overprint: boolean;
+  /**
+   * 濃さを変えた色（平網。1〜99 の %）。それぞれ、画面では登録した色を白と混ぜた色（tintHex）になり、
+   * 入稿用 PDF ではこの特色の版をその濃さで刷る。
+   */
+  tints?: number[];
+}
+
+/** 特色の濃さを変えた色の、画面での色（登録した色を、濃さの割合で白と混ぜる）。 */
+export function tintHex(color: string, percent: number): string {
+  const t = percent / 100;
+  const ch = (i: number) => Math.round(255 - (255 - parseInt(color.slice(i, i + 2), 16)) * t);
+  return `#${[1, 3, 5].map((i) => ch(i).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** 特色の色（100% と濃さを変えた色）：画面の色・特色・濃さ（0〜1）。画面の色が重なるものは、先のものだけ。 */
+export interface SpotInk {
+  hex: string;
+  spot: SpotColor;
+  tint: number;
+}
+
+export function spotInks(spots: readonly SpotColor[]): SpotInk[] {
+  const out: SpotInk[] = [];
+  const seen = new Set<string>();
+  const add = (hex: string, spot: SpotColor, tint: number) => {
+    if (seen.has(hex)) return;
+    seen.add(hex);
+    out.push({ hex, spot, tint });
+  };
+  for (const spot of spots) add(spot.color.toLowerCase(), spot, 1);
+  for (const spot of spots) for (const t of spot.tints ?? []) add(tintHex(spot.color.toLowerCase(), t), spot, t / 100);
+  return out;
 }
 
 /** 特色の登録を確かめて、使えるものだけにする（名前と色が重ならないように）。 */
@@ -246,7 +278,9 @@ export function normalizeSpots(v: unknown): SpotColor[] {
     if (!name || !color || out.some((o) => o.name === name || o.color === color)) continue;
     const cmyk = (Array.isArray(s.cmyk) ? s.cmyk : []).slice(0, 4).map((n) => (typeof n === "number" && Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0));
     while (cmyk.length < 4) cmyk.push(0);
-    out.push({ name, color, cmyk: cmyk as SpotColor["cmyk"], overprint: s.overprint === true });
+    // 濃さ：1〜99 の整数を、濃い順に8つまで（同じ値は1つ）。
+    const tints = [...new Set((Array.isArray(s.tints) ? s.tints : []).map((n) => Math.round(Number(n))).filter((n) => n >= 1 && n <= 99))].sort((a, b) => b - a).slice(0, 8);
+    out.push({ name, color, cmyk: cmyk as SpotColor["cmyk"], overprint: s.overprint === true, tints });
   }
   return out.slice(0, 16);
 }
