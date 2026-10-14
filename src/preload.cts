@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld("api", {
   setDefaultTemplate: invoke("templates:set-default"),
   exportPdf: invoke("pdf:export"),
   exportEpub: invoke("epub:export"),
+  exportIdml: invoke("idml:export"),
   exportPackage: invoke("package:export"),
   bookExportEpub: invoke("book:export-epub"),
   listIccProfiles: invoke("icc:list"),

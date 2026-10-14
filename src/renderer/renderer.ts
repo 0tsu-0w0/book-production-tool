@@ -59,8 +59,10 @@ type EpubResult = { path: string; files: number } | { error: string } | undefine
 type PdfResult = { path: string; pages: number; pdfx: boolean; standard?: "x1a" | "x4"; problems: string[] } | { error: string } | undefined;
 
 type Opened =
-  | { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string } }
+  | { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string }; imported?: { from: string; notes: string[] } }
   | { error: string };
+
+type IdmlResult = { path: string; pages: number; skipped: string[] } | { error: string } | undefined;
 
 interface Api extends TemplateApi {
   init(): Promise<{
@@ -73,6 +75,8 @@ interface Api extends TemplateApi {
     autoExport: boolean;
     /** 確認用：パッケージも書き出す（--export-package）。 */
     autoPackage?: boolean;
+    /** 確認用：IDML も書き出す（--export-idml）。 */
+    autoIdml?: boolean;
     bench: boolean;
     startPage: number;
   }>;
@@ -89,6 +93,7 @@ interface Api extends TemplateApi {
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
   exportEpub(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<EpubResult>;
+  exportIdml(text: string, settings: Settings, baseName: string): Promise<IdmlResult>;
   exportPackage(
     text: string,
     settings: Settings,
@@ -624,6 +629,13 @@ async function open(file?: string) {
     return;
   }
   loadOpened(opened);
+  if (opened.imported) {
+    // IDML：読み込めなかったものがあれば知らせる。
+    const notes = opened.imported.notes;
+    setStatus(`InDesign（IDML）を読み込みました：${opened.imported.from}。保存すると Kolophon 文書になります。${notes.length > 0 ? `読み込めなかったもの：${notes.join("・")}` : ""}`);
+    if (notes.length > 0) alert(`IDML を読み込みました。次のものは読み込んでいません。\n\n・${notes.join("\n・")}`);
+    return;
+  }
   setStatus(opened.filePath ? `開きました：${opened.filePath}` : "テキストを読み込みました。保存すると Kolophon 文書になります。");
 }
 
@@ -757,6 +769,22 @@ function exportPackage() {
     const skipped = r.skippedFonts.length > 0 ? `。入れなかった書体：${r.skippedFonts.map((f) => `${f.name}（${f.reason}）`).join("・")}` : "";
     const pdf = r.pdf?.error ? `。入稿用 PDF は書き出せませんでした（${r.pdf.error}）` : "";
     setStatus(`パッケージを作りました：${r.path}（${r.files}ファイル${skipped}${pdf}）`);
+  });
+}
+
+/** IDML（InDesign）の書き出し。入れなかったもの（画像・目次など）を知らせる。 */
+function exportIdml() {
+  return withBusy(async () => {
+    setStatus("IDML を書き出しています…");
+    const r = await api.exportIdml(source.value, settings, baseName());
+    if (!r) return setStatus("書き出しを取り消しました。");
+    if ("error" in r) {
+      setStatus(r.error);
+      if (!init.autoExport) alert(r.error);
+      return;
+    }
+    const skipped = r.skipped.length > 0 ? `。入れなかったもの：${r.skipped.join("・")}` : "";
+    setStatus(`IDML を書き出しました（${r.pages}ページ分のテキストフレーム）：${r.path}${skipped}`);
   });
 }
 
@@ -932,6 +960,8 @@ async function runCommand(command: string) {
       return exportPdf();
     case "export-epub":
       return exportEpub();
+    case "export-idml":
+      return exportIdml();
     case "export-package":
       return exportPackage();
     case "export-images":
@@ -1107,6 +1137,10 @@ if (init.snapshot) {
     await exportImages();
     await exportEpub();
     console.log(`[snapshot] ${status.textContent}`);
+    if (init.autoIdml) {
+      await exportIdml();
+      console.log(`[snapshot] ${status.textContent}`);
+    }
     if (init.autoPackage) {
       await exportPackage();
       console.log(`[snapshot] ${status.textContent}`);

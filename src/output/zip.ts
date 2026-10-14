@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { inflateRawSync } from "node:zlib";
 
 // 画像を1つの ZIP にまとめる（OUT-05）。PNG・JPEG はもう圧縮されているので、無圧縮（格納）で書く。
 // 1枚ずつファイルに書き足し、最後に目次（セントラルディレクトリ）を書く。ファイル名は UTF-8。
@@ -99,4 +100,42 @@ export class ZipWriter {
     fs.closeSync(this.fd);
     fs.rmSync(this.path, { force: true });
   }
+}
+
+/**
+ * ZIP を読む（IDML の読み込みに使う）。名前 → 中身。格納（無圧縮）と deflate だけ。
+ * 目次（セントラルディレクトリ）から各ファイルの場所と大きさを読む（ローカルヘッダーの大きさは 0 のことがあるため）。
+ */
+export function readZip(bytes: Uint8Array): Map<string, Uint8Array> {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // 終わりの記録（End of central directory）を後ろから探す。
+  let end = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) throw new Error("ZIP ではありません。");
+  const count = buf.readUInt16LE(end + 10);
+  let p = buf.readUInt32LE(end + 16);
+  const out = new Map<string, Uint8Array>();
+  for (let k = 0; k < count; k++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error("ZIP の目次が壊れています。");
+    const method = buf.readUInt16LE(p + 10);
+    const compressed = buf.readUInt32LE(p + 20);
+    const nameLength = buf.readUInt16LE(p + 28);
+    const extraLength = buf.readUInt16LE(p + 30);
+    const commentLength = buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.toString("utf8", p + 46, p + 46 + nameLength);
+    p += 46 + nameLength + extraLength + commentLength;
+    if (name.endsWith("/")) continue;
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const data = buf.subarray(start, start + compressed);
+    if (method === 0) out.set(name, new Uint8Array(data));
+    else if (method === 8) out.set(name, new Uint8Array(inflateRawSync(data)));
+    else throw new Error(`この圧縮の仕方の ZIP は読めません（${method}）。`);
+  }
+  return out;
 }

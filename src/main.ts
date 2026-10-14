@@ -21,6 +21,8 @@ import { IccError, findCmykProfiles, iccProblem, readIcc } from "./output/icc.js
 import { BACKGROUND_SCHEME, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, normalizeAppearance, type Appearance, type WindowGeometry } from "./appearance.js";
 import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
+import { buildIdml } from "./output/idml.js";
+import { importIdml } from "./document/idml-import.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
 import type { TypesetConnect } from "./typeset-worker.js";
 import { SAMPLE_TEXT } from "./sample.js";
@@ -65,7 +67,7 @@ const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`
 const snapshotDir = arg("snapshot");
 /** 文書をダブルクリックして起動したとき（Windows）は、コマンドラインにそのパスが来る。 */
 function fileFromArgv(argv: string[]): string | undefined {
-  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(kolo|kolob|kolophon|kolbook|tategumi|tgbook|txt|tex)$/i.test(a) && fs.existsSync(a));
+  return argv.slice(1).find((a) => !a.startsWith("-") && /\.(kolo|kolob|kolophon|kolbook|tategumi|tgbook|txt|tex|idml)$/i.test(a) && fs.existsSync(a));
 }
 let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 // 確認用：ダイアログを出さずに、指定した場所へ書き出す（--snapshot と一緒に使う）。
@@ -73,6 +75,7 @@ const autoPdf = snapshotDir ? arg("export-pdf") : undefined;
 const autoImages = snapshotDir ? arg("export-images") : undefined;
 const autoEpub = snapshotDir ? arg("export-epub") : undefined;
 const autoPackage = snapshotDir ? arg("export-package") : undefined;
+const autoIdml = snapshotDir ? arg("export-idml") : undefined;
 // 確認用：--bench を付けると、原稿の途中を何度か書き換えて組み直しの時間を測り、標準出力に書く。
 const bench = !!snapshotDir && process.argv.includes("--bench");
 
@@ -110,8 +113,36 @@ function readTextFile(file: string): string {
   }
 }
 
-/** 文書（.kolo・前の .kolophon・.tategumi）かテキスト（.txt）を開く。テキストは本文だけを返し、設定は今のものを使う。 */
-function openFile(file: string): { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string } } {
+/** 書体のファミリー名から、PC の書体を探す（IDML の読み込み）。見つからなければ null。 */
+function fontByFamily(name: string | undefined): FontChoice | null {
+  if (!name) return null;
+  const plain = (s: string) => s.replace(/\s/g, "").toLowerCase();
+  const list = fonts.list();
+  const f = list.find((e) => e.family === name) ?? list.find((e) => e.name === name) ?? list.find((e) => plain(e.family) === plain(name) || plain(e.name) === plain(name));
+  return f ? { name: f.name, postscriptName: f.postscriptName, path: f.path, index: f.index } : null;
+}
+
+/** IDML（InDesign）を読み込む。書体は PC の書体に読み替え、ない書体は知らせる。 */
+function openIdml(file: string): Opened {
+  const r = importIdml(fs.readFileSync(file));
+  const missing = new Set<string>();
+  const pick = (name: string | undefined) => {
+    const f = fontByFamily(name);
+    if (name && !f) missing.add(name);
+    return f;
+  };
+  if (r.fonts.body) r.settings.font = pick(r.fonts.body);
+  for (const p of r.settings.styles.paragraph) if (r.fonts.paragraph[p.name] && r.fonts.paragraph[p.name] !== r.fonts.body) p.font = pick(r.fonts.paragraph[p.name]);
+  for (const c of r.settings.styles.character) if (r.fonts.character[c.name]) c.font = pick(r.fonts.character[c.name]);
+  const notes = [...r.notes, ...(missing.size > 0 ? [`PC にない書体（${[...missing].join("・")}。本文の書体で組みます）`] : [])];
+  return { text: r.text, settings: r.settings, images: [], filePath: null, imported: { from: path.basename(file), notes } };
+}
+
+type Opened = { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string }; imported?: { from: string; notes: string[] } };
+
+/** 文書（.kolo・前の .kolophon・.tategumi）かテキスト（.txt）・TeX・IDML を開く。テキストは本文だけを返し、設定は今のものを使う。 */
+function openFile(file: string): Opened {
+  if (file.toLowerCase().endsWith(".idml")) return openIdml(file);
   if (file.toLowerCase().endsWith(".txt")) return { text: readTextFile(file), filePath: null };
   if (file.toLowerCase().endsWith(".tex")) {
     // TeX の原稿：記法を TeX にし、プリアンブルの書名・著者名を書誌に使う。
@@ -165,8 +196,9 @@ ipcMain.handle("init", () => {
     opened: startupDoc && !isBookFile(startupDoc) ? openSafely(startupDoc) : undefined,
     book: startupDoc && isBookFile(startupDoc) ? startupDoc : undefined,
     snapshot: !!snapshotDir,
-    autoExport: !!(autoPdf || autoImages || autoEpub || autoPackage),
+    autoExport: !!(autoPdf || autoImages || autoEpub || autoPackage || autoIdml),
     autoPackage: !!autoPackage,
+    autoIdml: !!autoIdml,
     bench,
     /** 確認用：--page=N で、スナップショットを N ページ目から撮る。 */
     startPage: Number(arg("page")) || 1,
@@ -348,10 +380,11 @@ app.on("before-quit", () => {
 ipcMain.handle("doc:open", async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
     filters: [
-      { name: "Kolophon 文書・テキスト・TeX", extensions: [...DOC_EXTENSIONS, "txt", "tex"] },
+      { name: "Kolophon 文書・テキスト・TeX・IDML", extensions: [...DOC_EXTENSIONS, "txt", "tex", "idml"] },
       { name: "Kolophon 文書", extensions: DOC_EXTENSIONS },
       { name: "テキスト", extensions: ["txt"] },
       { name: "TeX", extensions: ["tex"] },
+      { name: "InDesign（IDML）", extensions: ["idml"] },
     ],
     properties: ["openFile"],
   });
@@ -829,6 +862,45 @@ async function exportEpubFile(text: string, settings: Settings, baseName: string
 
 ipcMain.handle("epub:export", (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = []) => exportEpubFile(text, settings, baseName, images));
 
+/**
+ * IDML（InDesign の受け渡し用の形式）を書き出す。ページ数とページ番号の参照の番号は、Kolophon で組んだ結果から取る。
+ * 書体は、PC の書体の一覧からファミリー名とスタイルを引いて入れる。
+ */
+ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseName: string) => {
+  if (snapshotDir && !autoIdml) return undefined;
+  const { canceled, filePath } = autoIdml
+    ? { canceled: false, filePath: path.resolve(autoIdml) }
+    : await dialog.showSaveDialog(win!, { defaultPath: `${baseName}.idml`, filters: [{ name: "InDesign（IDML）", extensions: ["idml"] }] });
+  if (canceled || !filePath) return undefined;
+  let zip: ZipWriter | undefined;
+  try {
+    const { table } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
+    const result = typesetLazy(text, settings, table);
+    const labels = result.labelPages();
+    const list = fonts.list();
+    const entryOf = (f: FontChoice | null) => (f ? list.find((e) => e.postscriptName === f.postscriptName && e.path === f.path) ?? list.find((e) => e.postscriptName === f.postscriptName) : list[0]);
+    const { files, skipped } = buildIdml(text, settings, {
+      pageCount: result.pageCount,
+      // ページの名前（001・i など）から、紙面に出す番号の字にする。
+      pageOf: (label) => {
+        const i = labels.get(label);
+        return i === undefined ? undefined : result.pageLabels[i]?.replace(/^0+(?=\d)/, "");
+      },
+      fontName: (f) => {
+        const e = entryOf(f);
+        return e ? { family: e.family, style: e.style, postscriptName: e.postscriptName, cff: e.cff } : undefined;
+      },
+    });
+    zip = new ZipWriter(filePath);
+    for (const f of files) zip.add(f.name, f.data);
+    zip.close();
+    return { path: filePath, pages: result.pageCount, skipped };
+  } catch (e) {
+    zip?.abort();
+    return { error: `IDML を書き出せませんでした：${e instanceof Error ? e.message : String(e)}` };
+  }
+});
+
 /** ブック全体を1つの EPUB に書き出す。 */
 ipcMain.handle("book:export-epub", (_e, bookPath: string, book: Book) => {
   const { docs, errors } = loadBookDocs(bookPath, book);
@@ -955,6 +1027,7 @@ function buildMenu() {
         cmd("画像を書き出す…", "export-images", "CmdOrCtrl+Shift+E"),
         cmd("EPUB（電子書籍）を書き出す…", "export-epub"),
         cmd("パッケージ（入稿用にまとめる）…", "export-package"),
+        cmd("IDML（InDesign）を書き出す…", "export-idml"),
         { type: "separator" },
         process.platform === "darwin" ? { role: "close", label: "閉じる" } : { role: "quit", label: "終了" },
       ],
