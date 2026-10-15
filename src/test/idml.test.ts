@@ -22,6 +22,9 @@ try {
 
 const dec = new TextDecoder();
 
+/** Kolophon の控え（META-INF/kolophon.json）を除く（InDesign で作った IDML と同じにする）。 */
+const withoutHint = (files: { name: string; data: Uint8Array }[]) => files.filter((f) => f.name !== "META-INF/kolophon.json");
+
 /** ファイルの並びを ZIP にして、その中身を返す。 */
 function zipOf(files: { name: string; data: Uint8Array }[]): Uint8Array {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "kolophon-idml-")), "t.idml");
@@ -121,10 +124,10 @@ describe("IDML の書き出し", () => {
 });
 
 describe("IDML の読み込み", () => {
-  it("書き出した IDML を読み込むと、同じ判型・字組・スタイル・特色と、同じ記法の原稿になる", () => {
+  it("書き出した IDML を（Kolophon の控えなしで）読み込むと、同じ判型・字組・スタイル・特色と、同じ記法の原稿になる", () => {
     const s = sampleSettings();
     const r = buildIdml(SAMPLE, s, { pageCount: 3, pageOf: () => "1", fontName: () => undefined });
-    const back = importIdml(zipOf(r.files));
+    const back = importIdml(zipOf(withoutHint(r.files)));
     const b = back.settings.book;
     assert.equal(b.writingMode, "vertical");
     assert.equal(b.widthMm, Math.round(s.book.widthMm * 10) / 10);
@@ -163,7 +166,7 @@ describe("IDML の読み込み", () => {
     const s = sampleSettings();
     const text = SAMPLE.split("\n").filter((l) => !l.includes("［＃注") && !l.includes("［＃ページ") && !l.includes("ラベル")).join("\n");
     const r = buildIdml(text, s, { pageCount: 2, fontName: () => undefined });
-    const back = importIdml(zipOf(r.files));
+    const back = importIdml(zipOf(withoutHint(r.files)));
     const face = new Face(bytes!);
     const linesOf = (t: string, st: Settings) => {
       const res = typesetLazy(t, st, face);
@@ -236,7 +239,7 @@ describe("IDML の読み込み", () => {
     assert.equal(blue.color, "#99ffff");
     assert.deepEqual(s.output.spotColors.map((sp) => sp.name), ["PANTONE 151 C"]);
     assert.equal(r.fonts.body, "小塚明朝 Pr6N");
-    assert.ok(r.notes.some((n) => n.startsWith("画像（1個）")));
+    assert.ok(r.notes.some((n) => n.startsWith("ページに置いた画像（1個")));
     assert.ok(r.notes.some((n) => n.startsWith("脚注（1個")));
     assert.ok(r.notes.some((n) => n.startsWith("表（1個")));
   });
@@ -271,5 +274,170 @@ describe("IDML の読み込み", () => {
     assert.equal(dec.decode(zip.get("designmap.xml")), "<Document/>");
     assert.throws(() => importIdml(zipOf([{ name: "a.txt", data: new TextEncoder().encode("x") }])), /IDML ではありません/);
     assert.throws(() => readZip(new Uint8Array(10)), /ZIP ではありません/);
+  });
+});
+
+describe("IDML：Kolophon の控え・画像・ノンブル", () => {
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAEklEQVR42mP8z8DwnwEJMDIwAABV0QHrt6R8VgAAAABJRU5ErkJggg==", "base64");
+  const img = { name: "絵：表紙", mime: "image/png" as const, data: PNG.toString("base64"), width: 2, height: 3 };
+
+  it("字が書き出したときのままなら、元の原稿と Kolophon だけの設定に戻す。特色は元の画面の色", () => {
+    const s = sampleSettings();
+    s.format.symbols = true;
+    s.typography.lineEndPunct = "half";
+    const r = buildIdml(SAMPLE, s, { pageCount: 3, pageOf: () => "1", fontName: () => undefined });
+    const back = importIdml(zipOf(r.files));
+    assert.equal(back.restored, true);
+    assert.equal(back.text, SAMPLE);
+    assert.equal(back.settings.format.symbols, true);
+    assert.equal(back.settings.typography.lineEndPunct, "half");
+    assert.deepEqual(back.settings.output.spotColors.map((sp) => [sp.name, sp.color, sp.tints]), [["DIC 156", "#e4007f", [50]]]);
+    assert.equal(back.settings.styles.character.find((c) => c.name === "平網")!.color, "#f280bf");
+  });
+
+  it("字が変わっていれば IDML の字を読む。注の段落は［＃注：…］に戻し、特色は元の画面の色", () => {
+    const s = sampleSettings();
+    const r = buildIdml(SAMPLE, s, { pageCount: 3, pageOf: () => "1", fontName: () => undefined });
+    const edited = r.files.map((f) => (f.name === "Stories/Story_u1.xml" ? { ...f, data: new TextEncoder().encode(dec.decode(f.data).replace("の窓から", "の扉から")) } : f));
+    const back = importIdml(zipOf(edited));
+    assert.equal(back.restored, false);
+    assert.match(back.text, /｜図書館《としょかん》の扉から/);
+    assert.match(back.text, /注を付ける［＃注：注の中身。］。/);
+    assert.ok(!back.text.includes("注1"));
+    assert.equal(back.settings.output.spotColors[0].color, "#e4007f");
+    assert.equal(back.settings.styles.character.find((c) => c.name === "特色")!.color, "#e4007f");
+  });
+
+  it("画像：リンクのファイルを書き出し、Kolophon で置いた所に置く。全面の画像のページにはテキストフレームを置かず、流れを飛ばす", () => {
+    const s = sampleSettings();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kolophon-links-"));
+    const W = (s.book.widthMm * 72) / 25.4;
+    const H = (s.book.heightMm * 72) / 25.4;
+    const r = buildIdml(`本文。\n［＃画像：${img.name}　全面］\n続き。`, s, {
+      pageCount: 3,
+      images: [img],
+      linkPath: (f) => path.join(dir, f),
+      pages: [
+        { images: [] },
+        { images: [{ name: img.name, x: -8, y: -8, w: W + 16, h: H + 16, clip: { x: -8, y: -8, w: W + 16, h: H + 16 } }] },
+        { images: [{ name: img.name, x: 50, y: 60, w: 40, h: 60 }] },
+      ],
+    });
+    assert.deepEqual(
+      r.links.map((l) => path.basename(l.path)),
+      ["絵：表紙.png"],
+    );
+    const story = dec.decode(r.files.find((f) => f.name === "Stories/Story_u1.xml")!.data);
+    assert.ok(!story.includes("画像"), "置いた画像は本文に字を入れない");
+    const spreads = r.files.filter((f) => f.name.startsWith("Spreads/")).map((f) => parseXml(dec.decode(f.data)));
+    const frames = spreads.flatMap((sp) => findAll(sp, "TextFrame"));
+    assert.deepEqual(
+      frames.map((f) => [f.attrs.Self, f.attrs.PreviousTextFrame, f.attrs.NextTextFrame]),
+      [
+        ["tf1", "n", "tf3"],
+        ["tf3", "tf1", "n"],
+      ],
+    );
+    const rects = spreads.flatMap((sp) => findAll(sp, "Rectangle"));
+    assert.equal(rects.length, 2);
+    const link = findAll(rects[0], "Link")[0].attrs;
+    assert.equal(link.LinkResourceFormat, "$ID/Portable Network Graphics (PNG)");
+    assert.match(link.LinkResourceURI, /^file:.*%E7%B5%B5%EF%BC%9A%E8%A1%A8%E7%B4%99\.png$/);
+    // 本文のあるページの画像には回り込み、全面の画像にはない。
+    assert.equal(findAll(rects[0], "TextWrapPreference").length, 0);
+    assert.equal(findAll(rects[1], "TextWrapPreference")[0].attrs.TextWrapMode, "BoundingBoxTextWrap");
+    // 画像の大きさ：2×3 画素を 40×60pt に（20倍）。
+    assert.match(findAll(rects[1], "Image")[0].attrs.ItemTransform, /^20 0 0 20 /);
+
+    // 読み込み：リンクのファイルが PC にあれば、元の名前の画像として読む。
+    for (const l of r.links) fs.writeFileSync(l.path, l.data);
+    const back = importIdml(zipOf(r.files));
+    assert.equal(back.restored, true);
+    assert.deepEqual(
+      back.images.map((i) => [i.name, i.mime, i.width, i.height]),
+      [[img.name, "image/png", 2, 3]],
+    );
+    assert.ok(back.text.includes(`［＃画像：${img.name}　全面］`));
+  });
+
+  it("ノンブル：Kolophon でノンブルを出したページにマスター A（自動のページ番号）、ほかはマスター B。前付けを別に数えるときはセクションを分ける", () => {
+    const s = sampleSettings();
+    s.nombreStyle = { ...s.nombreStyle, front: "roman", numerals: "kanji" };
+    const nombre = (x: number, align: "left" | "right") => ({ x, y: 400, size: 7, align, color: "#000000", text: "1" });
+    const r = buildIdml("本文。", s, {
+      pageCount: 3,
+      bodyStart: 1,
+      pages: [{ images: [] }, { images: [], nombre: nombre(30, "right") }, { images: [], nombre: nombre(280, "left") }],
+    });
+    const pages = r.files.filter((f) => f.name.startsWith("Spreads/")).flatMap((f) => findAll(parseXml(dec.decode(f.data)), "Page"));
+    assert.deepEqual(
+      pages.map((p) => p.attrs.AppliedMaster),
+      ["un", "um", "um"],
+    );
+    const master = dec.decode(r.files.find((f) => f.name === "MasterSpreads/MasterSpread_um.xml")!.data);
+    assert.equal(findAll(parseXml(master), "TextFrame").length, 2);
+    const numbers = r.files.filter((f) => f.name.startsWith("Stories/Story_un")).map((f) => dec.decode(f.data));
+    assert.equal(numbers.length, 2);
+    for (const st of numbers) assert.match(st, /PointSize="7"[^>]*><Content><\?ACE 18\?><\/Content>/);
+    assert.match(numbers.join(), /Justification="RightAlign"/);
+    const dm = parseXml(dec.decode(r.files.find((f) => f.name === "designmap.xml")!.data));
+    const sections = childElements(dm, "Section").map((e) => [e.attrs.PageStart, e.attrs.Length, e.attrs.PageNumberStyle, e.attrs.PageNumberStart]);
+    assert.deepEqual(sections, [
+      ["p1", "1", "LowerRoman", "1"],
+      ["p2", "2", "Kanji", "1"],
+    ]);
+    // 読み込み：前付けのローマ数字・漢数字のノンブル。マスターのページ番号だけなら知らせない。
+    const back = importIdml(zipOf(withoutHint(r.files)));
+    assert.equal(back.settings.nombreStyle.front, "roman");
+    assert.equal(back.settings.nombreStyle.numerals, "kanji");
+    assert.ok(!back.notes.some((note) => note.startsWith("マスターページ")), back.notes.join());
+  });
+
+  it("文字スタイルの大きさは、段落の大きさを掛けて字に付ける（見出しの中の文字スタイル）", () => {
+    const s = sampleSettings();
+    s.styles.paragraph.find((p) => p.name === "大見出し")!.scale = 2;
+    s.styles.character.push({ ...newCharacterStyle("小"), scale: 0.5 });
+    const r = buildIdml("＃［＃小］小さく［＃／小］見出し\n　［＃小］本文の中［＃／小］", s, { pageCount: 1 });
+    const story = dec.decode(r.files.find((f) => f.name === "Stories/Story_u1.xml")!.data);
+    const size = s.book.fontSizePt;
+    assert.match(story, new RegExp(`AppliedCharacterStyle="CharacterStyle/小" PointSize="${size}"><Content>小さく`));
+    assert.match(story, /AppliedCharacterStyle="CharacterStyle\/小"><Content>本文の中/);
+  });
+
+  it("InDesign の特色：Lab で決めた色を画面の色にし、代わりの CMYK を作る。本文の中に置いた画像は［＃画像：名前］の行に", () => {
+    const NS = 'xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"';
+    const enc = (t: string) => new TextEncoder().encode(t);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kolophon-anchored-"));
+    const file = path.join(dir, "挿絵 1.png");
+    fs.writeFileSync(file, PNG);
+    const uri = `file:${encodeURI(file.replace(/\\/g, "/"))}`;
+    const files = [
+      { name: "designmap.xml", data: enc(`<Document ${NS} Self="d"><idPkg:Graphic src="G.xml"/><idPkg:Spread src="S.xml"/><idPkg:Story src="T.xml"/></Document>`) },
+      { name: "G.xml", data: enc(`<idPkg:Graphic ${NS}><Color Self="Color/u9" Model="Spot" Space="LAB" ColorValue="54 81 -7" Name="PANTONE 213 C"/></idPkg:Graphic>`) },
+      {
+        name: "S.xml",
+        data: enc(
+          `<idPkg:Spread ${NS}><Spread Self="s"><Page Self="p" GeometricBounds="0 0 400 300" ItemTransform="1 0 0 1 0 -200"/><TextFrame Self="f" ParentStory="t"><Properties><PathGeometry><GeometryPathType><PathPointArray><PathPointType Anchor="20 -180"/><PathPointType Anchor="280 180"/></PathPointArray></GeometryPathType></PathGeometry></Properties></TextFrame></Spread></idPkg:Spread>`,
+        ),
+      },
+      {
+        name: "T.xml",
+        data: enc(
+          `<idPkg:Story ${NS}><Story Self="t"><ParagraphStyleRange><CharacterStyleRange><Content>前の文</Content><Rectangle Self="r"><Image Self="i"><Link Self="l" LinkResourceURI="${uri}"/></Image></Rectangle><Content>後の文</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`,
+        ),
+      },
+    ];
+    const r = importIdml(zipOf(files));
+    const spot = r.settings.output.spotColors[0];
+    assert.equal(spot.name, "PANTONE 213 C");
+    // 濃いピンク（赤が強く、緑が弱い）。
+    const [red, green, blue] = [1, 3, 5].map((k) => parseInt(spot.color.slice(k, k + 2), 16));
+    assert.ok(red > 200 && green < 60 && blue > 80 && blue < 170, spot.color);
+    assert.ok(spot.cmyk[1] > 70 && spot.cmyk[0] < 15, spot.cmyk.join());
+    assert.deepEqual(r.text.split("\n"), ["前の文", "［＃画像：挿絵 1］", "後の文"]);
+    assert.deepEqual(
+      r.images.map((i) => i.name),
+      ["挿絵 1"],
+    );
   });
 });

@@ -354,6 +354,18 @@ export interface PageLayout {
   glyphs: PlacedGlyph[];
   shapes: Shape[];
   paper: string;
+  /** ノンブルを置いた所（IDML でマスターページの自動のページ番号を置くのに使う）。ノンブルがなければ undefined。 */
+  nombre?: NombrePlace;
+}
+
+/** ノンブルを置いた所：y はベースライン、x は align に応じて左端・中央・右端（pt）。text は出した字（付記とまとめたときはその字も）。 */
+export interface NombrePlace {
+  x: number;
+  y: number;
+  size: number;
+  align: "left" | "center" | "right";
+  color: string;
+  text: string;
 }
 
 /** フォントの字形まで決めた描画命令。画面・PDF・画像はすべてこれを描く。 */
@@ -393,4 +405,6 @@ export interface DrawPage {
   headings?: { level: 1 | 2; text: string }[];
   items: DrawItem[];
   shapes: Shape[];
+  /** ノンブルを置いた所。 */
+  nombre?: NombrePlace;
 }

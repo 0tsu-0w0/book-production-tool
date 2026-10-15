@@ -245,6 +245,11 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads, nomb
   const bottomY = block.top + block.height + gap + size * 0.8;
   const horiz = (text: string, x: number, y: number, align: "left" | "center" | "right") =>
     page.glyphs.push({ text, kind: "horiz", x, y, size, color: d.textColor, align });
+  // ノンブル：置いた所も覚えておく（IDML の書き出しで使う）。
+  const nombreAt = (text: string, x: number, y: number, align: "left" | "center" | "right") => {
+    horiz(text, x, y, align);
+    page.nombre = { x, y, size, align, color: d.textColor, text };
+  };
   // ノンブルの位置の微調整：小口の側へ（中央なら動かさない）・下へ。
   const shiftX = (align: "left" | "center" | "right") => (align === "center" ? 0 : (leftOuter ? -1 : 1) * st.outerMm * MM);
   const shiftY = st.downMm * MM;
@@ -253,7 +258,7 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads, nomb
   if (m.headPosition === "top-outer" && m.nombrePosition === "top-outer") {
     const parts = leftOuter ? [nombre, head] : [head, nombre];
     const text = parts.filter(Boolean).join("　");
-    if (text) horiz(text, outerX + (nombre ? shiftX(outerAlign) : 0), topY + (nombre ? shiftY : 0), outerAlign);
+    if (text) (nombre ? nombreAt : horiz)(text, outerX + (nombre ? shiftX(outerAlign) : 0), topY + (nombre ? shiftY : 0), outerAlign);
     return;
   }
 
@@ -267,9 +272,9 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads, nomb
     }
   }
   if (nombre) {
-    if (m.nombrePosition === "bottom-outer") horiz(nombre, outerX + shiftX(outerAlign), bottomY + shiftY, outerAlign);
-    else if (m.nombrePosition === "bottom-center") horiz(nombre, block.left + block.width / 2, bottomY + shiftY, "center");
-    else horiz(nombre, outerX + shiftX(outerAlign), topY + shiftY, outerAlign);
+    if (m.nombrePosition === "bottom-outer") nombreAt(nombre, outerX + shiftX(outerAlign), bottomY + shiftY, outerAlign);
+    else if (m.nombrePosition === "bottom-center") nombreAt(nombre, block.left + block.width / 2, bottomY + shiftY, "center");
+    else nombreAt(nombre, outerX + shiftX(outerAlign), topY + shiftY, outerAlign);
   }
 }
 
@@ -300,6 +305,7 @@ function placeNotes(page: PageLayout, d: PageDecor, bodySize: number, nombreOnly
       // ノンブルの位置の微調整：左の隅なら左へ、右の隅なら右へ（外側へ）、下へ。
       g.x += t.corner === "bc" ? 0 : (t.corner[1] === "l" ? -1 : 1) * st.outerMm * MM;
       g.y += st.downMm * MM;
+      page.nombre = { x: g.x, y: g.y, size: g.size, align: g.align ?? "left", color: t.color, text: t.text };
     }
     page.glyphs.push(g);
   }

@@ -1,12 +1,14 @@
 import { horizontalPunctuation, leftBound, spotInks, toFormatOptions, toLayoutSpec, toParseOptions, type FontChoice, type Settings, type SpotColor } from "../document/settings.js";
 import { NOTE_STYLE, hasDecoration, type CharacterStyle, type GlyphForm, type ParagraphStyle } from "../document/styles.js";
-import { escapeXml } from "../document/xml.js";
+import { storyFingerprint, type KolophonHint } from "../document/idml-import.js";
+import { escapeXml, findAll, parseXml } from "../document/xml.js";
 import { bookPageBlocks } from "../engine/book-pages.js";
 import { formatText } from "../engine/format.js";
 import { hexToCmyk } from "../engine/ink-color.js";
 import { KENTEN_MARKS, parse } from "../engine/parse.js";
 import { texToMarkup } from "../engine/tex.js";
-import type { Atom, Block } from "../engine/types.js";
+import type { Atom, Block, NombrePlace } from "../engine/types.js";
+import type { DocImage } from "../document/document.js";
 import { expandXrefs } from "../engine/xref.js";
 
 // IDML（InDesign Markup Language）の書き出し。InDesign の受け渡し用の形式で、InDesign で開くと文書になる。
@@ -23,9 +25,25 @@ export interface IdmlFile {
   data: Uint8Array;
 }
 
+/** Kolophon で組んだページのうち、IDML に要るもの（画像の置き場所とノンブルの所）。座標はページの左上から pt。 */
+export interface IdmlPage {
+  images: { name: string; x: number; y: number; w: number; h: number; clip?: { x: number; y: number; w: number; h: number } }[];
+  nombre?: NombrePlace;
+  /** Kolophon でこのページに本文の字が入ったか（入らなかったページで画像のあるページには、テキストフレームを置かない）。 */
+  hasText?: boolean;
+}
+
 export interface IdmlOptions {
-  /** テキストフレームを置くページ数（Kolophon で組んだページ数）。 */
+  /** テキストフレームを置くページ数（Kolophon で組んだページ数。pages があればその数）。 */
   pageCount: number;
+  /** Kolophon で組んだページ（画像とノンブルを置くのに使う）。 */
+  pages?: IdmlPage[];
+  /** 文書の画像（リンクのファイルにする）。 */
+  images?: DocImage[];
+  /** リンクのファイルを書き出す場所（ファイル名 → 絶対パス）。なければ画像は置かない。 */
+  linkPath?: (fileName: string) => string;
+  /** 前付けを別の番号で数えるときの、本文の最初のページ（0始まり）。 */
+  bodyStart?: number;
   /** ラベルのあるページの番号（［＃ページ：名前］に入れる字）。 */
   pageOf?: (label: string) => string | undefined;
   /** 書体の名前（ファミリーとスタイル）。分からなければ書体を指定しない（InDesign の既定の書体）。 */
@@ -34,6 +52,8 @@ export interface IdmlOptions {
 
 export interface IdmlResult {
   files: IdmlFile[];
+  /** 書き出すリンクのファイル（画像）。 */
+  links: { path: string; data: Uint8Array }[];
   /** 書き出さなかったもの（知らせる）。 */
   skipped: string[];
 }
@@ -191,7 +211,31 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}><Properties>${props}</Properties></ParagraphStyle>`;
   };
   const paragraphStyles = settings.styles.paragraph.map(paraStyleXml);
+  const paraScale = new Map(settings.styles.paragraph.map((p) => [p.name, p.scale]));
+  const charScale = new Map(settings.styles.character.map((c) => [c.name, c.scale]));
   const characterStyles = settings.styles.character.map(charStyleXml);
+
+  // ---- 画像（リンクのファイル） ----
+  const imageByName = new Map((opts.images ?? []).map((img) => [img.name, img]));
+  const canPlace = !!(opts.pages && opts.linkPath);
+  const placeable = (name: string) => canPlace && imageByName.has(name);
+  const linkFiles = new Map<string, { path: string; data: Uint8Array; img: DocImage }>();
+  const usedFileNames = new Set<string>();
+  const linkOf = (name: string) => {
+    let link = linkFiles.get(name);
+    if (!link) {
+      const img = imageByName.get(name)!;
+      const ext = img.mime === "image/png" ? "png" : "jpg";
+      // ファイル名に使えない字は置き換え、同じ名前は番号で分ける。
+      const base = name.replace(/[\\/:*?"<>|]/g, "_").trim() || "画像";
+      let file = `${base}.${ext}`;
+      for (let k = 2; usedFileNames.has(file.toLowerCase()); k++) file = `${base}_${k}.${ext}`;
+      usedFileNames.add(file.toLowerCase());
+      link = { path: opts.linkPath!(file), data: new Uint8Array(Buffer.from(img.data, "base64")), img };
+      linkFiles.set(name, link);
+    }
+    return link;
+  };
 
   // ---- 本文（1つのストーリー） ----
   const paras: string[] = [];
@@ -213,7 +257,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       .join("");
   };
   /** 段落の字を、書式の同じ字の並び（CharacterStyleRange）にする。lineStyle は行頭の［＃名前］が文字スタイルのとき。 */
-  const runs = (atoms: Atom[], lineStyle?: string): string[] => {
+  const runs = (atoms: Atom[], lineStyle?: string, paraScale = 1): string[] => {
     const out: { key: string; open: string; text: string }[] = [];
     for (const a of atoms) {
       if (a.leader) continue;
@@ -233,7 +277,9 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
         (vertical && first?.tcy && a.pageRef === undefined && !a.note ? ' Tatechuyoko="true"' : "") +
         (a.warichu !== undefined ? ' Warichu="true"' : "") +
         (tracking !== undefined ? attr("Tracking", tracking) : "") +
-        (kern ? ` KerningMethod="$ID/Manual"${attr("KerningValue", kern)}` : "");
+        (kern ? ` KerningMethod="$ID/Manual"${attr("KerningValue", kern)}` : "") +
+        // 文字スタイルの大きさは本文に対する倍率なので、段落の大きさが本文と違えば、その字に大きさを直接付ける。
+        (style && paraScale !== 1 && charScale.get(style) !== 1 ? attr("PointSize", n(size * paraScale * (charScale.get(style) ?? 1))) : "");
       const open = `<CharacterStyleRange${attr("AppliedCharacterStyle", style ? charSelf(style) : NO_CHAR)}${local}>`;
       const text = a.note ? `注${noteNo}` : atomText(a);
       // ルビ・割注・カーニングのある字は、それだけで1つの並びにする（隣と混ざらないように）。
@@ -245,7 +291,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return out.map((r) => `${r.open}<Content>${escapeXml(r.text)}</Content>`);
   };
   const paragraph = (styleName: string, atoms: Atom[], lineStyle?: string) => {
-    const parts = runs(atoms, lineStyle);
+    const parts = runs(atoms, lineStyle, paraScale.get(styleName) ?? 1);
     const start = pendingBreak && paras.length > 0 ? attr("StartParagraph", pendingBreak) : "";
     pendingBreak = undefined;
     paras.push(`<ParagraphStyleRange${attr("AppliedParagraphStyle", paraSelf(styleName))}${start}>${parts.length > 0 ? parts.map((p) => `${p}\u0001</CharacterStyleRange>`).join("") : `<CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}">\u0001</CharacterStyleRange>`}</ParagraphStyleRange>`);
@@ -293,6 +339,8 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
           skipped.add("索引");
           break;
         case "image":
+          // ページに置ける画像は、本文には何も入れない（Kolophon で置いた所に、リンクの画像として置く）。
+          if (placeable(b.name)) break;
           skipped.add("画像（置き場所に［画像：名前］の字を入れた）");
           paragraph("本文", [...`［画像：${b.name}］`].map((ch) => ({ cells: [{ text: ch }] })));
           break;
@@ -322,7 +370,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   // ---- ページと版面 ----
   const W = spec.pageWidthMm * MM;
   const H = spec.pageHeightMm * MM;
-  const pageCount = Math.max(1, opts.pageCount);
+  const pageCount = Math.max(1, opts.pages?.length ?? opts.pageCount);
   /** 版面（ページの左上から、pt）。layout.ts の placePage と同じ求め方。 */
   const textArea = (index: number) => {
     const along = spec.columns * spec.charsPerLine * size + (spec.columns - 1) * spec.columnGapPt;
@@ -347,6 +395,22 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     if (!cur || opensSpread || cur.length >= 2) spreads.push([i]);
     else cur.push(i);
   }
+  /** ページに置く画像（文書にある画像だけ）。 */
+  const imagesOn = (i: number) => (canPlace ? (opts.pages?.[i]?.images ?? []).filter((im) => imageByName.has(im.name)) : []);
+  /** 画像が版面のほとんどを覆うページ（全面・1ページの画像）には、テキストフレームを置かない（文字が画像に重ならないように）。 */
+  const hasFrame = (i: number) => {
+    const a = textArea(i);
+    const imgs = imagesOn(i);
+    // 1ページに1枚置いた画像のページ：Kolophon では字を入れないので、フレームも置かない。
+    if (imgs.length > 0 && opts.pages?.[i]?.hasText === false) return false;
+    return !imgs.some((im) => {
+      const r = im.clip ?? im;
+      const w = Math.max(0, Math.min(a.x + a.w, r.x + r.w) - Math.max(a.x, r.x));
+      const h = Math.max(0, Math.min(a.y + a.h, r.y + r.h) - Math.max(a.y, r.y));
+      return w * h >= a.w * a.h * 0.8;
+    });
+  };
+  const framePages = Array.from({ length: pageCount }, (_, i) => i).filter(hasFrame);
   const storyId = "u1";
   const frameId = (i: number) => `tf${i + 1}`;
   const margin = (i: number) => {
@@ -354,30 +418,109 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     // ページの段は1つ（段組みはテキストフレームの段で表す）。ColumnsPositions は段の始まりと終わりの組。
     return `<MarginPreference ColumnCount="1" ColumnGutter="${n(spec.columnGapPt || 12)}" Top="${n(a.y)}" Bottom="${n(H - a.y - a.h)}" Left="${n(a.x)}" Right="${n(W - a.x - a.w)}" ColumnDirection="${vertical ? "Vertical" : "Horizontal"}" ColumnsPositions="0 ${n(vertical ? a.h : a.w)}"/>`;
   };
+  const pt = (x: number, y: number) => `<PathPointType Anchor="${n(x)} ${n(y)}" LeftDirection="${n(x)} ${n(y)}" RightDirection="${n(x)} ${n(y)}"/>`;
+  /** 四角の輪郭（左上・左下・右下・右上）。 */
+  const pathOf = (x: number, y: number, w: number, h: number) =>
+    `<PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>${pt(x, y)}${pt(x, y + h)}${pt(x + w, y + h)}${pt(x + w, y)}</PathPointArray></GeometryPathType></PathGeometry>`;
+  const wrapGap = (settings.advanced.wrapGapChars ?? 1) * size;
+  /** ページの画像：リンクの画像を入れた四角。画像の枠は、見せる範囲（clip）か画像の大きさ。本文の中の画像には回り込みを付ける。 */
+  const imageXml = (i: number, tx: number, ty: number) =>
+    imagesOn(i)
+      .map((im) => {
+        const link = linkOf(im.name);
+        const frame = im.clip ?? im;
+        const iw = Math.max(1, link.img.width);
+        const ih = Math.max(1, link.img.height);
+        const wrap = hasFrame(i)
+          ? `<TextWrapPreference Inverse="false" ApplyToMasterPageOnly="false" TextWrapSide="BothSides" TextWrapMode="BoundingBoxTextWrap"><Properties><TextWrapOffset Top="${n(wrapGap)}" Left="${n(wrapGap)}" Bottom="${n(wrapGap)}" Right="${n(wrapGap)}"/></Properties></TextWrapPreference>`
+          : "";
+        const uri = `file:${encodeURI(link.path.replace(/\\/g, "/"))}`;
+        const format = link.img.mime === "image/png" ? "$ID/Portable Network Graphics (PNG)" : "$ID/JPEG";
+        return `<Rectangle Self="${id("r")}" ContentType="GraphicType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + frame.x, ty + frame.y, frame.w, frame.h)}</Properties>${wrap}<Image Self="${id("im")}" ItemTransform="${n(im.w / iw)} 0 0 ${n(im.h / ih)} ${n(tx + im.x)} ${n(ty + im.y)}"><Properties><GraphicBounds Left="0" Top="0" Right="${iw}" Bottom="${ih}"/></Properties><Link Self="${id("lk")}" LinkResourceURI="${escapeXml(uri)}" LinkResourceFormat="${format}" StoredState="Normal" LinkClassID="35906" LinkClientID="257" LinkResourceModified="false" LinkObjectModified="false" ShowInUI="true" CanEmbed="true" CanUnembed="true" CanPackage="true" ImportPolicy="NoAutoImport" ExportPolicy="NoAutoExport"/></Image></Rectangle>`;
+      })
+      .join("");
+  // マスター：A はノンブル（自動のページ番号）あり、B はなし。Kolophon でノンブルを出したページに A を当てる。
+  const hasNombre = (i: number) => !!opts.pages?.[i]?.nombre;
   const spreadFiles = spreads.map((pages, si) => {
-    const body = pages
-      .map((i) => {
-        const tx = isLeft(i) ? -W : 0;
-        const ty = -H / 2;
-        const a = textArea(i);
-        const [x1, y1, x2, y2] = [tx + a.x, ty + a.y, tx + a.x + a.w, ty + a.y + a.h];
-        const pt = (x: number, y: number) => `<PathPointType Anchor="${n(x)} ${n(y)}" LeftDirection="${n(x)} ${n(y)}" RightDirection="${n(x)} ${n(y)}"/>`;
-        const page = `<Page Self="p${i + 1}" Name="${spec.firstPageNumber + i}" AppliedMaster="um" OverrideList="" TabOrder="" GridStartingPoint="TopOutside" UseMasterGrid="true" GeometricBounds="0 0 ${n(H)} ${n(W)}" ItemTransform="1 0 0 1 ${n(tx)} ${n(ty)}" MasterPageTransform="1 0 0 1 0 0"><Properties><PageColor type="enumeration">UseMasterColor</PageColor></Properties>${margin(i)}</Page>`;
-        const frame = `<TextFrame Self="${frameId(i)}" ParentStory="${storyId}" PreviousTextFrame="${i > 0 ? frameId(i - 1) : "n"}" NextTextFrame="${i < pageCount - 1 ? frameId(i + 1) : "n"}" ContentType="TextType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties><PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>${pt(x1, y1)}${pt(x1, y2)}${pt(x2, y2)}${pt(x2, y1)}</PathPointArray></GeometryPathType></PathGeometry></Properties><TextFramePreference TextColumnCount="${spec.columns}" TextColumnGutter="${n(spec.columnGapPt || 12)}"/></TextFrame>`;
-        return { page, frame };
-      });
+    const body = pages.map((i) => {
+      const tx = isLeft(i) ? -W : 0;
+      const ty = -H / 2;
+      const a = textArea(i);
+      const page = `<Page Self="p${i + 1}" Name="${spec.firstPageNumber + i}" AppliedMaster="${hasNombre(i) ? "um" : "un"}" OverrideList="" TabOrder="" GridStartingPoint="TopOutside" UseMasterGrid="true" GeometricBounds="0 0 ${n(H)} ${n(W)}" ItemTransform="1 0 0 1 ${n(tx)} ${n(ty)}" MasterPageTransform="1 0 0 1 0 0"><Properties><PageColor type="enumeration">UseMasterColor</PageColor></Properties>${margin(i)}</Page>`;
+      const k = framePages.indexOf(i);
+      const frame =
+        k < 0
+          ? ""
+          : `<TextFrame Self="${frameId(i)}" ParentStory="${storyId}" PreviousTextFrame="${k > 0 ? frameId(framePages[k - 1]) : "n"}" NextTextFrame="${k < framePages.length - 1 ? frameId(framePages[k + 1]) : "n"}" ContentType="TextType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + a.x, ty + a.y, a.w, a.h)}</Properties><TextFramePreference TextColumnCount="${spec.columns}" TextColumnGutter="${n(spec.columnGapPt || 12)}"/></TextFrame>`;
+      return { page, items: imageXml(i, tx, ty) + frame };
+    });
     // 綴じの位置：見開きの中で何ページ目のあとにノドがあるか。
     const binding = pages.length === 2 ? 1 : isLeft(pages[0]) ? 1 : 0;
-    const xml = `<idPkg:Spread ${NS} DOMVersion="${DOM}"><Spread Self="s${si + 1}" PageTransitionType="None" PageTransitionDirection="NotApplicable" PageTransitionDuration="Medium" ShowMasterItems="true" PageCount="${pages.length}" BindingLocation="${binding}" AllowPageShuffle="true" ItemTransform="1 0 0 1 0 0" FlattenerOverride="Default">${body.map((b) => b.page).join("")}${body.map((b) => b.frame).join("")}</Spread></idPkg:Spread>`;
+    const xml = `<idPkg:Spread ${NS} DOMVersion="${DOM}"><Spread Self="s${si + 1}" PageTransitionType="None" PageTransitionDirection="NotApplicable" PageTransitionDuration="Medium" ShowMasterItems="true" PageCount="${pages.length}" BindingLocation="${binding}" AllowPageShuffle="true" ItemTransform="1 0 0 1 0 0" FlattenerOverride="Default">${body.map((b) => b.page).join("")}${body.map((b) => b.items).join("")}</Spread></idPkg:Spread>`;
     return { name: `Spreads/Spread_s${si + 1}.xml`, data: xmlFile(xml) };
   });
-  const masterPage = (self: string, name: string, tx: number) =>
-    `<Page Self="${self}" Name="${name}" OverrideList="" TabOrder="" GridStartingPoint="TopOutside" UseMasterGrid="true" GeometricBounds="0 0 ${n(H)} ${n(W)}" ItemTransform="1 0 0 1 ${n(tx)} ${n(-H / 2)}" MasterPageTransform="1 0 0 1 0 0"><Properties><PageColor type="enumeration">UseMasterColor</PageColor></Properties>${margin(vertical ? (tx < 0 ? 0 : 1) : tx < 0 ? 1 : 0)}</Page>`;
-  const master = `<idPkg:MasterSpread ${NS} DOMVersion="${DOM}"><MasterSpread Self="um" ItemTransform="1 0 0 1 0 0" OverriddenPageItemProps="" Name="A-マスター" NamePrefix="A" BaseName="マスター" ShowMasterItems="true" PageCount="2">${masterPage("ump1", "L", -W)}${masterPage("ump2", "R", 0)}</MasterSpread></idPkg:MasterSpread>`;
+
+  // ---- マスターページのノンブル（自動のページ番号）----
+  // 左ページ・右ページそれぞれ、Kolophon でノンブルを置いた所（最初に見つかったページ）に、小さな横組みのテキストフレームを置く。
+  const nombreStories: { id: string; xml: string }[] = [];
+  const sample = (left: boolean) => {
+    for (let i = 0; i < pageCount; i++) if (isLeft(i) === left && opts.pages?.[i]?.nombre) return opts.pages[i].nombre;
+    return undefined;
+  };
+  const nombreFrame = (place: NombrePlace | undefined, tx: number, ty: number) => {
+    if (!place) return "";
+    const s = place.size;
+    const w = Math.max(20 * MM, s * 10);
+    const x = place.align === "left" ? place.x : place.align === "right" ? place.x - w : place.x - w / 2;
+    // 横組みの1行目のベースラインは、だいたい字の大きさの 0.88 下（InDesign の既定の「仮想ボディの上」）。
+    const y = place.y - s * 0.88;
+    const sid = id("un");
+    const just = place.align === "left" ? "LeftAlign" : place.align === "right" ? "RightAlign" : "CenterAlign";
+    nombreStories.push({
+      id: sid,
+      xml: `<idPkg:Story ${NS} DOMVersion="${DOM}"><Story Self="${sid}" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" FrameType="TextFrameType" StoryOrientation="Horizontal" StoryDirection="LeftToRightDirection"/><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="${just}"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}" PointSize="${n(s)}"${attr("FillColor", swatchOf(place.color))}><Content><?ACE 18?></Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`,
+    });
+    return `<TextFrame Self="${id("nf")}" ParentStory="${sid}" PreviousTextFrame="n" NextTextFrame="n" ContentType="TextType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + x, ty + y, w, s * 1.5)}</Properties><TextFramePreference TextColumnCount="1"/></TextFrame>`;
+  };
+  // マスターのページは、読む順（右綴じは右ページから）に並べる。位置は左ページがノドの左。
+  const masterPage = (self: string, name: string, tx: number, sideIndex: number) =>
+    `<Page Self="${self}" Name="${name}" OverrideList="" TabOrder="" GridStartingPoint="TopOutside" UseMasterGrid="true" GeometricBounds="0 0 ${n(H)} ${n(W)}" ItemTransform="1 0 0 1 ${n(tx)} ${n(-H / 2)}" MasterPageTransform="1 0 0 1 0 0"><Properties><PageColor type="enumeration">UseMasterColor</PageColor></Properties>${margin(sideIndex)}</Page>`;
+  // 左ページになるページ番号の例（版面の位置を決めるのに使う）：右綴じは奇数、左綴じは偶数。
+  const leftIndex = isLeft(0) ? 0 : 1;
+  const rightIndex = 1 - leftIndex;
+  const masterSpread = (self: string, prefix: string, base: string, withNombre: boolean) => {
+    const left = masterPage(`${self}p1`, "L", -W, leftIndex);
+    const right = masterPage(`${self}p2`, "R", 0, rightIndex);
+    const pagesXml = vertical ? right + left : left + right;
+    const items = withNombre ? nombreFrame(sample(true), -W, -H / 2) + nombreFrame(sample(false), 0, -H / 2) : "";
+    return `<idPkg:MasterSpread ${NS} DOMVersion="${DOM}"><MasterSpread Self="${self}" ItemTransform="1 0 0 1 0 0" OverriddenPageItemProps="" Name="${prefix}-${base}" NamePrefix="${prefix}" BaseName="${base}" ShowMasterItems="true" PageCount="2">${pagesXml}${items}</MasterSpread></idPkg:MasterSpread>`;
+  };
+  const masterA = masterSpread("um", "A", "ノンブルあり", true);
+  const masterB = masterSpread("un", "B", "ノンブルなし", false);
+
+  // ---- セクション（ページ番号の付け方）----
+  const numerals = settings.nombreStyle.numerals === "kanji" ? "Kanji" : settings.nombreStyle.numerals === "fullwidth" ? "FullWidthArabic" : "Arabic";
+  const front = settings.nombreStyle.front;
+  const bodyStart = opts.bodyStart !== undefined && opts.bodyStart > 0 && opts.bodyStart < pageCount && front !== "continue" ? opts.bodyStart : 0;
+  const sections =
+    bodyStart > 0
+      ? `<Section Self="sec1" Length="${bodyStart}" Name="" ContinueNumbering="false" IncludeSectionPrefix="false" PageNumberStyle="${front === "roman-upper" ? "UpperRoman" : "LowerRoman"}" PageStart="p1" SectionPrefix="" PageNumberStart="1"/><Section Self="sec2" Length="${pageCount - bodyStart}" Name="" ContinueNumbering="false" IncludeSectionPrefix="false" PageNumberStyle="${numerals}" PageStart="p${bodyStart + 1}" SectionPrefix="" PageNumberStart="${spec.firstPageNumber}"/>`
+      : `<Section Self="sec1" Length="${pageCount}" Name="" ContinueNumbering="false" IncludeSectionPrefix="false" PageNumberStyle="${numerals}" PageStart="p1" SectionPrefix="" PageNumberStart="${spec.firstPageNumber}"/>`;
 
   // ---- まとめる ----
   const orientation = `<StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" FrameType="TextFrameType" StoryOrientation="${vertical ? "Vertical" : "Horizontal"}" StoryDirection="LeftToRightDirection"/>`;
   const story = `<idPkg:Story ${NS} DOMVersion="${DOM}"><Story Self="${storyId}" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n">${orientation}<InCopyExportOption IncludeGraphicProxies="true" IncludeAllResources="false"/>\n${fixedBody}\n</Story></idPkg:Story>`;
+  // Kolophon で読み込み直したときに元の原稿に戻すための控え（InDesign は META-INF の中の知らないファイルを使わない）。
+  const hint: KolophonHint = {
+    app: "Kolophon",
+    version: 1,
+    fingerprint: storyFingerprint(findAll(parseXml(story), "Story")[0]),
+    text,
+    settings,
+    spots: Object.fromEntries(spots.map((sp) => [sp.name, sp.color.toLowerCase()])),
+    links: Object.fromEntries([...linkFiles.values()].map((l) => [l.path.split(/[\/]/).pop()!, l.img.name])),
+    notes: noteNo > 0,
+  };
   const bleed = n(settings.advanced.bleedMm * MM);
   const preferences = `<idPkg:Preferences ${NS} DOMVersion="${DOM}"><DocumentPreference PageHeight="${n(H)}" PageWidth="${n(W)}" PagesPerDocument="${pageCount}" FacingPages="true" DocumentBleedTopOffset="${bleed}" DocumentBleedBottomOffset="${bleed}" DocumentBleedInsideOrLeftOffset="${bleed}" DocumentBleedOutsideOrRightOffset="${bleed}" DocumentBleedUniformSize="true" PageBinding="${vertical ? "RightToLeft" : "LeftToRight"}" ColumnDirection="${vertical ? "Vertical" : "Horizontal"}" AllowPageShuffle="true" Intent="PrintIntent"/>${margin(0)}${orientation}</idPkg:Preferences>`;
   const processInks = [
@@ -399,7 +542,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   const tags = `<idPkg:Tags ${NS} DOMVersion="${DOM}"><XMLTag Self="XMLTag/Root" Name="Root"><Properties><TagColor type="enumeration">LightBlue</TagColor></Properties></XMLTag></idPkg:Tags>`;
   const backing = `<idPkg:BackingStory ${NS} DOMVersion="${DOM}"><XmlStory Self="ub" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}"/></ParagraphStyleRange></XmlStory></idPkg:BackingStory>`;
   const designmap = `<?aid style="50" type="document" readerVersion="6.0" featureSet="257" product="${DOM}(0)" ?>
-<Document ${NS} DOMVersion="${DOM}" Self="d" StoryList="${storyId} ub" ZeroPoint="0 0" ActiveLayer="uL" CMYKProfile="Japan Color 2001 Coated" RGBProfile="sRGB IEC61966-2.1" SolidColorIntent="UseColorSettings" AfterBlendingIntent="UseColorSettings" DefaultImageIntent="UseColorSettings" RGBPolicy="PreserveEmbeddedProfiles" CMYKPolicy="CombinationOfPreserveAndSafeCmyk" AccurateLABSpots="false"><idPkg:Graphic src="Resources/Graphic.xml"/><idPkg:Fonts src="Resources/Fonts.xml"/><idPkg:Styles src="Resources/Styles.xml"/><idPkg:Preferences src="Resources/Preferences.xml"/><idPkg:Tags src="XML/Tags.xml"/><Layer Self="uL" Name="レイヤー 1" Visible="true" Locked="false" IgnoreWrap="false" ShowGuides="true" LockGuides="false" UI="true" Expendable="true" Printable="true"><Properties><LayerColor type="enumeration">LightBlue</LayerColor></Properties></Layer><idPkg:MasterSpread src="MasterSpreads/MasterSpread_um.xml"/>${spreadFiles.map((f) => `<idPkg:Spread src="${f.name}"/>`).join("")}<Section Self="sec1" Length="${pageCount}" Name="" ContinueNumbering="false" IncludeSectionPrefix="false" PageNumberStyle="Arabic" PageStart="p1" SectionPrefix="" PageNumberStart="${spec.firstPageNumber}"/><idPkg:BackingStory src="XML/BackingStory.xml"/><idPkg:Story src="Stories/Story_${storyId}.xml"/></Document>`;
+<Document ${NS} DOMVersion="${DOM}" Self="d" StoryList="${[storyId, ...nombreStories.map((st) => st.id), "ub"].join(" ")}" ZeroPoint="0 0" ActiveLayer="uL" CMYKProfile="Japan Color 2001 Coated" RGBProfile="sRGB IEC61966-2.1" SolidColorIntent="UseColorSettings" AfterBlendingIntent="UseColorSettings" DefaultImageIntent="UseColorSettings" RGBPolicy="PreserveEmbeddedProfiles" CMYKPolicy="CombinationOfPreserveAndSafeCmyk" AccurateLABSpots="false"><idPkg:Graphic src="Resources/Graphic.xml"/><idPkg:Fonts src="Resources/Fonts.xml"/><idPkg:Styles src="Resources/Styles.xml"/><idPkg:Preferences src="Resources/Preferences.xml"/><idPkg:Tags src="XML/Tags.xml"/><Layer Self="uL" Name="レイヤー 1" Visible="true" Locked="false" IgnoreWrap="false" ShowGuides="true" LockGuides="false" UI="true" Expendable="true" Printable="true"><Properties><LayerColor type="enumeration">LightBlue</LayerColor></Properties></Layer><idPkg:MasterSpread src="MasterSpreads/MasterSpread_um.xml"/><idPkg:MasterSpread src="MasterSpreads/MasterSpread_un.xml"/>${spreadFiles.map((f) => `<idPkg:Spread src="${f.name}"/>`).join("")}${sections}<idPkg:BackingStory src="XML/BackingStory.xml"/><idPkg:Story src="Stories/Story_${storyId}.xml"/>${nombreStories.map((st) => `<idPkg:Story src="Stories/Story_${st.id}.xml"/>`).join("")}</Document>`;
   return {
     files: [
       { name: "mimetype", data: new TextEncoder().encode("application/vnd.adobe.indesign-idml-package") },
@@ -407,6 +550,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
         name: "META-INF/container.xml",
         data: xmlFile(`<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>`),
       },
+      { name: "META-INF/kolophon.json", data: new TextEncoder().encode(JSON.stringify(hint)) },
       { name: "designmap.xml", data: xmlFile(designmap) },
       { name: "Resources/Graphic.xml", data: xmlFile(graphic) },
       { name: "Resources/Fonts.xml", data: xmlFile(fonts) },
@@ -414,10 +558,13 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       { name: "Resources/Preferences.xml", data: xmlFile(preferences) },
       { name: "XML/Tags.xml", data: xmlFile(tags) },
       { name: "XML/BackingStory.xml", data: xmlFile(backing) },
-      { name: "MasterSpreads/MasterSpread_um.xml", data: xmlFile(master) },
+      { name: "MasterSpreads/MasterSpread_um.xml", data: xmlFile(masterA) },
+      { name: "MasterSpreads/MasterSpread_un.xml", data: xmlFile(masterB) },
       ...spreadFiles,
       { name: `Stories/Story_${storyId}.xml`, data: xmlFile(story) },
+      ...nombreStories.map((st) => ({ name: `Stories/Story_${st.id}.xml`, data: xmlFile(st.xml) })),
     ],
+    links: [...linkFiles.values()].map((l) => ({ path: l.path, data: l.data })),
     skipped: [...skipped],
   };
 }

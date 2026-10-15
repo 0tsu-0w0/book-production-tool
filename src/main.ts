@@ -131,11 +131,15 @@ function openIdml(file: string): Opened {
     if (name && !f) missing.add(name);
     return f;
   };
-  if (r.fonts.body) r.settings.font = pick(r.fonts.body);
+  // 書体：PC で見つかればその書体に。元の原稿に戻したときは、見つからなければ元の書体のまま。
+  if (r.fonts.body) {
+    const f = pick(r.fonts.body);
+    if (f || !r.restored) r.settings.font = f;
+  }
   for (const p of r.settings.styles.paragraph) if (r.fonts.paragraph[p.name] && r.fonts.paragraph[p.name] !== r.fonts.body) p.font = pick(r.fonts.paragraph[p.name]);
   for (const c of r.settings.styles.character) if (r.fonts.character[c.name]) c.font = pick(r.fonts.character[c.name]);
   const notes = [...r.notes, ...(missing.size > 0 ? [`PC にない書体（${[...missing].join("・")}。本文の書体で組みます）`] : [])];
-  return { text: r.text, settings: r.settings, images: [], filePath: null, imported: { from: path.basename(file), notes } };
+  return { text: r.text, settings: r.settings, images: r.images, filePath: null, imported: { from: path.basename(file), notes } };
 }
 
 type Opened = { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string }; imported?: { from: string; notes: string[] } };
@@ -866,7 +870,7 @@ ipcMain.handle("epub:export", (_e, text: string, settings: Settings, baseName: s
  * IDML（InDesign の受け渡し用の形式）を書き出す。ページ数とページ番号の参照の番号は、Kolophon で組んだ結果から取る。
  * 書体は、PC の書体の一覧からファミリー名とスタイルを引いて入れる。
  */
-ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseName: string) => {
+ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = []) => {
   if (snapshotDir && !autoIdml) return undefined;
   const { canceled, filePath } = autoIdml
     ? { canceled: false, filePath: path.resolve(autoIdml) }
@@ -879,8 +883,21 @@ ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseN
     const labels = result.labelPages();
     const list = fonts.list();
     const entryOf = (f: FontChoice | null) => (f ? list.find((e) => e.postscriptName === f.postscriptName && e.path === f.path) ?? list.find((e) => e.postscriptName === f.postscriptName) : list[0]);
-    const { files, skipped } = buildIdml(text, settings, {
+    // 画像のリンクのファイルは、IDML の隣の「名前 Links」フォルダに書く。
+    const linkDir = path.join(path.dirname(filePath), `${path.basename(filePath, path.extname(filePath))} Links`);
+    // Kolophon で組んだページの、画像の置き場所とノンブルの所。
+    const pages = Array.from({ length: result.pageCount }, (_, i) => {
+      const p = result.page(i);
+      return { images: p.shapes.flatMap((s) => (s.kind === "image" ? [s] : [])), nombre: p.nombre, hasText: result.lines(i).some((l) => l.text.trim() !== "") };
+    });
+    // 前付けを別に数えるときの本文の始まり：ページの名前が数字になる最初のページ。
+    const bodyStart = result.pageLabels.findIndex((l) => /^\d+$/.test(l));
+    const { files, skipped, links } = buildIdml(text, settings, {
       pageCount: result.pageCount,
+      pages,
+      images,
+      linkPath: (file) => path.join(linkDir, file),
+      bodyStart: bodyStart > 0 ? bodyStart : undefined,
       // ページの名前（001・i など）から、紙面に出す番号の字にする。
       pageOf: (label) => {
         const i = labels.get(label);
@@ -894,7 +911,11 @@ ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseN
     zip = new ZipWriter(filePath);
     for (const f of files) zip.add(f.name, f.data);
     zip.close();
-    return { path: filePath, pages: result.pageCount, skipped };
+    if (links.length > 0) {
+      fs.mkdirSync(linkDir, { recursive: true });
+      for (const l of links) fs.writeFileSync(l.path, l.data);
+    }
+    return { path: filePath, pages: result.pageCount, skipped, links: links.length, linkDir: links.length > 0 ? linkDir : undefined };
   } catch (e) {
     zip?.abort();
     return { error: `IDML を書き出せませんでした：${e instanceof Error ? e.message : String(e)}` };

@@ -133,6 +133,7 @@ export function resolvePage(page: PageLayout, faces: Face[], textColor: string):
     paper: page.paper,
     ...(page.labels ? { labels: page.labels } : {}),
     ...(page.headings.length > 0 ? { headings: page.headings } : {}),
+    ...(page.nombre ? { nombre: page.nombre } : {}),
     // 色の決まっていない線（傍線）は文字の色にする。
     shapes: [
       ...page.shapes.map((s) => (s.kind === "line" && !s.color ? { ...s, color: textColor } : s)),

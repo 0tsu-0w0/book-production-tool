@@ -62,7 +62,7 @@ type Opened =
   | { text: string; settings?: Settings; images?: DocImage[]; filePath: string | null; tex?: { title?: string; author?: string }; imported?: { from: string; notes: string[] } }
   | { error: string };
 
-type IdmlResult = { path: string; pages: number; skipped: string[] } | { error: string } | undefined;
+type IdmlResult = { path: string; pages: number; skipped: string[]; links?: number; linkDir?: string } | { error: string } | undefined;
 
 interface Api extends TemplateApi {
   init(): Promise<{
@@ -93,7 +93,7 @@ interface Api extends TemplateApi {
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
   exportEpub(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<EpubResult>;
-  exportIdml(text: string, settings: Settings, baseName: string): Promise<IdmlResult>;
+  exportIdml(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<IdmlResult>;
   exportPackage(
     text: string,
     settings: Settings,
@@ -776,7 +776,7 @@ function exportPackage() {
 function exportIdml() {
   return withBusy(async () => {
     setStatus("IDML を書き出しています…");
-    const r = await api.exportIdml(source.value, settings, baseName());
+    const r = await api.exportIdml(source.value, settings, baseName(), imageManager.images);
     if (!r) return setStatus("書き出しを取り消しました。");
     if ("error" in r) {
       setStatus(r.error);
@@ -784,7 +784,8 @@ function exportIdml() {
       return;
     }
     const skipped = r.skipped.length > 0 ? `。入れなかったもの：${r.skipped.join("・")}` : "";
-    setStatus(`IDML を書き出しました（${r.pages}ページ分のテキストフレーム）：${r.path}${skipped}`);
+    const links = r.links ? `。画像${r.links}枚を「${r.linkDir}」に書き出し、リンクしました` : "";
+    setStatus(`IDML を書き出しました（${r.pages}ページ）：${r.path}${links}${skipped}`);
   });
 }
 
