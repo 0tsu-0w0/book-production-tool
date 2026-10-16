@@ -152,6 +152,7 @@ export class Preview {
   show() {
     const seq = ++this.showSeq;
     this.observer?.disconnect();
+    this.gridSeq++;
     this.stage.classList.toggle("grid", this.mode === "grid");
     if (this.pageCount === 0) {
       this.stage.replaceChildren();
@@ -250,63 +251,81 @@ export class Preview {
     this.label.textContent = `${shown.join("・")} / ${this.pageCount}`;
   }
 
+  /** 一覧の図（ページの番号で引く）。組み直しても同じページ数なら使い回し、古い縮小図を出したまま描き直す。 */
+  private gridFigures: HTMLElement[] = [];
+  private gridSeq = 0;
+  private gridSize = "";
+
   private showGrid() {
     // 見えているページだけを取り寄せて描く。何百ページあっても最初の表示を速くするため。
+    // 描くのは1ページずつ、合間に入力やスクロールを通す（まとめて描くと画面が止まる）。
     const thumbScale = 150 / this.pageSize.width;
-    const figures = new Map<number, HTMLElement>();
-    let pending = new Set<number>();
-    let scheduled = false;
-    const flush = async () => {
-      scheduled = false;
-      const batch = [...pending];
-      pending = new Set();
-      if (!(await this.ensure(batch))) return;
-      for (const i of batch) {
-        const page = this.cache.get(i);
-        if (page) figures.get(i)?.querySelector("canvas")?.replaceWith(this.makeCanvas(page, thumbScale));
+    const seq = ++this.gridSeq;
+    const pending = new Set<number>();
+    let running = false;
+    const pump = async () => {
+      running = true;
+      while (pending.size > 0 && seq === this.gridSeq) {
+        // 近い順（番号の小さい順）に、少しずつ取り寄せる。
+        const batch = [...pending].sort((x, y) => x - y).slice(0, 4);
+        if (!(await this.ensure(batch)) || seq !== this.gridSeq) break;
+        for (const i of batch) {
+          pending.delete(i);
+          const page = this.cache.get(i);
+          const fig = this.gridFigures[i];
+          if (page && fig) fig.querySelector("canvas")?.replaceWith(this.makeCanvas(page, thumbScale));
+          await new Promise((r) => setTimeout(r, 0));
+          if (seq !== this.gridSeq) break;
+        }
       }
+      running = false;
     };
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
           if (!e.isIntersecting) continue;
-          const index = Number((e.target as HTMLElement).dataset.index);
-          pending.add(index);
+          pending.add(Number((e.target as HTMLElement).dataset.index));
           this.observer!.unobserve(e.target);
         }
-        if (pending.size > 0 && !scheduled) {
-          scheduled = true;
-          queueMicrotask(() => void flush());
-        }
+        if (pending.size > 0 && !running) void pump();
       },
       { root: this.stage, rootMargin: "300px" },
     );
 
-    const items: HTMLElement[] = [];
-    for (let index = 0; index < this.pageCount; index++) {
-      const fig = document.createElement("figure");
-      fig.dataset.index = String(index);
-      fig.tabIndex = 0;
-      const placeholder = document.createElement("canvas");
-      placeholder.width = 1;
-      placeholder.height = 1;
-      placeholder.style.aspectRatio = `${this.pageSize.width} / ${this.pageSize.height}`;
-      const caption = document.createElement("figcaption");
-      caption.textContent = String(this.firstNumber + index);
-      fig.append(placeholder, caption);
-      const open = () => {
-        this.current = index;
-        this.stage.dispatchEvent(new CustomEvent("modechange", { detail: "single" }));
-      };
-      fig.addEventListener("click", open);
-      fig.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" || ev.key === " ") open();
-      });
-      figures.set(index, fig);
-      items.push(fig);
+    const sizeKey = `${this.pageSize.width}x${this.pageSize.height}`;
+    if (this.gridFigures.length === this.pageCount && this.gridSize === sizeKey) {
+      if (this.stage.firstChild !== this.gridFigures[0]) this.stage.replaceChildren(...this.gridFigures);
+    } else {
+      this.gridFigures = [];
+      this.gridSize = sizeKey;
+      for (let index = 0; index < this.pageCount; index++) {
+        const fig = document.createElement("figure");
+        fig.dataset.index = String(index);
+        fig.tabIndex = 0;
+        const placeholder = document.createElement("canvas");
+        placeholder.width = 1;
+        placeholder.height = 1;
+        placeholder.style.aspectRatio = `${this.pageSize.width} / ${this.pageSize.height}`;
+        const caption = document.createElement("figcaption");
+        fig.append(placeholder, caption);
+        const open = () => {
+          this.current = index;
+          this.stage.dispatchEvent(new CustomEvent("modechange", { detail: "single" }));
+        };
+        fig.addEventListener("click", open);
+        fig.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") open();
+        });
+        this.gridFigures.push(fig);
+      }
+      this.stage.replaceChildren(...this.gridFigures);
     }
-    this.stage.replaceChildren(...items);
-    for (const fig of items) this.observer.observe(fig);
+    this.gridFigures.forEach((fig, index) => {
+      const caption = fig.querySelector("figcaption")!;
+      const n = String(this.firstNumber + index);
+      if (caption.textContent !== n) caption.textContent = n;
+      this.observer!.observe(fig);
+    });
     this.label.textContent = `全${this.pageCount}ページ`;
   }
 }

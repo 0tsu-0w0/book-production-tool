@@ -367,6 +367,7 @@ function runTypeset(): Promise<void> {
   return typesetQueued;
 }
 
+let lastCoverKey = "";
 async function typesetOnce() {
   const seq = ++typesetSeq;
   const started = performance.now();
@@ -386,7 +387,12 @@ async function typesetOnce() {
   updatePager();
   panel.setPageCount(r.pageCount);
   panel.setImageNames(imageManager.images.map((i) => i.name));
-  coverPreview.update();
+  // 表紙は設定とページ数（背幅）だけで決まる。本文を打つたびには組み直さない。
+  const coverKey = `${JSON.stringify(settings)}|${r.pageCount}`;
+  if (coverKey !== lastCoverKey) {
+    lastCoverKey = coverKey;
+    coverPreview.update();
+  }
   // 紙面で入力しているときは、カーソルのあるページを見せる。
   if (caret && r.caretPage !== undefined && r.caretPage >= 0) preview.jumpTo(r.caretPage);
   preview.setDocument(r.version, r.pageCount, drawFonts(r), settings.nombreStart, r.pages);

@@ -316,30 +316,30 @@ dialog {
   opacity: 1;
   transform: none;
   transition:
-    opacity 200ms var(--ease-out),
-    transform 200ms var(--ease-out),
-    overlay 200ms var(--ease-out) allow-discrete,
-    display 200ms var(--ease-out) allow-discrete;
+    opacity 150ms var(--ease-out),
+    transform 150ms var(--ease-out),
+    overlay 150ms var(--ease-out) allow-discrete,
+    display 150ms var(--ease-out) allow-discrete;
 }
 dialog:not([open]) {
   opacity: 0;
-  transform: scale(0.96);
+  transform: scale(0.98);
   /* 閉じるのは開くより速く。 */
-  transition-duration: 150ms;
+  transition-duration: 100ms;
 }
 @starting-style {
-  dialog[open] { opacity: 0; transform: scale(0.96); }
+  dialog[open] { opacity: 0; transform: scale(0.98); }
 }
 /* 右上に出る浮いたダイアログ（校正の補助など）は、その角から。 */
 dialog.floating { transform-origin: top right; }
 dialog::backdrop {
   opacity: 1;
   transition:
-    opacity 200ms var(--ease-out),
-    overlay 200ms var(--ease-out) allow-discrete,
-    display 200ms var(--ease-out) allow-discrete;
+    opacity 150ms var(--ease-out),
+    overlay 150ms var(--ease-out) allow-discrete,
+    display 150ms var(--ease-out) allow-discrete;
 }
-dialog:not([open])::backdrop { opacity: 0; transition-duration: 150ms; }
+dialog:not([open])::backdrop { opacity: 0; transition-duration: 100ms; }
 @starting-style {
   dialog[open]::backdrop { opacity: 0; }
 }
@@ -350,18 +350,18 @@ dialog:not([open])::backdrop { opacity: 0; transition-duration: 150ms; }
   transform: none;
   transform-origin: bottom left;
   transition:
-    opacity 180ms var(--ease-out),
-    transform 180ms var(--ease-out),
-    display 180ms var(--ease-out) allow-discrete;
+    opacity 140ms var(--ease-out),
+    transform 140ms var(--ease-out),
+    display 140ms var(--ease-out) allow-discrete;
 }
 .separations-panel { transform-origin: bottom right; }
 .glyph-panel[hidden] {
   opacity: 0;
-  transform: translateY(6px) scale(0.97);
-  transition-duration: 130ms;
+  transform: translateY(4px) scale(0.98);
+  transition-duration: 100ms;
 }
 @starting-style {
-  .glyph-panel:not([hidden]) { opacity: 0; transform: translateY(6px) scale(0.97); }
+  .glyph-panel:not([hidden]) { opacity: 0; transform: translateY(4px) scale(0.98); }
 }
 
 /* 動きを減らす設定：位置と大きさは動かさず、透明の出入りだけ短く。 */
