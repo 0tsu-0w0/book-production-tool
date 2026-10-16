@@ -173,7 +173,8 @@ describe("相互参照", () => {
     assert.equal(withoutPage("「〈見出し〉」の〈ページ〉ページ"), "「〈見出し〉」");
     const out = buildEpub(doc, settings(), []);
     const html = out.filter((f) => f.name.endsWith(".xhtml")).map((f) => new TextDecoder().decode(f.data)).join("");
-    assert.match(html, /「傘の話」・/);
+    // 参照の字は、参照先へのリンク（1つにまとめる）。
+    assert.match(html, /<a class="ref" href="[^"]*#lb-[^"]*">「傘の話」<\/a>・/);
     assert.ok(!html.includes("〈"));
   });
 });

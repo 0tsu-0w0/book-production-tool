@@ -888,7 +888,7 @@ ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseN
     // Kolophon で組んだページの、画像の置き場所とノンブルの所。
     const pages = Array.from({ length: result.pageCount }, (_, i) => {
       const p = result.page(i);
-      return { images: p.shapes.flatMap((s) => (s.kind === "image" ? [s] : [])), nombre: p.nombre, hasText: result.lines(i).some((l) => l.text.trim() !== "") };
+      return { images: p.shapes.flatMap((s) => (s.kind === "image" ? [s] : [])), nombre: p.nombre, marks: p.marks, opening: p.opening, hasText: result.lines(i).some((l) => l.text.trim() !== "") };
     });
     // 前付けを別に数えるときの本文の始まり：ページの名前が数字になる最初のページ。
     const bodyStart = result.pageLabels.findIndex((l) => /^\d+$/.test(l));

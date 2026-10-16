@@ -8,7 +8,7 @@
 //   数式     $…$・\(…\) → ［＃数式］…［＃／数式］、\[…\]・$$…$$・equation などの環境 → ［＃別行数式］…［＃／別行数式］
 //   図       \begin{figure}…\includegraphics…\caption{…}…\end{figure} → ［＃画像：…　キャプション：…］
 //   マクロ   \newcommand・\renewcommand・\def（引数・省略時の値も）を展開してから置き換える
-//   参照     \label{…} はラベル、\ref{…} はその見出しの題（「…」）、\pageref{…} はそのページ番号
+//   参照     \label{…} はラベル、\ref{…} はその見出しの題（「…」。相互参照の［＃見出し：…］）、\pageref{…} はそのページ番号
 // 段落は LaTeX と同じく、空行で区切る（続く行は1つの段落につなぐ）。% から行末はコメント。
 // 知らない命令は、引数の中身だけを残して命令を消す。
 
@@ -280,9 +280,9 @@ export function convertInline(src: string): string {
       continue;
     }
     if (base === "ref" || base === "autoref" || base === "nameref") {
-      const key = r.group() ?? "";
-      const title = labels.get(key.trim());
-      out += title === undefined ? "??" : `「${title}」`;
+      // 相互参照：ラベルの所の見出しの題を、組むときに入れる（題を変えても参照が付いてくる。閲覧用 PDF ではリンク）。
+      const key = (r.group() ?? "").trim().replace(/[［］｜|]/g, "");
+      out += key ? `「［＃見出し：${key}］」` : "??";
       continue;
     }
     if (WRAP1[base]) {

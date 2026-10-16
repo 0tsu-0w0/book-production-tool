@@ -218,7 +218,7 @@ function placeRubySpacing(atom: Atom, prev: Atom | undefined, next: Atom | undef
   if (excess <= 0) return;
   const limit = rubyScale; // ルビ文字1字分
   // 肩付きは親文字の頭から始めるので、前には掛けず、後ろにだけ掛ける。
-  const shoulder = t.rubyAlign === "shoulder";
+  const shoulder = (atom.cells[0].rubyAlign ?? t.rubyAlign) === "shoulder";
   const before = !shoulder && t.rubyOverhang && canHangOn(prev) ? Math.min(limit, excess / 2) : 0;
   const after = t.rubyOverhang && canHangOn(next) ? Math.min(limit, shoulder ? excess : excess / 2) : 0;
   const remaining = excess - before - after;
@@ -233,16 +233,25 @@ function placeRubySpacing(atom: Atom, prev: Atom | undefined, next: Atom | undef
 
 /**
  * 字間（トラッキング・カーニング）：字のあとに足す（負なら詰める）。量は字の大きさに対する割合なので、長体・平体では縮めない。
- * 長体・平体のあとで呼ぶ。横倒しの欧文（語で1マス）・数式・割注には当てない。詰めすぎても字の長さの1割は残す。
+ * 長体・平体のあとで呼ぶ。横倒しの欧文（語で1マス）は、語の字の数だけ足す（字形は描くときに1字ずつ離す）。
+ * 数式・割注には当てない。詰めすぎても字の長さの1割は残す。
  */
 export function applyLetterSpacing(blocks: Block[]): void {
   for (const block of textBlocks(blocks)) {
     for (const atom of block.atoms) {
       if (atom.warichu !== undefined) continue;
       for (const cell of atom.cells) {
-        if (!cell.letterSpace || cell.rotate || cell.math) continue;
+        if (!cell.letterSpace || cell.math) continue;
         const scale = cell.scale ?? 1;
-        cell.advance = Math.max(0.1 * scale, (cell.advance ?? 1) + cell.letterSpace * scale);
+        const add = cell.letterSpace * scale;
+        if (cell.rotate) {
+          // 横倒しの語：字の数だけ足す。ハイフネーションで分けたときの前半・後半の長さも合わせる。
+          const chars = [...cell.text].length;
+          cell.advance = Math.max(0.1 * scale, (cell.advance ?? 1) + add * chars);
+          if (cell.hyph) cell.hyph = cell.hyph.map((h) => ({ at: h.at, width: h.width + add * (h.at + 1), rest: h.rest + add * (chars - h.at) }));
+          continue;
+        }
+        cell.advance = Math.max(0.1 * scale, (cell.advance ?? 1) + add);
       }
     }
   }

@@ -18,6 +18,11 @@ export interface Cell {
   letterSpace?: number;
   /** 文字スタイルが当たっている（原稿・正規表現スタイル・先頭文字スタイル・行頭の［＃名前］）。行スタイルはこの字に当てない。 */
   charStyled?: boolean;
+  /** 行スタイルで大きさ・字間を変える前の値（行スタイルを当てているときだけ。外すときに戻す）。 */
+  lineOrig?: { advance?: number; scale?: number; compress?: number; shift?: number; endAki?: number };
+  /** スタイルで決めたルビの揃え・側（なければ文書の設定）。ルビの親文字の最初のマスの値を使う。 */
+  rubyAlign?: "121" | "center" | "shoulder";
+  rubySide?: "right" | "left";
   tcy?: boolean;
   /** 半角英数字を横倒しで組む。advance はそのときの長さ（em）。 */
   rotate?: boolean;
@@ -115,13 +120,17 @@ export interface ParaFormat {
   lineStyle?: LineStyleFormat;
 }
 
-/** 行スタイルで字に当てるもの（書体は番号。-1 なら変えない）。 */
+/** 行スタイルで字に当てるもの（書体は番号。-1 なら変えない）。scale・tracking は字の長さを変える（行の分け方が変わる）。 */
 export interface LineStyleFormat {
   lines: number;
   font: number;
   color?: string;
   bold: boolean;
   features?: string;
+  /** 大きさの倍率（1 なら変えない）。 */
+  scale?: number;
+  /** 字間（全角1字の 1/1000）。 */
+  tracking?: number;
 }
 
 export type Block =
@@ -285,6 +294,8 @@ export interface PlacedGlyph {
   /** 長体・平体（字形の横・縦の伸縮率）。 */
   sx?: number;
   sy?: number;
+  /** rot・hcell（横倒し・横組みの欧文の語）：字と字の間に足す長さ（字の大きさに対する割合。字間・カーニング）。 */
+  spacing?: number;
   /** 原稿の位置：[行（0始まり）, 行の中の位置]。 */
   src?: [number, number];
   x: number;
@@ -356,6 +367,29 @@ export interface PageLayout {
   paper: string;
   /** ノンブルを置いた所（IDML でマスターページの自動のページ番号を置くのに使う）。ノンブルがなければ undefined。 */
   nombre?: NombrePlace;
+  /** 余白に置いた柱・ノンブル・付記。 */
+  marks?: PageMark[];
+  /** 章の始まりのページの柱・ノンブル（マスターの「章の始まり」の決め方）で飾ったか。 */
+  opening?: boolean;
+}
+
+/** 柱・ノンブル・付記の中身の1つ：ノンブル、柱（書名・章の題・節の題）、決まった字（付記）。 */
+export type MarkPart = { kind: "nombre" } | { kind: "head"; source: "book-title" | "chapter" | "section"; text: string } | { kind: "text"; text: string };
+
+/**
+ * ページの余白に置いた柱・ノンブル・付記（IDML でマスターページに置くのに使う）。
+ * 横書きは y がベースライン、x は align に応じて左端・中央・右端。縦書き（小口の柱）は x が字の中心、y が1字目の上端、height が置ける長さ。
+ * parts が2つ以上なら、全角の空白でつないで1行に置いた。
+ */
+export interface PageMark {
+  parts: MarkPart[];
+  x: number;
+  y: number;
+  size: number;
+  align: "left" | "center" | "right";
+  color: string;
+  vertical?: boolean;
+  height?: number;
 }
 
 /** ノンブルを置いた所：y はベースライン、x は align に応じて左端・中央・右端（pt）。text は出した字（付記とまとめたときはその字も）。 */
@@ -407,4 +441,8 @@ export interface DrawPage {
   shapes: Shape[];
   /** ノンブルを置いた所。 */
   nombre?: NombrePlace;
+  /** 余白に置いた柱・ノンブル・付記。 */
+  marks?: PageMark[];
+  /** 章の始まりの飾り方のページか。 */
+  opening?: boolean;
 }

@@ -1,5 +1,5 @@
 import { MM } from "./layout.js";
-import type { PageLayout, PlacedGlyph, Shape } from "./types.js";
+import type { MarkPart, PageLayout, PageMark, PlacedGlyph, Shape } from "./types.js";
 
 // 本文以外のページ要素：付記・ノンブル（PG-01〜05）、枠線（PG-06）、紙の色、上下の飾り、
 // 詳しい組み方での柱とマスターページ（DTP-05）。
@@ -245,10 +245,16 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads, nomb
   const bottomY = block.top + block.height + gap + size * 0.8;
   const horiz = (text: string, x: number, y: number, align: "left" | "center" | "right") =>
     page.glyphs.push({ text, kind: "horiz", x, y, size, color: d.textColor, align });
+  // 置いた所と中身も覚えておく（IDML の書き出しで、マスターページの柱・ノンブルにする）。
+  if (opening && !nombreOnly) page.opening = true;
+  const headPart = (): MarkPart[] => (head && source !== "none" ? [{ kind: "head", source, text: head }] : []);
+  const mark = (parts: MarkPart[], x: number, y: number, align: "left" | "center" | "right", extra: Partial<PageMark> = {}) =>
+    (page.marks ??= []).push({ parts, x, y, size, align, color: d.textColor, ...extra });
   // ノンブル：置いた所も覚えておく（IDML の書き出しで使う）。
   const nombreAt = (text: string, x: number, y: number, align: "left" | "center" | "right") => {
     horiz(text, x, y, align);
     page.nombre = { x, y, size, align, color: d.textColor, text };
+    mark([{ kind: "nombre" }], x, y, align);
   };
   // ノンブルの位置の微調整：小口の側へ（中央なら動かさない）・下へ。
   const shiftX = (align: "left" | "center" | "right") => (align === "center" ? 0 : (leftOuter ? -1 : 1) * st.outerMm * MM);
@@ -258,17 +264,29 @@ function placeMaster(page: PageLayout, d: PageDecor, running: RunningHeads, nomb
   if (m.headPosition === "top-outer" && m.nombrePosition === "top-outer") {
     const parts = leftOuter ? [nombre, head] : [head, nombre];
     const text = parts.filter(Boolean).join("　");
-    if (text) (nombre ? nombreAt : horiz)(text, outerX + (nombre ? shiftX(outerAlign) : 0), topY + (nombre ? shiftY : 0), outerAlign);
+    if (text) {
+      const x = outerX + (nombre ? shiftX(outerAlign) : 0);
+      const y = topY + (nombre ? shiftY : 0);
+      horiz(text, x, y, outerAlign);
+      if (nombre) page.nombre = { x, y, size, align: outerAlign, color: d.textColor, text };
+      const nombrePart: MarkPart[] = nombre ? [{ kind: "nombre" }] : [];
+      mark(leftOuter ? [...nombrePart, ...headPart()] : [...headPart(), ...nombrePart], x, y, outerAlign);
+    }
     return;
   }
 
   if (head) {
-    if (m.headPosition === "top-outer") horiz(head, outerX, topY, outerAlign);
-    else if (m.headPosition === "top-center") horiz(head, block.left + block.width / 2, topY, "center");
-    else {
+    if (m.headPosition === "top-outer") {
+      horiz(head, outerX, topY, outerAlign);
+      mark(headPart(), outerX, topY, outerAlign);
+    } else if (m.headPosition === "top-center") {
+      horiz(head, block.left + block.width / 2, topY, "center");
+      mark(headPart(), block.left + block.width / 2, topY, "center");
+    } else {
       // 小口の余白に縦書きで置く。版面の天にそろえる。
       const x = leftOuter ? block.left - gap - size / 2 : block.left + block.width + gap + size / 2;
       [...head].forEach((ch, i) => page.glyphs.push({ text: ch, kind: "vert", x, y: block.top + i * size, size, color: d.textColor }));
+      mark(headPart(), x, block.top, "left", { vertical: true, height: block.height });
     }
   }
   if (nombre) {
@@ -307,6 +325,13 @@ function placeNotes(page: PageLayout, d: PageDecor, bodySize: number, nombreOnly
       g.y += st.downMm * MM;
       page.nombre = { x: g.x, y: g.y, size: g.size, align: g.align ?? "left", color: t.color, text: t.text };
     }
+    // 置いた所と中身も覚えておく（IDML の書き出しで、マスターページのノンブル・付記にする）。
+    const parts: MarkPart[] = t.nombre
+      ? p.together && showNotes && d.note1
+        ? [{ kind: "nombre" }, { kind: "text", text: d.note1 }]
+        : [{ kind: "nombre" }]
+      : [{ kind: "text", text: t.text }];
+    (page.marks ??= []).push({ parts, x: g.x, y: g.y, size: g.size, align: g.align ?? "left", color: t.color });
     page.glyphs.push(g);
   }
 }

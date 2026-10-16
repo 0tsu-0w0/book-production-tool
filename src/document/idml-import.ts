@@ -523,11 +523,16 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
           .join("")
           .replace(/[|｜]/g, "／");
         (grid[row] ??= [])[col] = text;
+        // つないだ欄：右の欄は「<」（左とつなぐ）、下の欄は「^」（上とつなぐ）にする。
+        const cs = Math.max(1, Math.round(num(c.attrs.ColumnSpan) ?? 1));
+        const rs = Math.max(1, Math.round(num(c.attrs.RowSpan) ?? 1));
+        for (let dr = 0; dr < rs; dr++) for (let dc = 0; dc < cs; dc++) if (dr > 0 || dc > 0) (grid[row + dr] ??= [])[col + dc] = dc > 0 ? "<" : "^";
       }
       paras.push({ style: "", text: "［＃表］", raw: true });
+      const width = Math.max(...grid.map((row) => row?.length ?? 0));
       grid.forEach((row, r) => {
-        paras.push({ style: "", text: `| ${Array.from({ length: row.length }, (_, k) => row[k] ?? "").join(" | ")} |`, raw: true });
-        if (r === header - 1) paras.push({ style: "", text: `|${Array.from({ length: row.length }, () => "---").join("|")}|`, raw: true });
+        paras.push({ style: "", text: `| ${Array.from({ length: width }, (_, k) => row?.[k] ?? "").join(" | ")} |`, raw: true });
+        if (r === header - 1) paras.push({ style: "", text: `|${Array.from({ length: width }, () => "---").join("|")}|`, raw: true });
       });
       paras.push({ style: "", text: "［＃／表］", raw: true });
     };
@@ -559,7 +564,7 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
   if (pageImages > 0 && !restored) notes.add(`ページに置いた画像（${pageImages}個。読めた画像は「画像」欄に入れたので、置き場所を［＃画像：名前］で決めてください）`);
   if (missingImages > 0) notes.add(`PC に見つからないリンクの画像（${missingImages}個）`);
   if (footnotes > 0) notes.add(`脚注（${footnotes}個。［＃注：…］にした）`);
-  if (tables > 0) notes.add(`表（${tables}個。罫と欄の幅は読まない）`);
+  if (tables > 0) notes.add(`表（${tables}個。罫の太さと欄の幅は読まない）`);
 
   // 本文：いちばん多くの字に当たっている段落スタイル。
   const bodySelf = [...usage.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "ParagraphStyle/$ID/NormalParagraphStyle";
@@ -751,16 +756,89 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
   // InDesign と同じに：縦組みの半角の英数字は横倒し、縦中横は IDML で指定した所だけ（自動の縦中横はしない）。
   s.format.halfWidth = "rotate";
   s.format.tcyDigits = false;
-  // マスターページ：自動のページ番号（<?ACE 18?>）だけのテキストフレームはノンブルとして読む。ほかの中身（柱など）は知らせる。
+  // マスターページ：自動のページ番号（<?ACE 18?>）はノンブル、見出しを拾うテキスト変数は柱（大見出しなら章、ほかは節）、
+  // そのほかの字は書名の柱として、いちばん多くのページに当たっているマスターから「柱とマスターページ」の設定にする。
   const masters = srcOf("idPkg:MasterSpread").map((src) => xml(src)).filter((m): m is XmlElement => !!m);
-  const masterStories = new Set(masters.flatMap((m) => findAll(m, "TextFrame").map((f) => f.attrs.ParentStory)));
-  const onlyNumbers = [...masterStories].every((id) => {
-    const st = storyFiles.get(id);
-    if (!st) return false;
-    const contents = findAll(st, "Content");
-    return contents.length > 0 && contents.every((c) => c.children.every((x) => (typeof x === "string" ? x.trim() === "" : "pi" in x && x.pi === "ACE" && x.body === "18")));
-  });
-  if (masterStories.size > 0 && !onlyNumbers) notes.add("マスターページの中身（柱は「柱とマスターページ」で作り直してください）");
+  const variableSource = new Map<string, "chapter" | "section">();
+  for (const v of childElements(designmap, "TextVariable")) {
+    const pref = findAll(v, "MatchParagraphStylePreference")[0];
+    if (!pref) continue;
+    const style = paraName(pref.attrs.AppliedParagraphStyle ?? "");
+    variableSource.set(v.attrs.Self, /大見出し|章|chapter|heading ?1/i.test(style) ? "chapter" : "section");
+  }
+  const useCount = new Map<string, number>();
+  for (const src of srcOf("idPkg:Spread")) {
+    const sp = xml(src);
+    if (sp) for (const p of findAll(sp, "Page")) useCount.set(p.attrs.AppliedMaster ?? "", (useCount.get(p.attrs.AppliedMaster ?? "") ?? 0) + 1);
+  }
+  const mainMaster = masters
+    .map((m) => findAll(m, "MasterSpread")[0])
+    .filter((m): m is XmlElement => !!m)
+    .sort((x, y) => (useCount.get(y.attrs.Self) ?? 0) - (useCount.get(x.attrs.Self) ?? 0))[0];
+  let unknownMasterItems = false;
+  if (mainMaster) {
+    const mpages = findAll(mainMaster, "Page").map((p) => {
+      const t = (p.attrs.ItemTransform ?? "1 0 0 1 0 0").split(/\s+/).map(Number);
+      return { x: t[4], y: t[5], left: t[4] < 0 };
+    });
+    const m = s.master;
+    const sides: Record<"left" | "right", ("chapter" | "section" | "book-title")[]> = { left: [], right: [] };
+    let nombreFound = false;
+    for (const f of findAll(mainMaster, "TextFrame")) {
+      const st = storyFiles.get(f.attrs.ParentStory);
+      if (!st) continue;
+      const anchors = findAll(f, "PathPointType").map((pp) => (pp.attrs.Anchor ?? "0 0").split(/\s+/).map(Number));
+      if (anchors.length === 0) continue;
+      const xs = anchors.map(([x]) => x);
+      const ys = anchors.map(([, y]) => y);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const side = cx < 0 ? "left" : "right";
+      const page = mpages.find((p) => p.left === (side === "left"));
+      const relX = cx - (page?.x ?? (side === "left" ? -pageW : 0));
+      const relY = cy - (page?.y ?? -pageH / 2);
+      const isVertical = childElements(st, "StoryPreference")[0]?.attrs.StoryOrientation === "Vertical";
+      let recognized = false;
+      const csr = findAll(st, "CharacterStyleRange")[0];
+      const size = num(csr?.attrs.PointSize);
+      for (const node of findAll(st, "Content")) {
+        if (node.children.some((x) => typeof x === "object" && "pi" in x && x.pi === "ACE" && x.body === "18")) {
+          nombreFound = true;
+          recognized = true;
+          m.nombrePosition = relY < pageH / 2 ? "top-outer" : Math.abs(relX - pageW / 2) < pageW * 0.1 ? "bottom-center" : "bottom-outer";
+          if (size) m.sizePt = Math.round(size * 10) / 10;
+        }
+      }
+      for (const inst of findAll(st, "TextVariableInstance")) {
+        const source = variableSource.get(inst.attrs.AssociatedTextVariable ?? "");
+        if (!source) continue;
+        sides[side].push(source);
+        recognized = true;
+        m.headPosition = isVertical ? "fore-edge" : Math.abs(relX - pageW / 2) < pageW * 0.1 ? "top-center" : "top-outer";
+      }
+      // 字だけの枠：書名の柱とみなす（ノンブル・テキスト変数とまとめた枠の字は、区切りの空白）。
+      const plain = findAll(st, "Content")
+        .map((c) => c.children.filter((x): x is string => typeof x === "string").join(""))
+        .join("")
+        .trim();
+      if (plain && !recognized) {
+        m.bookTitle = plain;
+        sides[side].push("book-title");
+        recognized = true;
+        m.headPosition = isVertical ? "fore-edge" : Math.abs(relX - pageW / 2) < pageW * 0.1 ? "top-center" : "top-outer";
+      }
+      if (!recognized) unknownMasterItems = true;
+    }
+    // 奇数ページ：右綴じ（縦組み）は左ページ、左綴じ（横組み）は右ページ。
+    const oddSide = vertical ? "left" : "right";
+    const evenSide = vertical ? "right" : "left";
+    m.bodyOdd = sides[oddSide][0] ?? "none";
+    m.bodyEven = sides[evenSide][0] ?? "none";
+    m.bodyNombre = nombreFound;
+    m.openingNombre = nombreFound;
+    if (findAll(mainMaster, "Rectangle").length + findAll(mainMaster, "GraphicLine").length > 0) unknownMasterItems = true;
+  }
+  if (unknownMasterItems) notes.add("マスターページの図形や飾り（柱・ノンブル・書名のほか）");
 
   let settings = normalizeSettings(s);
   let text = lines.join("\n");

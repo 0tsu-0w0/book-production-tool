@@ -7,7 +7,7 @@ import { formatText } from "../engine/format.js";
 import { hexToCmyk } from "../engine/ink-color.js";
 import { KENTEN_MARKS, parse } from "../engine/parse.js";
 import { texToMarkup } from "../engine/tex.js";
-import type { Atom, Block, NombrePlace } from "../engine/types.js";
+import type { Atom, Block, NombrePlace, PageMark, TableBlock } from "../engine/types.js";
 import type { DocImage } from "../document/document.js";
 import { expandXrefs } from "../engine/xref.js";
 
@@ -17,7 +17,7 @@ import { expandXrefs } from "../engine/xref.js";
 // ドロップキャップ・先頭文字スタイル・正規表現スタイル・行スタイル）、色（CMYK・特色・特色の濃さ）、
 // 本文（ルビ・圏点・傍線・縦中横・割注・字間・カーニング・改ページ・改丁）、注（章末か巻末の段落）、
 // ページ番号の参照・相互参照（Kolophon で組んだページ番号の字）。
-// 入れないもの（書き出しの結果で知らせる）：画像・表の罫・目次・索引・柱とノンブル・段落の罫線と網掛け・数式の形。
+// 入れないもの（書き出しの結果で知らせる）：目次・索引・段落の罫線と網掛け・数式の形。
 // InDesign は受け取った文章を自分で組み直すので、行の分かれ目とページの区切りは Kolophon と同じにはならない。
 
 export interface IdmlFile {
@@ -29,6 +29,10 @@ export interface IdmlFile {
 export interface IdmlPage {
   images: { name: string; x: number; y: number; w: number; h: number; clip?: { x: number; y: number; w: number; h: number } }[];
   nombre?: NombrePlace;
+  /** 余白に置いた柱・ノンブル・付記（なければ nombre からノンブルだけ）。 */
+  marks?: PageMark[];
+  /** 章の始まりの飾り方のページか。 */
+  opening?: boolean;
   /** Kolophon でこのページに本文の字が入ったか（入らなかったページで画像のあるページには、テキストフレームを置かない）。 */
   hasText?: boolean;
 }
@@ -257,7 +261,18 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       .join("");
   };
   /** 段落の字を、書式の同じ字の並び（CharacterStyleRange）にする。lineStyle は行頭の［＃名前］が文字スタイルのとき。 */
-  const runs = (atoms: Atom[], lineStyle?: string, paraScale = 1): string[] => {
+  // ルビの揃え・側（Kolophon → InDesign）。1-2-1 は JIS、肩付きは親文字の頭（縦組みの上・横組みの左）に揃える。
+  const RUBY_ALIGNMENT = { "121": "RubyJIS", center: "RubyCenter", shoulder: "RubyLeft" } as const;
+  const charRuby = new Map(settings.styles.character.map((c) => [c.name, c]));
+  const paraRuby = new Map(settings.styles.paragraph.map((p) => [p.name, p]));
+  const rubyAttrs = (charStyle: string | undefined, paraName: string | undefined) => {
+    const c = charStyle ? charRuby.get(charStyle) : undefined;
+    const p = paraName ? paraRuby.get(paraName) : undefined;
+    const align = c?.rubyAlign || p?.rubyAlign || settings.typography.rubyAlign || "121";
+    const side = c?.rubySide || p?.rubySide || settings.typography.rubySide || "right";
+    return ` RubyAlignment="${RUBY_ALIGNMENT[align]}" RubyPosition="${side === "left" ? "BelowLeft" : "AboveRight"}"`;
+  };
+  const runs = (atoms: Atom[], lineStyle?: string, paraScale = 1, paraName?: string): string[] => {
     const out: { key: string; open: string; text: string }[] = [];
     for (const a of atoms) {
       if (a.leader) continue;
@@ -271,7 +286,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       const tracking = first?.tracking;
       const kern = last?.kern;
       const local =
-        (a.ruby ? ` RubyFlag="true"${attr("RubyString", a.ruby.replace(/[|｜]/g, ""))} RubyType="GroupRuby"` : "") +
+        (a.ruby ? ` RubyFlag="true"${attr("RubyString", a.ruby.replace(/[|｜]/g, ""))} RubyType="GroupRuby"${rubyAttrs(a.style && characterNames.has(a.style) ? a.style : lineStyle, paraName)}` : "") +
         (a.kenten ? attr("KentenKind", KENTEN_KINDS[a.kenten] ?? "KentenSesameDot") : "") +
         (a.sideline ? ' Underline="true"' : "") +
         (vertical && first?.tcy && a.pageRef === undefined && !a.note ? ' Tatechuyoko="true"' : "") +
@@ -291,7 +306,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return out.map((r) => `${r.open}<Content>${escapeXml(r.text)}</Content>`);
   };
   const paragraph = (styleName: string, atoms: Atom[], lineStyle?: string) => {
-    const parts = runs(atoms, lineStyle, paraScale.get(styleName) ?? 1);
+    const parts = runs(atoms, lineStyle, paraScale.get(styleName) ?? 1, styleName);
     const start = pendingBreak && paras.length > 0 ? attr("StartParagraph", pendingBreak) : "";
     pendingBreak = undefined;
     paras.push(`<ParagraphStyleRange${attr("AppliedParagraphStyle", paraSelf(styleName))}${start}>${parts.length > 0 ? parts.map((p) => `${p}\u0001</CharacterStyleRange>`).join("") : `<CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}">\u0001</CharacterStyleRange>`}</ParagraphStyleRange>`);
@@ -302,6 +317,68 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   };
   const styleOf = (b: { style?: string }, fallback: string) => (b.style && paragraphNames.has(b.style) ? b.style : fallback);
   const lineStyleOf = (b: { style?: string }) => (b.style && !paragraphNames.has(b.style) && characterNames.has(b.style) ? b.style : undefined);
+  /**
+   * 表：InDesign の表を、1つの段落の中に置く。見出しの行・欄の揃え・つないだ欄（「<」は左と、「^」は上と）・罫（すべて・行の境目だけ・なし）・
+   * 見出しのあとの二重線を移す。欄の幅は、欄の字の多さで行の長さを分ける。
+   */
+  const table = (t: TableBlock) => {
+    const tid = id("tb");
+    const count = Math.max(1, ...t.rows.map((r) => r.cells.length));
+    const plain = (atoms: Atom[]) => atoms.map((a) => a.cells.map((c) => c.text).join("")).join("").trim();
+    // 欄のまとまり（EPUB と同じ求め方）。
+    type Group = { from: number; to: number; rowspan: number; up: boolean; atoms: Atom[] };
+    const rows: Group[][] = t.rows.map((row) => {
+      const out: Group[] = [];
+      for (let c = 0; c < count; c++) {
+        const text = plain(row.cells[c]?.atoms ?? []);
+        if ((text === "<" || text === "＜") && out.length > 0) {
+          out[out.length - 1].to = c + 1;
+          continue;
+        }
+        out.push({ from: c, to: c + 1, rowspan: 1, up: text === "^" || text === "＾", atoms: row.cells[c]?.atoms ?? [] });
+      }
+      return out;
+    });
+    rows.forEach((gs, r) => {
+      for (const g of gs) {
+        if (!g.up) continue;
+        for (let k = r - 1; k >= 0; k--) {
+          const above = rows[k].find((x) => x.from === g.from);
+          if (above && !above.up) {
+            above.rowspan++;
+            break;
+          }
+        }
+      }
+    });
+    // 欄の幅：欄の中のいちばん長い字の数（2字より短くはしない）で、行の長さを分ける。
+    const lengths = Array.from({ length: count }, (_, c) => Math.max(2, ...t.rows.map((r) => [...plain(r.cells[c]?.atoms ?? [])].length + 1)));
+    const total = lengths.reduce((a, b) => a + b, 0);
+    const lineLength = spec.charsPerLine * size;
+    const rule = t.rules ?? "all";
+    const weight = (on: boolean) => (on ? 0.5 : 0);
+    const cells = rows
+      .flatMap((gs, r) =>
+        gs
+          .filter((g) => !g.up)
+          .map((g) => {
+            const lastHeader = t.header > 0 && r + g.rowspan - 1 === t.header - 1;
+            const align = t.align?.[g.from];
+            const just = align === "center" ? "CenterAlign" : align === "end" ? "RightAlign" : "LeftAlign";
+            const styleName = r < t.header && paragraphNames.has("表の見出し") ? "表の見出し" : paragraphNames.has("表") ? "表" : "本文";
+            const content = runs(g.atoms, undefined, paraScale.get(styleName) ?? 1, styleName).map((p) => `${p}</CharacterStyleRange>`).join("");
+            const bottom = lastHeader && t.headerDouble ? ` BottomEdgeStrokeWeight="1.5" BottomEdgeStrokeType="StrokeStyle/$ID/ThinThin"` : ` BottomEdgeStrokeWeight="${weight(rule !== "none")}"`;
+            return `<Cell Self="${tid}i${g.from}i${r}" Name="${g.from}:${r}" RowSpan="${g.rowspan}" ColumnSpan="${g.to - g.from}" AppliedCellStyle="CellStyle/$ID/[None]" AppliedCellStylePriority="0" TopEdgeStrokeWeight="${weight(rule !== "none")}" LeftEdgeStrokeWeight="${weight(rule === "all")}" RightEdgeStrokeWeight="${weight(rule === "all")}"${bottom}><ParagraphStyleRange${attr("AppliedParagraphStyle", paraSelf(styleName))} Justification="${just}">${content || `<CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}"/>`}</ParagraphStyleRange></Cell>`;
+          }),
+      )
+      .join("");
+    const rowXml = t.rows.map((_, r) => `<Row Self="${tid}Row${r}" Name="${r}" MinimumHeight="${n(pitch)}" AutoGrow="true"/>`).join("");
+    const colXml = lengths.map((l, c) => `<Column Self="${tid}Column${c}" Name="${c}" SingleColumnWidth="${n((lineLength * l) / total)}"/>`).join("");
+    const tableXml = `<Table Self="${tid}" HeaderRowCount="${Math.min(t.header, t.rows.length)}" FooterRowCount="0" BodyRowCount="${Math.max(0, t.rows.length - t.header)}" ColumnCount="${count}" AppliedTableStyle="TableStyle/$ID/[Basic Table]" TableDirection="LeftToRightDirection">${rowXml}${colXml}${cells}</Table>`;
+    const start = pendingBreak && paras.length > 0 ? attr("StartParagraph", pendingBreak) : "";
+    pendingBreak = undefined;
+    paras.push(`<ParagraphStyleRange${attr("AppliedParagraphStyle", paraSelf("本文"))}${start}><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}">${tableXml}\u0001</CharacterStyleRange></ParagraphStyleRange>`);
+  };
   const emit = (list: Block[]) => {
     for (const b of list) {
       switch (b.kind) {
@@ -345,15 +422,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
           paragraph("本文", [...`［画像：${b.name}］`].map((ch) => ({ cells: [{ text: ch }] })));
           break;
         case "table":
-          skipped.add("表の罫（表は欄を全角の空白で区切った段落にした）");
-          for (const row of b.rows) {
-            const atoms: Atom[] = [];
-            row.cells.forEach((cell, i) => {
-              if (i > 0) atoms.push({ cells: [{ text: "　" }] });
-              atoms.push(...cell.atoms);
-            });
-            paragraph(b.rows.indexOf(row) < b.header ? "表の見出し" : "表", atoms);
-          }
+          table(b);
           break;
         default:
           break;
@@ -364,8 +433,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   flushNotes();
   // 段落の終わり（Br）は、最後の段落のあとには付けない。
   const storyBody = paras.map((p, i) => p.replace(/\u0001/g, (_, offset: number, s: string) => (i < paras.length - 1 && offset === s.lastIndexOf("\u0001") ? "<Br/>" : ""))).join("\n");
-  // 表の段落スタイルがなければ本文にする。
-  const fixedBody = storyBody.replace(/AppliedParagraphStyle="ParagraphStyle\/(表の見出し|表)"/g, (m, name: string) => (paragraphNames.has(name) ? m : `AppliedParagraphStyle="${paraSelf("本文")}"`));
+  const fixedBody = storyBody;
 
   // ---- ページと版面 ----
   const W = spec.pageWidthMm * MM;
@@ -439,14 +507,20 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
         return `<Rectangle Self="${id("r")}" ContentType="GraphicType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + frame.x, ty + frame.y, frame.w, frame.h)}</Properties>${wrap}<Image Self="${id("im")}" ItemTransform="${n(im.w / iw)} 0 0 ${n(im.h / ih)} ${n(tx + im.x)} ${n(ty + im.y)}"><Properties><GraphicBounds Left="0" Top="0" Right="${iw}" Bottom="${ih}"/></Properties><Link Self="${id("lk")}" LinkResourceURI="${escapeXml(uri)}" LinkResourceFormat="${format}" StoredState="Normal" LinkClassID="35906" LinkClientID="257" LinkResourceModified="false" LinkObjectModified="false" ShowInUI="true" CanEmbed="true" CanUnembed="true" CanPackage="true" ImportPolicy="NoAutoImport" ExportPolicy="NoAutoExport"/></Image></Rectangle>`;
       })
       .join("");
-  // マスター：A はノンブル（自動のページ番号）あり、B はなし。Kolophon でノンブルを出したページに A を当てる。
-  const hasNombre = (i: number) => !!opts.pages?.[i]?.nombre;
+  // マスター：Kolophon で柱・ノンブル・付記を置いたページを、本文（A）と章の始まり（C）に分け、置いていないページは B にする。
+  const marksOf = (i: number): PageMark[] => {
+    const p = opts.pages?.[i];
+    if (!p) return [];
+    if (p.marks) return p.marks;
+    return p.nombre ? [{ parts: [{ kind: "nombre" }], x: p.nombre.x, y: p.nombre.y, size: p.nombre.size, align: p.nombre.align, color: p.nombre.color }] : [];
+  };
+  const masterOf = (i: number) => (marksOf(i).length === 0 ? "un" : opts.pages?.[i]?.opening ? "uo" : "um");
   const spreadFiles = spreads.map((pages, si) => {
     const body = pages.map((i) => {
       const tx = isLeft(i) ? -W : 0;
       const ty = -H / 2;
       const a = textArea(i);
-      const page = `<Page Self="p${i + 1}" Name="${spec.firstPageNumber + i}" AppliedMaster="${hasNombre(i) ? "um" : "un"}" OverrideList="" TabOrder="" GridStartingPoint="TopOutside" UseMasterGrid="true" GeometricBounds="0 0 ${n(H)} ${n(W)}" ItemTransform="1 0 0 1 ${n(tx)} ${n(ty)}" MasterPageTransform="1 0 0 1 0 0"><Properties><PageColor type="enumeration">UseMasterColor</PageColor></Properties>${margin(i)}</Page>`;
+      const page = `<Page Self="p${i + 1}" Name="${spec.firstPageNumber + i}" AppliedMaster="${masterOf(i)}" OverrideList="" TabOrder="" GridStartingPoint="TopOutside" UseMasterGrid="true" GeometricBounds="0 0 ${n(H)} ${n(W)}" ItemTransform="1 0 0 1 ${n(tx)} ${n(ty)}" MasterPageTransform="1 0 0 1 0 0"><Properties><PageColor type="enumeration">UseMasterColor</PageColor></Properties>${margin(i)}</Page>`;
       const k = framePages.indexOf(i);
       const frame =
         k < 0
@@ -460,27 +534,61 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return { name: `Spreads/Spread_s${si + 1}.xml`, data: xmlFile(xml) };
   });
 
-  // ---- マスターページのノンブル（自動のページ番号）----
-  // 左ページ・右ページそれぞれ、Kolophon でノンブルを置いた所（最初に見つかったページ）に、小さな横組みのテキストフレームを置く。
-  const nombreStories: { id: string; xml: string }[] = [];
-  const sample = (left: boolean) => {
-    for (let i = 0; i < pageCount; i++) if (isLeft(i) === left && opts.pages?.[i]?.nombre) return opts.pages[i].nombre;
-    return undefined;
+  // ---- マスターページの柱・ノンブル・付記 ----
+  // 左ページ・右ページそれぞれ、そのマスターを当てるページのうち最初に見つかったページの置き方で、小さなテキストフレームを置く。
+  // ノンブルは自動のページ番号（<?ACE 18?>）、章・節の柱はその見出しの段落スタイルを拾うテキスト変数、書名と付記は字のまま。
+  const markStories: { id: string; xml: string }[] = [];
+  const variables = new Map<string, { name: string; style: string }>();
+  const variableOf = (source: "chapter" | "section") => {
+    const name = source === "chapter" ? "柱（章）" : "柱（節）";
+    const style = source === "chapter" ? "大見出し" : "中見出し";
+    if (!variables.has(name)) variables.set(name, { name, style });
+    return name;
   };
-  const nombreFrame = (place: NombrePlace | undefined, tx: number, ty: number) => {
-    if (!place) return "";
-    const s = place.size;
-    const w = Math.max(20 * MM, s * 10);
-    const x = place.align === "left" ? place.x : place.align === "right" ? place.x - w : place.x - w / 2;
-    // 横組みの1行目のベースラインは、だいたい字の大きさの 0.88 下（InDesign の既定の「仮想ボディの上」）。
-    const y = place.y - s * 0.88;
+  const markContent = (m: PageMark) =>
+    m.parts
+      .map((part, k) => {
+        const sep = k > 0 ? "<Content>　</Content>" : "";
+        if (part.kind === "nombre") return `${sep}<Content><?ACE 18?></Content>`;
+        if (part.kind === "head" && part.source !== "book-title") {
+          const name = variableOf(part.source);
+          return `${sep}<TextVariableInstance Self="${id("tv")}" Name="${escapeXml(name)}" ResultText="${escapeXml(part.text)}" AssociatedTextVariable="dTextVariablen${escapeXml(name)}"/>`;
+        }
+        return `${sep}<Content>${escapeXml(part.text)}</Content>`;
+      })
+      .join("");
+  const markFrame = (m: PageMark, tx: number, ty: number) => {
+    const s = m.size;
     const sid = id("un");
-    const just = place.align === "left" ? "LeftAlign" : place.align === "right" ? "RightAlign" : "CenterAlign";
-    nombreStories.push({
+    let x: number;
+    let y: number;
+    let w: number;
+    let h: number;
+    if (m.vertical) {
+      // 小口の縦書きの柱：字の中心 x、版面の天から置ける長さまで。
+      w = s * 1.5;
+      h = m.height ?? s * 20;
+      x = m.x - w / 2;
+      y = m.y;
+    } else {
+      const chars = m.parts.reduce((sum, part) => sum + (part.kind === "nombre" ? 4 : [...part.text].length + 1), 0);
+      w = Math.min(W * 0.8, Math.max(20 * MM, s * (chars + 4)));
+      h = s * 1.5;
+      x = m.align === "left" ? m.x : m.align === "right" ? m.x - w : m.x - w / 2;
+      // 横組みの1行目のベースラインは、だいたい字の大きさの 0.88 下（InDesign の既定の「仮想ボディの上」）。
+      y = m.y - s * 0.88;
+    }
+    const just = m.vertical || m.align === "left" ? "LeftAlign" : m.align === "right" ? "RightAlign" : "CenterAlign";
+    markStories.push({
       id: sid,
-      xml: `<idPkg:Story ${NS} DOMVersion="${DOM}"><Story Self="${sid}" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" FrameType="TextFrameType" StoryOrientation="Horizontal" StoryDirection="LeftToRightDirection"/><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="${just}"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}" PointSize="${n(s)}"${attr("FillColor", swatchOf(place.color))}><Content><?ACE 18?></Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`,
+      xml: `<idPkg:Story ${NS} DOMVersion="${DOM}"><Story Self="${sid}" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" FrameType="TextFrameType" StoryOrientation="${m.vertical ? "Vertical" : "Horizontal"}" StoryDirection="LeftToRightDirection"/><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle" Justification="${just}"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}" PointSize="${n(s)}"${attr("FillColor", swatchOf(m.color))}>${markContent(m)}</CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`,
     });
-    return `<TextFrame Self="${id("nf")}" ParentStory="${sid}" PreviousTextFrame="n" NextTextFrame="n" ContentType="TextType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + x, ty + y, w, s * 1.5)}</Properties><TextFramePreference TextColumnCount="1"/></TextFrame>`;
+    return `<TextFrame Self="${id("nf")}" ParentStory="${sid}" PreviousTextFrame="n" NextTextFrame="n" ContentType="TextType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + x, ty + y, w, h)}</Properties><TextFramePreference TextColumnCount="1"/></TextFrame>`;
+  };
+  /** そのマスターを当てるページのうち、左（右）ページで最初のものの柱・ノンブル・付記。 */
+  const sample = (master: string, left: boolean) => {
+    for (let i = 0; i < pageCount; i++) if (isLeft(i) === left && masterOf(i) === master) return marksOf(i);
+    return [];
   };
   // マスターのページは、読む順（右綴じは右ページから）に並べる。位置は左ページがノドの左。
   const masterPage = (self: string, name: string, tx: number, sideIndex: number) =>
@@ -488,15 +596,22 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   // 左ページになるページ番号の例（版面の位置を決めるのに使う）：右綴じは奇数、左綴じは偶数。
   const leftIndex = isLeft(0) ? 0 : 1;
   const rightIndex = 1 - leftIndex;
-  const masterSpread = (self: string, prefix: string, base: string, withNombre: boolean) => {
+  const masterSpread = (self: string, prefix: string, base: string) => {
     const left = masterPage(`${self}p1`, "L", -W, leftIndex);
     const right = masterPage(`${self}p2`, "R", 0, rightIndex);
     const pagesXml = vertical ? right + left : left + right;
-    const items = withNombre ? nombreFrame(sample(true), -W, -H / 2) + nombreFrame(sample(false), 0, -H / 2) : "";
-    return `<idPkg:MasterSpread ${NS} DOMVersion="${DOM}"><MasterSpread Self="${self}" ItemTransform="1 0 0 1 0 0" OverriddenPageItemProps="" Name="${prefix}-${base}" NamePrefix="${prefix}" BaseName="${base}" ShowMasterItems="true" PageCount="2">${pagesXml}${items}</MasterSpread></idPkg:MasterSpread>`;
+    const items = [...sample(self, true).map((m) => markFrame(m, -W, -H / 2)), ...sample(self, false).map((m) => markFrame(m, 0, -H / 2))].join("");
+    return { self, xml: `<idPkg:MasterSpread ${NS} DOMVersion="${DOM}"><MasterSpread Self="${self}" ItemTransform="1 0 0 1 0 0" OverriddenPageItemProps="" Name="${prefix}-${base}" NamePrefix="${prefix}" BaseName="${base}" ShowMasterItems="true" PageCount="2">${pagesXml}${items}</MasterSpread></idPkg:MasterSpread>` };
   };
-  const masterA = masterSpread("um", "A", "ノンブルあり", true);
-  const masterB = masterSpread("un", "B", "ノンブルなし", false);
+  const hasOpening = Array.from({ length: pageCount }, (_, i) => masterOf(i)).includes("uo");
+  const masterSpreads = [masterSpread("um", "A", "本文"), masterSpread("un", "B", "柱・ノンブルなし"), ...(hasOpening ? [masterSpread("uo", "C", "章の始まり")] : [])];
+  // テキスト変数（柱）：その見出しの段落スタイルの、ページの最後の段落（なければ前のページから続く）の字。
+  const textVariables = [...variables.values()]
+    .map(
+      (v) =>
+        `<TextVariable Self="dTextVariablen${escapeXml(v.name)}" Name="${escapeXml(v.name)}" VariableType="MatchParagraphStyleType"><MatchParagraphStylePreference TextBefore="" TextAfter="" AppliedParagraphStyle="${escapeXml(paraSelf(paragraphNames.has(v.style) ? v.style : "本文"))}" SearchStrategy="LastOnPage" ChangeCase="None" DeleteEndPunctuation="false"/></TextVariable>`,
+    )
+    .join("");
 
   // ---- セクション（ページ番号の付け方）----
   const numerals = settings.nombreStyle.numerals === "kanji" ? "Kanji" : settings.nombreStyle.numerals === "fullwidth" ? "FullWidthArabic" : "Arabic";
@@ -536,13 +651,13 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     .filter((sp) => swatches.has(sp.color.toLowerCase()))
     .map((sp, k) => `<Ink Self="Ink/${escapeXml(selfName(sp.name))}" Name="${escapeXml(sp.name)}" Angle="45" ConvertToProcess="false" Frequency="70" NeutralDensity="1" PrintInk="true" TrapOrder="${5 + k}" InkType="Normal"/>`)
     .join("");
-  const graphic = `<idPkg:Graphic ${NS} DOMVersion="${DOM}"><Color Self="Color/Black" Model="Process" Space="CMYK" ColorValue="0 0 0 100" ColorOverride="Specialblack" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Black" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Paper" Model="Process" Space="CMYK" ColorValue="0 0 0 0" ColorOverride="Specialpaper" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Paper" ColorEditable="true" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Registration" Model="Registration" Space="CMYK" ColorValue="100 100 100 100" ColorOverride="Specialregistration" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Registration" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/>${colorXml.join("")}${processInks}${usedSpotInks}<Swatch Self="Swatch/None" Name="None" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/></idPkg:Graphic>`;
-  const styles = `<idPkg:Styles ${NS} DOMVersion="${DOM}"><RootCharacterStyleGroup Self="uc"><CharacterStyle Self="${NO_CHAR}" Imported="false" Name="$ID/[No character style]"/>${characterStyles.join("")}</RootCharacterStyleGroup><RootParagraphStyleGroup Self="up"><ParagraphStyle Self="${NO_PARA}" Name="$ID/[No paragraph style]" Imported="false" NextStyle="${NO_PARA}" KeyboardShortcut="0 0"${attr("PointSize", n(size))}><Properties><Leading type="unit">${n(pitch)}</Leading>${bodyFont.family ? `<AppliedFont type="string">${escapeXml(bodyFont.family)}</AppliedFont>` : ""}</Properties></ParagraphStyle><ParagraphStyle Self="ParagraphStyle/$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle" Imported="false" NextStyle="ParagraphStyle/$ID/NormalParagraphStyle" KeyboardShortcut="0 0"><Properties><BasedOn type="string">$ID/[No paragraph style]</BasedOn></Properties></ParagraphStyle>${paragraphStyles.join("")}</RootParagraphStyleGroup></idPkg:Styles>`;
+  const graphic = `<idPkg:Graphic ${NS} DOMVersion="${DOM}"><Color Self="Color/Black" Model="Process" Space="CMYK" ColorValue="0 0 0 100" ColorOverride="Specialblack" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Black" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Paper" Model="Process" Space="CMYK" ColorValue="0 0 0 0" ColorOverride="Specialpaper" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Paper" ColorEditable="true" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Registration" Model="Registration" Space="CMYK" ColorValue="100 100 100 100" ColorOverride="Specialregistration" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Registration" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/>${colorXml.join("")}${processInks}${usedSpotInks}<Swatch Self="Swatch/None" Name="None" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><StrokeStyle Self="StrokeStyle/$ID/Solid" Name="$ID/Solid"/><StrokeStyle Self="StrokeStyle/$ID/ThinThin" Name="$ID/ThinThin"/></idPkg:Graphic>`;
+  const styles = `<idPkg:Styles ${NS} DOMVersion="${DOM}"><RootCharacterStyleGroup Self="uc"><CharacterStyle Self="${NO_CHAR}" Imported="false" Name="$ID/[No character style]"/>${characterStyles.join("")}</RootCharacterStyleGroup><RootParagraphStyleGroup Self="up"><ParagraphStyle Self="${NO_PARA}" Name="$ID/[No paragraph style]" Imported="false" NextStyle="${NO_PARA}" KeyboardShortcut="0 0"${attr("PointSize", n(size))}><Properties><Leading type="unit">${n(pitch)}</Leading>${bodyFont.family ? `<AppliedFont type="string">${escapeXml(bodyFont.family)}</AppliedFont>` : ""}</Properties></ParagraphStyle><ParagraphStyle Self="ParagraphStyle/$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle" Imported="false" NextStyle="ParagraphStyle/$ID/NormalParagraphStyle" KeyboardShortcut="0 0"><Properties><BasedOn type="string">$ID/[No paragraph style]</BasedOn></Properties></ParagraphStyle>${paragraphStyles.join("")}</RootParagraphStyleGroup><RootCellStyleGroup Self="ucs"><CellStyle Self="CellStyle/$ID/[None]" Name="$ID/[None]"/></RootCellStyleGroup><RootTableStyleGroup Self="uts"><TableStyle Self="TableStyle/$ID/[Basic Table]" Name="$ID/[Basic Table]"/></RootTableStyleGroup></idPkg:Styles>`;
   const fonts = `<idPkg:Fonts ${NS} DOMVersion="${DOM}">${[...fontXml.values()].join("")}</idPkg:Fonts>`;
   const tags = `<idPkg:Tags ${NS} DOMVersion="${DOM}"><XMLTag Self="XMLTag/Root" Name="Root"><Properties><TagColor type="enumeration">LightBlue</TagColor></Properties></XMLTag></idPkg:Tags>`;
   const backing = `<idPkg:BackingStory ${NS} DOMVersion="${DOM}"><XmlStory Self="ub" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}"/></ParagraphStyleRange></XmlStory></idPkg:BackingStory>`;
   const designmap = `<?aid style="50" type="document" readerVersion="6.0" featureSet="257" product="${DOM}(0)" ?>
-<Document ${NS} DOMVersion="${DOM}" Self="d" StoryList="${[storyId, ...nombreStories.map((st) => st.id), "ub"].join(" ")}" ZeroPoint="0 0" ActiveLayer="uL" CMYKProfile="Japan Color 2001 Coated" RGBProfile="sRGB IEC61966-2.1" SolidColorIntent="UseColorSettings" AfterBlendingIntent="UseColorSettings" DefaultImageIntent="UseColorSettings" RGBPolicy="PreserveEmbeddedProfiles" CMYKPolicy="CombinationOfPreserveAndSafeCmyk" AccurateLABSpots="false"><idPkg:Graphic src="Resources/Graphic.xml"/><idPkg:Fonts src="Resources/Fonts.xml"/><idPkg:Styles src="Resources/Styles.xml"/><idPkg:Preferences src="Resources/Preferences.xml"/><idPkg:Tags src="XML/Tags.xml"/><Layer Self="uL" Name="レイヤー 1" Visible="true" Locked="false" IgnoreWrap="false" ShowGuides="true" LockGuides="false" UI="true" Expendable="true" Printable="true"><Properties><LayerColor type="enumeration">LightBlue</LayerColor></Properties></Layer><idPkg:MasterSpread src="MasterSpreads/MasterSpread_um.xml"/><idPkg:MasterSpread src="MasterSpreads/MasterSpread_un.xml"/>${spreadFiles.map((f) => `<idPkg:Spread src="${f.name}"/>`).join("")}${sections}<idPkg:BackingStory src="XML/BackingStory.xml"/><idPkg:Story src="Stories/Story_${storyId}.xml"/>${nombreStories.map((st) => `<idPkg:Story src="Stories/Story_${st.id}.xml"/>`).join("")}</Document>`;
+<Document ${NS} DOMVersion="${DOM}" Self="d" StoryList="${[storyId, ...markStories.map((st) => st.id), "ub"].join(" ")}" ZeroPoint="0 0" ActiveLayer="uL" CMYKProfile="Japan Color 2001 Coated" RGBProfile="sRGB IEC61966-2.1" SolidColorIntent="UseColorSettings" AfterBlendingIntent="UseColorSettings" DefaultImageIntent="UseColorSettings" RGBPolicy="PreserveEmbeddedProfiles" CMYKPolicy="CombinationOfPreserveAndSafeCmyk" AccurateLABSpots="false"><idPkg:Graphic src="Resources/Graphic.xml"/><idPkg:Fonts src="Resources/Fonts.xml"/><idPkg:Styles src="Resources/Styles.xml"/><idPkg:Preferences src="Resources/Preferences.xml"/><idPkg:Tags src="XML/Tags.xml"/><Layer Self="uL" Name="レイヤー 1" Visible="true" Locked="false" IgnoreWrap="false" ShowGuides="true" LockGuides="false" UI="true" Expendable="true" Printable="true"><Properties><LayerColor type="enumeration">LightBlue</LayerColor></Properties></Layer>${masterSpreads.map((m) => `<idPkg:MasterSpread src="MasterSpreads/MasterSpread_${m.self}.xml"/>`).join("")}${spreadFiles.map((f) => `<idPkg:Spread src="${f.name}"/>`).join("")}${sections}${textVariables}<idPkg:BackingStory src="XML/BackingStory.xml"/><idPkg:Story src="Stories/Story_${storyId}.xml"/>${markStories.map((st) => `<idPkg:Story src="Stories/Story_${st.id}.xml"/>`).join("")}</Document>`;
   return {
     files: [
       { name: "mimetype", data: new TextEncoder().encode("application/vnd.adobe.indesign-idml-package") },
@@ -558,11 +673,10 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       { name: "Resources/Preferences.xml", data: xmlFile(preferences) },
       { name: "XML/Tags.xml", data: xmlFile(tags) },
       { name: "XML/BackingStory.xml", data: xmlFile(backing) },
-      { name: "MasterSpreads/MasterSpread_um.xml", data: xmlFile(masterA) },
-      { name: "MasterSpreads/MasterSpread_un.xml", data: xmlFile(masterB) },
+      ...masterSpreads.map((m) => ({ name: `MasterSpreads/MasterSpread_${m.self}.xml`, data: xmlFile(m.xml) })),
       ...spreadFiles,
       { name: `Stories/Story_${storyId}.xml`, data: xmlFile(story) },
-      ...nombreStories.map((st) => ({ name: `Stories/Story_${st.id}.xml`, data: xmlFile(st.xml) })),
+      ...markStories.map((st) => ({ name: `Stories/Story_${st.id}.xml`, data: xmlFile(st.xml) })),
     ],
     links: [...linkFiles.values()].map((l) => ({ path: l.path, data: l.data })),
     skipped: [...skipped],

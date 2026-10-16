@@ -81,9 +81,29 @@ export interface ParagraphStyle {
   tracking: number;
   /** 先頭文字スタイル：段落の頭から順に、決めた範囲の字に文字スタイルを当てる（上の規則から順に）。 */
   nested: NestedStyle[];
-  /** 行スタイル：段落の最初の何行かに文字スタイルを当てる（書体・色・太字・字形だけ。0行なら使わない）。 */
+  /** 行スタイル：段落の最初の何行かに文字スタイルを当てる（書体・色・太字・字形・大きさ・字間。0行なら使わない）。 */
   lineStyle: LineStyle;
+  /** ルビの揃え（空なら文書の設定）。 */
+  rubyAlign: RubyAlign;
+  /** ルビの側（空なら文書の設定）。 */
+  rubySide: RubySide;
 }
+
+/** ルビの揃え：空は「文書（または段落）の設定のまま」。 */
+export type RubyAlign = "" | "121" | "center" | "shoulder";
+/** ルビの側：空は「文書（または段落）の設定のまま」。 */
+export type RubySide = "" | "right" | "left";
+export const RUBY_ALIGNS: [RubyAlign, string][] = [
+  ["", "文書の設定のまま"],
+  ["121", "1-2-1"],
+  ["center", "中付き"],
+  ["shoulder", "肩付き"],
+];
+export const RUBY_SIDES: [RubySide, string][] = [
+  ["", "文書の設定のまま"],
+  ["right", "右（横組みでは上）"],
+  ["left", "左（横組みでは下）"],
+];
 
 /** 先頭文字スタイルの規則1つ。 */
 export interface NestedStyle {
@@ -206,6 +226,9 @@ export interface CharacterStyle {
   deformRatio: number;
   /** 字間（全角1字の 1/1000）。0 なら段落の字間のまま。 */
   tracking: number;
+  /** ルビの揃え・側（空なら段落・文書の設定のまま）。 */
+  rubyAlign: RubyAlign;
+  rubySide: RubySide;
 }
 
 /** 字形の切り替え（OpenType の機能の名前）。フォントにその機能がなければ変わらない。 */
@@ -251,6 +274,8 @@ const paragraph = (name: string, over: Partial<ParagraphStyle> = {}): ParagraphS
   tracking: 0,
   nested: [],
   lineStyle: { style: "", lines: 0 },
+  rubyAlign: "",
+  rubySide: "",
   ...over,
 });
 
@@ -265,6 +290,8 @@ const character = (name: string, over: Partial<CharacterStyle> = {}): CharacterS
   deform: "",
   deformRatio: 80,
   tracking: 0,
+  rubyAlign: "",
+  rubySide: "",
   ...over,
 });
 
@@ -286,6 +313,9 @@ const dropCapOf = (v: unknown): DropCap => {
   const lines = Math.round(num(d.lines, 0, 0, 5));
   return { lines: lines < 2 ? 0 : lines, chars: Math.round(num(d.chars, 1, 1, 5)), style: typeof d.style === "string" ? d.style : "" };
 };
+
+const rubyAlignOf = (v: unknown): RubyAlign => (v === "121" || v === "center" || v === "shoulder" ? v : "");
+const rubySideOf = (v: unknown): RubySide => (v === "right" || v === "left" ? v : "");
 
 /** 先頭文字スタイルの規則を読む（8つまで）。 */
 const nestedOf = (v: unknown): NestedStyle[] =>
@@ -404,6 +434,8 @@ export function normalizeStyles(input: unknown): StyleSheet {
         tracking: Math.round(num(p.tracking, 0, -500, 1000)),
         nested: nestedOf(p.nested),
         lineStyle: lineStyleOf(p.lineStyle),
+        rubyAlign: rubyAlignOf(p.rubyAlign),
+        rubySide: rubySideOf(p.rubySide),
       }),
     );
   for (const def of DEFAULT_STYLES.paragraph) {
@@ -422,6 +454,8 @@ export function normalizeStyles(input: unknown): StyleSheet {
         deform: deform(c.deform),
         deformRatio: Math.round(num(c.deformRatio, 80, 30, 99)),
         tracking: Math.round(num(c.tracking, 0, -500, 1000)),
+        rubyAlign: rubyAlignOf(c.rubyAlign),
+        rubySide: rubySideOf(c.rubySide),
       }),
     );
   return { paragraph: paragraphs, character: Array.isArray(src.character) ? characters : structuredClone(DEFAULT_STYLES.character) };

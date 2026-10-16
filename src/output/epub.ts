@@ -142,6 +142,12 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   const atomsHtml = (atoms: Atom[], paraStyle?: string): string => {
     let out = "";
     let style: string | undefined;
+    // 相互参照の字（参照先へのリンク）：続く字が同じ飛び先なら1つのリンクにまとめる。
+    let link: string | undefined;
+    const closeLink = () => {
+      if (link !== undefined) out += "</a>";
+      link = undefined;
+    };
     const rules = paraStyle ? grepOf.get(paraStyle) : undefined;
     const grep = rules ? grepCellStyles(atoms, rules) : undefined;
     // 先頭文字スタイル（段落の頭の字だけ。段落スタイルの規則で）。
@@ -150,10 +156,16 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
     for (const [ai, a] of atoms.entries()) {
       // 文字スタイルの切り替え。原稿で当てた文字スタイルが優先、なければ正規表現スタイル。
       const want = a.style && cIndex.has(a.style) ? a.style : (grep?.[ai].find((s) => s !== undefined) ?? nested?.[ai].find((s) => s !== undefined) ?? a.style);
+      const target = !a.pageRef && a.link?.startsWith("l:") ? a.link.slice(2) : undefined;
+      if (target !== link || want !== style) closeLink();
       if (want !== style) {
         if (style !== undefined && cIndex.has(style)) out += "</span>";
         style = want;
         if (style !== undefined && cIndex.has(style)) out += `<span class="cs${cIndex.get(style)}">`;
+      }
+      if (target !== undefined && link === undefined) {
+        out += `<a class="ref" href="\u0001ref:${esc(target)}\u0001">`;
+        link = target;
       }
       if (a.label) {
         labels.set(a.label, currentFile());
@@ -186,6 +198,7 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
       if (space) inner = `<span style="letter-spacing:${space / 1000}em">${inner}</span>`;
       out += inner;
     }
+    closeLink();
     if (style !== undefined && cIndex.has(style)) out += "</span>";
     return out;
   };
@@ -429,11 +442,25 @@ function mathSvg(tex: string, display: boolean): string {
 }
 
 /** スタイルシート：組み方向、段落・文字スタイル、ルビ・圏点・縦中横・表・画像。 */
+/** スタイルで決めたルビの揃え・側（空なら文書の設定のまま）。 */
+function styleRubyCss(selector: string, s: { rubyAlign: string; rubySide: string }): string {
+  const rules = [
+    s.rubySide === "left" ? "ruby-position:under;-epub-ruby-position:under;-webkit-ruby-position:after" : s.rubySide === "right" ? "ruby-position:over;-epub-ruby-position:over;-webkit-ruby-position:before" : "",
+    s.rubyAlign === "center" ? "ruby-align:center" : s.rubyAlign === "shoulder" ? "ruby-align:start" : s.rubyAlign === "121" ? "ruby-align:space-around" : "",
+  ].filter(Boolean);
+  return rules.length > 0 ? `\n${selector} ruby{${rules.join(";")};}` : "";
+}
+
 /** 行スタイル：EPUB では読む側が行を分けるので、1行目だけ（::first-line）に当てる。 */
 function lineStyleCss(s: ParagraphStyle, i: number, characters: CharacterStyle[]): string {
   const cs = s.lineStyle.lines > 0 ? characters.find((c) => c.name === s.lineStyle.style) : undefined;
   if (!cs) return "";
-  const rules = [cs.color ? `color:${cs.color}` : "", cs.bold ? "font-weight:bold" : ""].filter(Boolean);
+  const rules = [
+    cs.color ? `color:${cs.color}` : "",
+    cs.bold ? "font-weight:bold" : "",
+    cs.scale !== 1 ? `font-size:${cs.scale}em` : "",
+    cs.tracking ? `letter-spacing:${cs.tracking / 1000}em` : "",
+  ].filter(Boolean);
   return rules.length > 0 ? `.ps${i}::first-line{${rules.join(";")}}` : "";
 }
 
@@ -470,7 +497,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       family("ps", i) ? `font-family:${family("ps", i)}${family("body")}serif` : "",
       ...decorationCss(s),
     ].filter(Boolean);
-    return `.ps${i}{${rules.join(";")}}${dropCapCss(s, i, settings.styles.character)}${lineStyleCss(s, i, settings.styles.character)}`;
+    return `.ps${i}{${rules.join(";")}}${dropCapCss(s, i, settings.styles.character)}${lineStyleCss(s, i, settings.styles.character)}${styleRubyCss(`.ps${i}`, s)}`;
   };
   const c = (s: CharacterStyle, i: number) => {
     const rules = [
@@ -480,7 +507,7 @@ function css(settings: Settings, vertical: boolean, fonts: EpubFont[] = []): str
       s.tracking ? `letter-spacing:${s.tracking / 1000}em` : "",
       family("cs", i) ? `font-family:${family("cs", i)}${family("body")}serif` : "",
     ].filter(Boolean);
-    return `.cs${i}{${rules.join(";")}}`;
+    return `.cs${i}{${rules.join(";")}}${styleRubyCss(`.cs${i}`, s)}`;
   };
   const mode = vertical ? "vertical-rl" : "horizontal-tb";
   return `@charset "UTF-8";

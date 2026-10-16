@@ -134,6 +134,8 @@ export function resolvePage(page: PageLayout, faces: Face[], textColor: string):
     ...(page.labels ? { labels: page.labels } : {}),
     ...(page.headings.length > 0 ? { headings: page.headings } : {}),
     ...(page.nombre ? { nombre: page.nombre } : {}),
+    ...(page.marks ? { marks: page.marks } : {}),
+    ...(page.opening ? { opening: true } : {}),
     // 色の決まっていない線（傍線）は文字の色にする。
     shapes: [
       ...page.shapes.map((s) => (s.kind === "line" && !s.color ? { ...s, color: textColor } : s)),
@@ -165,7 +167,7 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
     // 時計回りに 90° 回すと、字形の上（y の正）が右を向く。仮想ボディの中心を行の中心に合わせる。
     const shaped = face.shape(g.text, "ltr");
     const baselineX = g.x - (face.emBottom + face.upem / 2) * scale * gy;
-    return { ...base, font: "horiz", glyphs: withOffsets(shaped), x: baselineX, y: g.y, rotate: true };
+    return { ...base, font: "horiz", glyphs: spaced(withOffsets(shaped), g.spacing, face.upem), x: baselineX, y: g.y, rotate: true };
   }
 
   if (g.kind === "hcell") {
@@ -175,7 +177,7 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
     // 横の縮め：縦中横に収める縮めと、長体の縮めを掛け合わせる。
     const sx = (g.fit ? Math.min(1, (face.upem * TCY_MAX_WIDTH) / total) : 1) * gx;
     const x = g.fit ? g.x + (g.size * gx - total * scale * sx) / 2 : g.x;
-    return { ...base, font: "horiz", glyphs: withOffsets(shaped), x, y: g.y + (face.emBottom + face.upem / 2) * scale * gy, sx };
+    return { ...base, font: "horiz", glyphs: g.fit ? withOffsets(shaped) : spaced(withOffsets(shaped), g.spacing, face.upem), x, y: g.y + (face.emBottom + face.upem / 2) * scale * gy, sx };
   }
 
   if (g.kind === "hmark") {
@@ -209,6 +211,12 @@ function resolveGlyph(g: PlacedGlyph, faceIndex: number, face: Face, color: stri
 
 function totalAdvance(shaped: readonly ShapedGlyph[]): number {
   return shaped.reduce((sum, s) => sum + s.advance, 0);
+}
+
+/** 字間：k 字目の字形を、k 字分の字間だけ送り方向にずらす（spacing は字の大きさに対する割合）。共有の並びは書き換えない。 */
+function spaced(glyphs: { gid: number; dx: number }[], spacing: number | undefined, upem: number): { gid: number; dx: number }[] {
+  if (!spacing) return glyphs;
+  return glyphs.map((g, k) => ({ gid: g.gid, dx: g.dx + k * spacing * upem }));
 }
 
 /** シェーピング結果ごとに、字形の並び（送り量の累計つき）を1つだけ作って共有する。 */

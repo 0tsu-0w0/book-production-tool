@@ -311,6 +311,9 @@ const prepared = new WeakMap<TextBlock, string>();
  * 注（番号を振り直す）・ページ番号の参照（番号が入る）・数式（組めなかった知らせを毎回出す）・ページごとの注を持つ段落。
  */
 function reusable(b: TextBlock): boolean {
+  // 行スタイルで字の長さを変える段落は、行に分けるときにマスの長さを書き換えるので、毎回準備し直す。
+  const ls = b.format?.lineStyle;
+  if (ls && ((ls.scale ?? 1) !== 1 || ls.tracking)) return false;
   return !b.atoms.some((a) => a.note || a.noteBlock || a.pageRef || a.cells.some((c) => c.math));
 }
 

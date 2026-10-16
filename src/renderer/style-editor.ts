@@ -19,6 +19,10 @@ import {
   type CharacterStyle,
   type ParagraphStyle,
   type NestedStyle,
+  RUBY_ALIGNS,
+  RUBY_SIDES,
+  type RubyAlign,
+  type RubySide,
   type StyleSheet,
 } from "../document/styles.js";
 
@@ -207,6 +211,29 @@ export class StyleEditor {
     deformRow.className = "row";
     deformRow.append(kind, ratio);
     this.root.append(this.labeled("長体・平体", deformRow));
+
+    // ルビの揃え・側（空なら文書の設定。文字スタイルは段落スタイルより優先）。
+    const rubyRow = document.createElement("div");
+    rubyRow.className = "row";
+    rubyRow.append(
+      this.select(
+        RUBY_ALIGNS.map(([k, label]) => [k, k === "" && this.kind === "character" ? "段落と同じ" : label]),
+        style.rubyAlign,
+        (v) => {
+          style.rubyAlign = v as RubyAlign;
+          this.onChange();
+        },
+      ),
+      this.select(
+        RUBY_SIDES.map(([k, label]) => [k, k === "" && this.kind === "character" ? "段落と同じ" : label]),
+        style.rubySide,
+        (v) => {
+          style.rubySide = v as RubySide;
+          this.onChange();
+        },
+      ),
+    );
+    this.root.append(this.labeled("ルビの揃えと側", rubyRow));
 
     // 字間（トラッキング）：字のあとに足す長さ。全角1字の 1/1000（InDesign と同じ単位）。
     this.root.append(
@@ -460,7 +487,7 @@ export class StyleEditor {
     const help = document.createElement("p");
     help.className = "hint";
     help.textContent =
-      "先頭文字スタイル：段落の頭から順に、決めた範囲の字に文字スタイルを当てます（上の規則の範囲が終わると、続きの字から次の規則）。区切りの字が見つからなければ段落の終わりまで。行スタイル：段落の最初の何行かの字に当てます（書体・色・太字・字形だけ。大きさなどの字の長さは変えません）。原稿の文字スタイルと正規表現スタイルが優先します。";
+      "先頭文字スタイル：段落の頭から順に、決めた範囲の字に文字スタイルを当てます（上の規則の範囲が終わると、続きの字から次の規則）。区切りの字が見つからなければ段落の終わりまで。行スタイル：段落の最初の何行かの字に、文字スタイルの書体・色・太字・字形・大きさ・字間を当てます（大きさや字間で行の分かれ目が変われば、組み直して決めます）。原稿の文字スタイルと正規表現スタイルが優先します。";
     box.append(legend, help);
     const names = sheet.character.map((c) => c.name);
     const styleOptions = (current: string): [string, string][] => {

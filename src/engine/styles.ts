@@ -38,6 +38,9 @@ export interface EngineParagraphStyle {
   tracking?: number;
   /** 先頭文字スタイル。 */
   nested?: NestedStyle[];
+  /** ルビの揃え・側（空なら文書の設定）。 */
+  rubyAlign?: "" | "121" | "center" | "shoulder";
+  rubySide?: "" | "right" | "left";
   /** 行スタイル。 */
   lineStyle?: LineStyle;
 }
@@ -55,6 +58,8 @@ export interface EngineCharacterStyle {
   deformRatio?: number;
   /** 字間（全角1字の 1/1000）。0 なら段落の字間のまま。 */
   tracking?: number;
+  rubyAlign?: "" | "121" | "center" | "shoulder";
+  rubySide?: "" | "right" | "left";
 }
 
 export interface EngineStyles {
@@ -107,6 +112,8 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         bold: ls.bold,
         ...(ls.color ? { color: ls.color } : {}),
         ...(ls.glyphForm ? { features: ls.glyphForm } : {}),
+        ...(ls.scale !== 1 ? { scale: ls.scale } : {}),
+        ...(ls.tracking ? { tracking: ls.tracking } : {}),
       };
     }
     // 行頭の［＃名前］が段落スタイルでなく文字スタイルの名前なら、その行全体に文字スタイルを当てる（閉じ忘れなど）。
@@ -125,6 +132,11 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
         const byNested = !own && !byGrep && nested?.[ai][ci];
         const cs = own ?? (byGrep ? styles.character.get(byGrep) : undefined) ?? (byNested ? styles.character.get(byNested) : undefined) ?? lineStyle;
         cell.charStyled = !!cs || undefined;
+        // 行スタイルで大きさ・字間を変えた印は、組むたびに付け直す。
+        cell.lineOrig = undefined;
+        // ルビの揃え・側：文字スタイル → 段落スタイル（空なら文書の設定）。
+        cell.rubyAlign = cs?.rubyAlign || ps.rubyAlign || undefined;
+        cell.rubySide = cs?.rubySide || ps.rubySide || undefined;
         cell.font = cs && cs.font >= 0 ? cs.font : ps.font;
         cell.halfLatin = undefined;
         // 合成フォント：本文の書体（0）の字だけ、かな・欧文を別の書体にする。

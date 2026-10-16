@@ -148,7 +148,8 @@ describe("TeX：マクロ・参照・図", () => {
     const out = texToMarkup(src).text;
     // \label は見出しの行に付く。
     assert.match(out, /^＃＃はじめに［＃ラベル：s:a］$/m);
-    assert.match(out, /「はじめに」と［＃ページ：s:a］と\?\?/);
+    // \ref は相互参照：組むときにその見出しの題が入る（ないラベルは「？」で、書き出す前の検査で知らせる）。
+    assert.match(out, /「［＃見出し：s:a］」と［＃ページ：s:a］と「［＃見出し：nai］」/);
     assert.match(out, /［＃画像：cat　大きさ：50%　キャプション：猫 \[1\]］/);
   });
 });

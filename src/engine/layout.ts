@@ -298,6 +298,44 @@ export function breakLines(atoms: Atom[], width: number | ((lineIndex: number) =
   return lines;
 }
 
+/**
+ * 行スタイルの大きさ・字間：最初の ls.lines 行にある字（文字スタイルの当たっていない字）の長さを変えて、行に分け直す。
+ * 長さを変えると行の分かれ目が動くので、当たる字が変わらなくなるまで繰り返す（多くて4回）。
+ * マスの値は書き換えるが、変える前の値を lineOrig に残し、当たらなくなった字は戻す（この段落は組むたびに準備し直す）。
+ */
+function applyLineStyleLengths(atoms: Atom[], lines: Line[], ls: LineStyleFormat, rebreak: () => Line[]): Line[] {
+  const s = ls.scale ?? 1;
+  const add = (ls.tracking ?? 0) / 1000;
+  const set = (cell: Cell, on: boolean) => {
+    if (on === !!cell.lineOrig) return false;
+    if (on) {
+      cell.lineOrig = { advance: cell.advance, scale: cell.scale, compress: cell.compress, shift: cell.shift, endAki: cell.endAki };
+      const scale = (cell.scale ?? 1) * s;
+      cell.advance = (cell.advance ?? 1) * s + add * scale * (cell.rotate ? [...cell.text].length : 1);
+      cell.scale = scale;
+      if (cell.compress) cell.compress *= s;
+      if (cell.shift) cell.shift *= s;
+      if (cell.endAki) cell.endAki *= s;
+    } else {
+      Object.assign(cell, cell.lineOrig);
+      cell.lineOrig = undefined;
+    }
+    return true;
+  };
+  let current = lines;
+  for (let pass = 0; pass < 4; pass++) {
+    const first = new Set(current.slice(0, ls.lines).flatMap((l) => l.atoms.flatMap((a) => a.cells)));
+    let changed = false;
+    for (const atom of atoms) {
+      if (atom.warichu !== undefined) continue;
+      for (const cell of atom.cells) if (!cell.charStyled && !cell.math && set(cell, first.has(cell))) changed = true;
+    }
+    if (!changed) break;
+    current = rebreak();
+  }
+  return current;
+}
+
 /** ページの行：本文の行、空行（1行）、または数字（その行数分の空き。行送りを変えた段落の端数を埋める）。 */
 type PageLine = Line | "blank" | number;
 
@@ -515,13 +553,18 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       ? Math.min(Math.ceil(drop.cap.reduce((s, a) => s + a.cells.length, 0) * dropEm - EPS), Math.max(0, spec.charsPerLine - indent - 1))
       : 0;
     const lineWidth = (i: number) => widthAt(i) - (i < dropLines ? dropLength : 0);
+    // 行スタイルで大きさ・字間を変える段落：最初の何行かの字の長さを変えて分け直す（行の分け方が変わるので、落ち着くまで）。
+    const ls = f.lineStyle;
+    const resizes = !!ls && ((ls.scale ?? 1) !== 1 || !!ls.tracking);
     // 回り込みのない段落は、行の字数がどの行も同じなので、前の行分けを使い回せる。
-    const key = breaks && !w ? `${optsKey(lineOpts)}|${indent}|${hang}|${dropLines},${dropLength}` : undefined;
+    const key = breaks && !w && !resizes ? `${optsKey(lineOpts)}|${indent}|${hang}|${dropLines},${dropLength}` : undefined;
     let broken = key ? breaks!.get(block, key) : undefined;
+    const breakAll = () => breakLines(drop ? drop.rest : block.atoms, w || drop ? lineWidth : spec.charsPerLine, indent, lineOpts, hang);
     if (!broken) {
-      broken = breakLines(drop ? drop.rest : block.atoms, w || drop ? lineWidth : spec.charsPerLine, indent, lineOpts, hang);
+      broken = breakAll();
       if (key) breaks!.set(block, key, broken);
     }
+    if (resizes) broken = applyLineStyleLengths(drop ? drop.rest : block.atoms, broken, ls!, breakAll);
     const count = broken.length;
     // 罫線・網掛けのある段落：この段落の行に同じ印を付ける（ページに置くとき、行をまとめて囲むため）。
     const para = f.deco ? { deco: f.deco } : undefined;
@@ -1171,6 +1214,8 @@ function placeLine(
       // 1字ごとに作るので、使わない項目のための一時的なオブジェクトを作らない（組み直しを速くするため）。
       const g: PlacedGlyph = { text, kind, x, y, size: size * scale, font: cell.font, bold: cell.bold, color: cell.color };
       if (cell.features) g.features = cell.features;
+      // 横倒しの語の字間：字形を1字ずつ離して描く。
+      if (cell.rotate && cell.letterSpace && !cell.math) g.spacing = cell.letterSpace;
       // 行スタイル：文字スタイルの当たっていない字だけ（字の長さは変えないので、行分けはそのまま）。
       const ls = line.lineStyle;
       if (ls && !cell.charStyled && !cell.math) {
@@ -1217,9 +1262,10 @@ function placeLine(
       const rs = rubySize * scale;
       const spanTop = bandTop + spanStart * size + (ruby?.rubyShift ?? 0) * size;
       // 親文字の右（left なら左）に、離す量だけ空けて置く。
-      const side = ruby?.rubySide === "left" ? -1 : 1;
+      // 揃えと側は、スタイルで決めていればそれ（親文字の最初のマス）、なければ文書の設定。
+      const side = (first.rubySide ?? ruby?.rubySide) === "left" ? -1 : 1;
       const rx = x + side * ((size * scale) / 2 + rs / 2 + (ruby?.rubyGap ?? 0) * size);
-      placeRuby(glyphs, atom.ruby, rx, spanTop, (spanEnd - spanStart) * size, rs, (atom.rubyBefore ?? 0) * size, first, ruby?.rubyAlign);
+      placeRuby(glyphs, atom.ruby, rx, spanTop, (spanEnd - spanStart) * size, rs, (atom.rubyBefore ?? 0) * size, first, first.rubyAlign ?? ruby?.rubyAlign);
     }
   }
   shapes.push(...sideLineShapes(sideRuns, horizontal));
