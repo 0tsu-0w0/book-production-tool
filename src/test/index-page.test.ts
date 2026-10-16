@@ -28,6 +28,30 @@ describe("索引", () => {
     assert.deepEqual(splitIndexTerm("あめ"), { term: "あめ", reading: "あめ" });
   });
 
+  it("ルビの親字の中の［＃索引：…］・［＃ラベル：…］は注記として読み、親字には残さない", () => {
+    const text = (atoms: ReturnType<typeof parseInline>) => atoms.map((a) => a.cells.map((c) => c.text).join("")).join("");
+    // 熟語ルビ：Atom は一つ。
+    const a = parseInline("その日、｜図書館［＃索引：図書館（としょかん）］《としょかん》の窓");
+    assert.equal(text(a), "その日、図書館の窓");
+    const rb = a.find((x) => x.ruby === "としょかん")!;
+    assert.equal(rb.cells.map((c) => c.text).join(""), "図書館");
+    assert.deepEqual(rb.index, [{ term: "図書館", reading: "としょかん" }]);
+    // 「語｜よみ」の形でも親字の区切りにしない。ラベルも付く。
+    const b = parseInline("｜活版［＃索引：活版｜かっぱん］［＃ラベル：kappan］《かっぱん》");
+    assert.equal(text(b), "活版");
+    assert.deepEqual(b[0].index, [{ term: "活版", reading: "かっぱん" }]);
+    assert.equal(b[0].label, "kappan");
+    // モノルビ：注記の直前の字に付ける。
+    const c = parseInline("｜図［＃索引：図（ず）］書《と|しょ》");
+    assert.equal(text(c), "図書");
+    assert.deepEqual(c[0].index, [{ term: "図", reading: "ず" }]);
+    assert.equal(c[1].index, undefined);
+    // 圏点にも。
+    const d = parseInline("｜大事［＃索引：大事（だいじ）］《ゴマ》");
+    assert.equal(text(d), "大事");
+    assert.deepEqual(d[1].index, [{ term: "大事", reading: "だいじ" }]);
+  });
+
   it("五十音の行に分け、読みの順に並べる（濁点・小さい字は清音と同じ位置。英数字とその他は後ろ）", () => {
     assert.equal(indexGroup("がっこう"), "か");
     assert.equal(indexGroup("ヴァイオリン"), "あ");

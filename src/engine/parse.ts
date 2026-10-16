@@ -132,7 +132,27 @@ const RUBY_RB = /^\[\[rb:(.+?)\s*>\s*(.+?)\]\]/;
 /** 文字スタイルの始まりと終わり：［＃名前］…［＃／名前］。行頭の［＃名前］だけなら段落スタイル。 */
 const STYLE_OPEN = /^［＃([^［］／]+?)］/;
 const STYLE_CLOSE = /^［＃／([^［］]+?)］/;
-const RUBY_BAR = /^[｜|]([^｜|《》\n]+)《([^《》\n]+)》/;
+/** 親字の中の［＃…］（索引・ラベル）は、中に「｜」があっても親字の区切りにしない。 */
+const RUBY_BAR = /^[｜|]((?:［＃[^［］\n]*］|[^｜|《》\n])+)《([^《》\n]+)》/;
+/** 親字の中に書ける注記：［＃索引：語（よみ）］・［＃ラベル：名前］。 */
+const BASE_MARK = /［＃(索引|ラベル)[：:]([^［］]+)］/gu;
+
+/**
+ * 親字から索引とラベルの注記を取り除く。
+ * 注記は直前の字に付ける（親字の先頭なら最初の字に）。at はその字の番号。
+ */
+function stripBaseMarks(base: string): { chars: string[]; marks: { at: number; kind: string; value: string }[] } {
+  const chars: string[] = [];
+  const marks: { at: number; kind: string; value: string }[] = [];
+  let last = 0;
+  for (const m of base.matchAll(BASE_MARK)) {
+    chars.push(...splitChars(base.slice(last, m.index)));
+    marks.push({ at: Math.max(chars.length - 1, 0), kind: m[1], value: m[2] });
+    last = m.index + m[0].length;
+  }
+  chars.push(...splitChars(base.slice(last)));
+  return { chars, marks };
+}
 const RUBY_IMPLICIT = /^《([^《》\n]+)》/;
 const DIGITS = /^[0-9]+/;
 /** 自動で縦中横にする数字か（2桁から上限の桁数まで）。 */
@@ -322,16 +342,25 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     }
 
     if ((m = RUBY_RB.exec(rest)) || (m = RUBY_BAR.exec(rest))) {
-      const base = splitChars(m[1]);
+      const { chars: base, marks } = stripBaseMarks(m[1]);
       const mark = KENTEN_MARKS[m[2]];
       const line = SIDELINES[m[2]];
+      const added: Atom[] = [];
       if (mark) {
-        for (const ch of base) atoms.push({ ...charAtom(ch), kenten: mark });
+        for (const ch of base) added.push({ ...charAtom(ch), kenten: mark });
       } else if (line) {
-        for (const ch of base) atoms.push({ ...charAtom(ch), sideline: line });
+        for (const ch of base) added.push({ ...charAtom(ch), sideline: line });
       } else {
-        atoms.push(...rubyAtoms(base.map((ch) => toFullWidth(ch)), m[2]));
+        added.push(...rubyAtoms(base.map((ch) => toFullWidth(ch)), m[2]));
       }
+      // 親字の中の注記は、その字を含む Atom に付ける（熟語ルビなら Atom は一つ）。
+      for (const { at, kind, value } of marks) {
+        const a = added.length === 1 ? added[0] : added[Math.min(at, added.length - 1)];
+        if (!a) continue;
+        if (kind === "索引") (a.index ??= []).push(splitIndexTerm(value));
+        else a.label = value.trim();
+      }
+      atoms.push(...added);
       i += m[0].length;
       continue;
     }
