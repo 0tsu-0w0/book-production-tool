@@ -898,6 +898,8 @@ ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseN
       images,
       linkPath: (file) => path.join(linkDir, file),
       bodyStart: bodyStart > 0 ? bodyStart : undefined,
+      // Kolophon で組んだ目次・索引（ページ番号を入れたもの）。
+      generated: result.generated(),
       // ページの名前（001・i など）から、紙面に出す番号の字にする。
       pageOf: (label) => {
         const i = labels.get(label);

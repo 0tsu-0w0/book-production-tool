@@ -1,5 +1,5 @@
 import { horizontalPunctuation, leftBound, spotInks, toFormatOptions, toLayoutSpec, toParseOptions, type FontChoice, type Settings, type SpotColor } from "../document/settings.js";
-import { NOTE_STYLE, hasDecoration, type CharacterStyle, type GlyphForm, type ParagraphStyle } from "../document/styles.js";
+import { INDEX_ENTRY_STYLE, NOTE_STYLE, TOC_ENTRY_STYLES, TOC_TITLE_STYLE, hasDecoration, type CharacterStyle, type GlyphForm, type ParagraphRule, type ParagraphStyle, type RuleKind } from "../document/styles.js";
 import { storyFingerprint, type KolophonHint } from "../document/idml-import.js";
 import { escapeXml, findAll, parseXml } from "../document/xml.js";
 import { bookPageBlocks } from "../engine/book-pages.js";
@@ -16,8 +16,10 @@ import { expandXrefs } from "../engine/xref.js";
 // 段落スタイル・文字スタイル（大きさ・行送り・字下げ・揃え・前後の空き・色・字間・長体平体・字形・
 // ドロップキャップ・先頭文字スタイル・正規表現スタイル・行スタイル）、色（CMYK・特色・特色の濃さ）、
 // 本文（ルビ・圏点・傍線・縦中横・割注・字間・カーニング・改ページ・改丁）、注（章末か巻末の段落）、
-// ページ番号の参照・相互参照（Kolophon で組んだページ番号の字）。
-// 入れないもの（書き出しの結果で知らせる）：目次・索引・段落の罫線と網掛け・数式の形。
+// ページ番号の参照・相互参照（Kolophon で組んだページ番号の字）、段落の罫線（前・後）・囲み罫・網掛け、
+// 目次（Kolophon で組んだ目次の字と、InDesign で作り直すための目次スタイル）、
+// 索引（Kolophon で組んだ索引の字と、本文の語の所の索引の項目。InDesign の索引パネルで作り直せる）。
+// 入れないもの（書き出しの結果で知らせる）：数式の形。
 // InDesign は受け取った文章を自分で組み直すので、行の分かれ目とページの区切りは Kolophon と同じにはならない。
 
 export interface IdmlFile {
@@ -50,6 +52,8 @@ export interface IdmlOptions {
   bodyStart?: number;
   /** ラベルのあるページの番号（［＃ページ：名前］に入れる字）。 */
   pageOf?: (label: string) => string | undefined;
+  /** Kolophon で組んだ目次と索引の段落（ページ番号を入れたもの）。なければ目次・索引は入れない。 */
+  generated?: { toc?: Block[]; index?: Block[] };
   /** 書体の名前（ファミリーとスタイル）。分からなければ書体を指定しない（InDesign の既定の書体）。 */
   fontName?: (f: FontChoice | null) => { family: string; style: string; postscriptName?: string; cff?: boolean } | undefined;
 }
@@ -185,6 +189,37 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     const props = [`<BasedOn type="string">$ID/[No character style]</BasedOn>`, font.family ? `<AppliedFont type="string">${escapeXml(font.family)}</AppliedFont>` : ""].join("");
     return `<CharacterStyle${attr("Self", charSelf(c.name))}${attr("Name", c.name)} Imported="false" KeyboardShortcut="0 0"${c.scale !== 1 ? attr("PointSize", n(size * c.scale)) : ""}${attr("FillColor", swatchOf(c.color))}${attr("FontStyle", font.style)}${c.tracking ? attr("Tracking", c.tracking) : ""}${c.deform === "condensed" ? attr("HorizontalScale", c.deformRatio) : ""}${c.deform === "flat" ? attr("VerticalScale", c.deformRatio) : ""}${c.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[c.glyphForm])}><Properties>${props}</Properties></CharacterStyle>`;
   };
+  /**
+   * 段落の罫線・網掛け（Kolophon → InDesign の段落境界線・段落の囲み罫・段落の背景色）。
+   * 縦組みでも InDesign の「前」は1行目の外側（右）なので、Kolophon と同じ側になる。
+   * 罫と字の間（gap）は本文の字の大きさに対する割合。前の罫は1行目のベースラインからの高さ（字の頭はベースラインの約 0.88 字上）。
+   */
+  const STROKE_TYPES: Record<RuleKind, string> = { solid: "StrokeStyle/$ID/Solid", double: "StrokeStyle/$ID/ThinThin", dotted: "StrokeStyle/$ID/Dotted", dashed: "StrokeStyle/$ID/Dashed" };
+  const ruleColor = (r: ParagraphRule, p: ParagraphStyle) => swatchOf(r.color ?? p.color ?? settings.textColor) ?? "Color/Black";
+  const decorationAttrs = (p: ParagraphStyle, pointSize: number) => {
+    const d = p.decoration;
+    if (!hasDecoration(d)) return "";
+    const width = d.length === "text" ? "TextWidth" : "ColumnWidth";
+    let out = "";
+    if (d.ruleBefore.on) {
+      const r = d.ruleBefore;
+      out += ` RuleAbove="true"${attr("RuleAboveLineWeight", n(r.width))}${attr("RuleAboveType", STROKE_TYPES[r.kind])}${attr("RuleAboveColor", ruleColor(r, p))}${attr("RuleAboveOffset", n(pointSize * 0.88 + r.gap * size))} RuleAboveWidth="${width}"`;
+    }
+    if (d.ruleAfter.on) {
+      const r = d.ruleAfter;
+      out += ` RuleBelow="true"${attr("RuleBelowLineWeight", n(r.width))}${attr("RuleBelowType", STROKE_TYPES[r.kind])}${attr("RuleBelowColor", ruleColor(r, p))}${attr("RuleBelowOffset", n(pointSize * 0.12 + r.gap * size))} RuleBelowWidth="${width}"`;
+    }
+    const pad = n(d.pad * size);
+    if (d.border.on) {
+      const r = d.border;
+      const w = n(r.width);
+      out += ` ParagraphBorderOn="true"${attr("ParagraphBorderType", STROKE_TYPES[r.kind])}${attr("ParagraphBorderColor", ruleColor(r, p))} ParagraphBorderTopLineWeight="${w}" ParagraphBorderBottomLineWeight="${w}" ParagraphBorderLeftLineWeight="${w}" ParagraphBorderRightLineWeight="${w}" ParagraphBorderTopOffset="${pad}" ParagraphBorderBottomOffset="${pad}" ParagraphBorderLeftOffset="${pad}" ParagraphBorderRightOffset="${pad}"`;
+    }
+    if (d.shading) {
+      out += ` ParagraphShadingOn="true"${attr("ParagraphShadingColor", swatchOf(d.shading))} ParagraphShadingWidth="${width}" ParagraphShadingTopOffset="${pad}" ParagraphShadingBottomOffset="${pad}" ParagraphShadingLeftOffset="${pad}" ParagraphShadingRightOffset="${pad}"`;
+    }
+    return out;
+  };
   const listItems = (name: string, items: string[]) => (items.length > 0 ? `<${name} type="list">${items.map((i) => `<ListItem type="record">${i}</ListItem>`).join("")}</${name}>` : "");
   const paraStyleXml = (p: ParagraphStyle) => {
     const font = p.font ? fontProps(p.font) : bodyFont;
@@ -203,7 +238,11 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       p.lineStyle.lines > 0 && characterNames.has(p.lineStyle.style)
         ? [`<AppliedCharacterStyle type="object">${escapeXml(charSelf(p.lineStyle.style))}</AppliedCharacterStyle><LineCount type="long">${p.lineStyle.lines}</LineCount>`]
         : [];
-    if (hasDecoration(p.decoration)) skipped.add("段落の罫線・網掛け");
+    // 目次・索引の項目：見出しとページ番号の間はタブ。行の終わりに右揃えのタブを置き、リーダーで埋める。
+    const leader = (TOC_ENTRY_STYLES as readonly string[]).includes(p.name) ? settings.toc.leader || "…" : p.name === INDEX_ENTRY_STYLE ? "…" : undefined;
+    const tabs = leader
+      ? `<TabList type="list"><ListItem type="record"><Alignment type="enumeration">RightAlign</Alignment><AlignmentCharacter type="string">.</AlignmentCharacter><Leader type="string">${escapeXml(leader)}</Leader><Position type="unit">${n(spec.charsPerLine * size)}</Position></ListItem></TabList>`
+      : "";
     const props = [
       `<BasedOn type="string">$ID/[No paragraph style]</BasedOn>`,
       `<Leading type="unit">${n(leading)}</Leading>`,
@@ -211,10 +250,23 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       listItems("AllNestedStyles", nested),
       listItems("AllGREPStyles", grep),
       listItems("AllLineStyles", lines),
+      tabs,
     ].join("");
-    return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}><Properties>${props}</Properties></ParagraphStyle>`;
+    return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}${decorationAttrs(p, pointSize)}><Properties>${props}</Properties></ParagraphStyle>`;
   };
   const paragraphStyles = settings.styles.paragraph.map(paraStyleXml);
+  // 目次スタイル：InDesign の「目次を更新」で、見出しの段落スタイルから目次を作り直せるように。
+  const tocEntries = (["大見出し", "中見出し"] as const)
+    .slice(0, Math.max(1, Math.min(2, settings.toc.levels)))
+    .flatMap((h, i) =>
+      paragraphNames.has(h) && paragraphNames.has(TOC_ENTRY_STYLES[i])
+        ? [`<TOCStyleEntry Self="TOCStyle/Kolophon目次TOCStyleEntry${i}" Name="${escapeXml(h)}" FormatStyle="${escapeXml(paraSelf(TOC_ENTRY_STYLES[i]))}" Level="${i + 1}" PageNumberPosition="AfterEntry" Separator="^t"/>`]
+        : [],
+    );
+  const tocStyleXml =
+    tocEntries.length > 0
+      ? `<TOCStyle Self="TOCStyle/Kolophon目次" Name="Kolophon目次" Title="${escapeXml(settings.toc.title)}" TitleStyle="${escapeXml(paragraphNames.has(TOC_TITLE_STYLE) ? paraSelf(TOC_TITLE_STYLE) : NO_PARA)}" RunIn="false" IncludeHidden="false" IncludeBookDocuments="false" SetStoryDirection="${vertical ? "Vertical" : "Horizontal"}">${tocEntries.join("")}</TOCStyle>`
+      : "";
   const paraScale = new Map(settings.styles.paragraph.map((p) => [p.name, p.scale]));
   const charScale = new Map(settings.styles.character.map((c) => [c.name, c.scale]));
   const characterStyles = settings.styles.character.map(charStyleXml);
@@ -273,9 +325,15 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return ` RubyAlignment="${RUBY_ALIGNMENT[align]}" RubyPosition="${side === "left" ? "BelowLeft" : "AboveRight"}"`;
   };
   const runs = (atoms: Atom[], lineStyle?: string, paraScale = 1, paraName?: string): string[] => {
-    const out: { key: string; open: string; text: string }[] = [];
+    const out: { key: string; open: string; text: string; pre: string }[] = [];
     for (const a of atoms) {
-      if (a.leader) continue;
+      if (a.leader) {
+        // 目次・索引の項目のリーダー：タブにする（リーダーの字は段落スタイルのタブで入る）。
+        const prev = out[out.length - 1];
+        if (prev) prev.text += "\t";
+        else out.push({ key: "tab", open: `<CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}">`, text: "\t", pre: "" });
+        continue;
+      }
       if (a.note) {
         noteNo++;
         notes.push({ no: noteNo, atoms: a.note });
@@ -297,13 +355,23 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
         (style && paraScale !== 1 && charScale.get(style) !== 1 ? attr("PointSize", n(size * paraScale * (charScale.get(style) ?? 1))) : "");
       const open = `<CharacterStyleRange${attr("AppliedCharacterStyle", style ? charSelf(style) : NO_CHAR)}${local}>`;
       const text = a.note ? `注${noteNo}` : atomText(a);
-      // ルビ・割注・カーニングのある字は、それだけで1つの並びにする（隣と混ざらないように）。
-      const key = a.ruby || a.warichu !== undefined || kern ? `${open}\u0000${out.length}` : open;
+      // 索引の語：その字の前に、索引の項目（ページの参照）を置く。
+      const pre = (a.index ?? []).map((e) => `<PageReference Self="${id("pr")}" PageReferenceType="CurrentPage" ReferencedTopic="${topicOf(e.term, e.reading)}"/>`).join("");
+      // ルビ・割注・カーニング・索引のある字は、それだけで1つの並びにする（隣と混ざらないように）。
+      const key = a.ruby || a.warichu !== undefined || kern || pre ? `${open}\u0000${out.length}` : open;
       const prev = out[out.length - 1];
       if (prev && prev.key === key) prev.text += text;
-      else out.push({ key, open, text });
+      else out.push({ key, open, text, pre });
     }
-    return out.map((r) => `${r.open}<Content>${escapeXml(r.text)}</Content>`);
+    return out.map((r) => `${r.open}${r.pre}<Content>${escapeXml(r.text)}</Content>`);
+  };
+  // 索引の項目（Topic）：表記と読みが同じ語は1つ。
+  const topics = new Map<string, { self: string; term: string; reading: string }>();
+  const topicOf = (term: string, reading: string) => {
+    const key = `${term}\u0000${reading}`;
+    let t = topics.get(key);
+    if (!t) topics.set(key, (t = { self: `diTopic${topics.size + 1}`, term, reading }));
+    return t.self;
   };
   const paragraph = (styleName: string, atoms: Atom[], lineStyle?: string) => {
     const parts = runs(atoms, lineStyle, paraScale.get(styleName) ?? 1, styleName);
@@ -410,11 +478,18 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
           pendingBreak = "NextPage";
           break;
         case "toc":
-          skipped.add("目次（InDesign の目次の機能で作り直してください）");
+        case "indexpage": {
+          // Kolophon で組んだ目次・索引の段落（ページ番号を入れたもの）を、新しいページから入れる。
+          const content = b.kind === "toc" ? opts.generated?.toc : opts.generated?.index;
+          if (!content) {
+            skipped.add(b.kind === "toc" ? "目次（InDesign の目次の機能で作り直してください）" : "索引");
+            break;
+          }
+          pendingBreak = "NextPage";
+          emit(content);
+          pendingBreak = "NextPage";
           break;
-        case "indexpage":
-          skipped.add("索引");
-          break;
+        }
         case "image":
           // ページに置ける画像は、本文には何も入れない（Kolophon で置いた所に、リンクの画像として置く）。
           if (placeable(b.name)) break;
@@ -613,6 +688,10 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     )
     .join("");
 
+  // 索引：本文の語の所に置いた項目の一覧（InDesign の索引パネルで「索引を生成」すると作り直せる）。
+  const indexXml =
+    topics.size > 0 ? `<Index Self="di">${[...topics.values()].map((t) => `<Topic Self="${t.self}" SortOrder="${escapeXml(t.reading)}" Name="${escapeXml(t.term)}"/>`).join("")}</Index>` : "";
+
   // ---- セクション（ページ番号の付け方）----
   const numerals = settings.nombreStyle.numerals === "kanji" ? "Kanji" : settings.nombreStyle.numerals === "fullwidth" ? "FullWidthArabic" : "Arabic";
   const front = settings.nombreStyle.front;
@@ -651,13 +730,13 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     .filter((sp) => swatches.has(sp.color.toLowerCase()))
     .map((sp, k) => `<Ink Self="Ink/${escapeXml(selfName(sp.name))}" Name="${escapeXml(sp.name)}" Angle="45" ConvertToProcess="false" Frequency="70" NeutralDensity="1" PrintInk="true" TrapOrder="${5 + k}" InkType="Normal"/>`)
     .join("");
-  const graphic = `<idPkg:Graphic ${NS} DOMVersion="${DOM}"><Color Self="Color/Black" Model="Process" Space="CMYK" ColorValue="0 0 0 100" ColorOverride="Specialblack" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Black" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Paper" Model="Process" Space="CMYK" ColorValue="0 0 0 0" ColorOverride="Specialpaper" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Paper" ColorEditable="true" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Registration" Model="Registration" Space="CMYK" ColorValue="100 100 100 100" ColorOverride="Specialregistration" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Registration" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/>${colorXml.join("")}${processInks}${usedSpotInks}<Swatch Self="Swatch/None" Name="None" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><StrokeStyle Self="StrokeStyle/$ID/Solid" Name="$ID/Solid"/><StrokeStyle Self="StrokeStyle/$ID/ThinThin" Name="$ID/ThinThin"/></idPkg:Graphic>`;
-  const styles = `<idPkg:Styles ${NS} DOMVersion="${DOM}"><RootCharacterStyleGroup Self="uc"><CharacterStyle Self="${NO_CHAR}" Imported="false" Name="$ID/[No character style]"/>${characterStyles.join("")}</RootCharacterStyleGroup><RootParagraphStyleGroup Self="up"><ParagraphStyle Self="${NO_PARA}" Name="$ID/[No paragraph style]" Imported="false" NextStyle="${NO_PARA}" KeyboardShortcut="0 0"${attr("PointSize", n(size))}><Properties><Leading type="unit">${n(pitch)}</Leading>${bodyFont.family ? `<AppliedFont type="string">${escapeXml(bodyFont.family)}</AppliedFont>` : ""}</Properties></ParagraphStyle><ParagraphStyle Self="ParagraphStyle/$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle" Imported="false" NextStyle="ParagraphStyle/$ID/NormalParagraphStyle" KeyboardShortcut="0 0"><Properties><BasedOn type="string">$ID/[No paragraph style]</BasedOn></Properties></ParagraphStyle>${paragraphStyles.join("")}</RootParagraphStyleGroup><RootCellStyleGroup Self="ucs"><CellStyle Self="CellStyle/$ID/[None]" Name="$ID/[None]"/></RootCellStyleGroup><RootTableStyleGroup Self="uts"><TableStyle Self="TableStyle/$ID/[Basic Table]" Name="$ID/[Basic Table]"/></RootTableStyleGroup></idPkg:Styles>`;
+  const graphic = `<idPkg:Graphic ${NS} DOMVersion="${DOM}"><Color Self="Color/Black" Model="Process" Space="CMYK" ColorValue="0 0 0 100" ColorOverride="Specialblack" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Black" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Paper" Model="Process" Space="CMYK" ColorValue="0 0 0 0" ColorOverride="Specialpaper" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Paper" ColorEditable="true" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Registration" Model="Registration" Space="CMYK" ColorValue="100 100 100 100" ColorOverride="Specialregistration" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Registration" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/>${colorXml.join("")}${processInks}${usedSpotInks}<Swatch Self="Swatch/None" Name="None" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><StrokeStyle Self="StrokeStyle/$ID/Solid" Name="$ID/Solid"/><StrokeStyle Self="StrokeStyle/$ID/ThinThin" Name="$ID/ThinThin"/><StrokeStyle Self="StrokeStyle/$ID/Dotted" Name="$ID/Dotted"/><StrokeStyle Self="StrokeStyle/$ID/Dashed" Name="$ID/Dashed"/></idPkg:Graphic>`;
+  const styles = `<idPkg:Styles ${NS} DOMVersion="${DOM}"><RootCharacterStyleGroup Self="uc"><CharacterStyle Self="${NO_CHAR}" Imported="false" Name="$ID/[No character style]"/>${characterStyles.join("")}</RootCharacterStyleGroup><RootParagraphStyleGroup Self="up"><ParagraphStyle Self="${NO_PARA}" Name="$ID/[No paragraph style]" Imported="false" NextStyle="${NO_PARA}" KeyboardShortcut="0 0"${attr("PointSize", n(size))}><Properties><Leading type="unit">${n(pitch)}</Leading>${bodyFont.family ? `<AppliedFont type="string">${escapeXml(bodyFont.family)}</AppliedFont>` : ""}</Properties></ParagraphStyle><ParagraphStyle Self="ParagraphStyle/$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle" Imported="false" NextStyle="ParagraphStyle/$ID/NormalParagraphStyle" KeyboardShortcut="0 0"><Properties><BasedOn type="string">$ID/[No paragraph style]</BasedOn></Properties></ParagraphStyle>${paragraphStyles.join("")}</RootParagraphStyleGroup><RootCellStyleGroup Self="ucs"><CellStyle Self="CellStyle/$ID/[None]" Name="$ID/[None]"/></RootCellStyleGroup><RootTableStyleGroup Self="uts"><TableStyle Self="TableStyle/$ID/[Basic Table]" Name="$ID/[Basic Table]"/></RootTableStyleGroup>${tocStyleXml}</idPkg:Styles>`;
   const fonts = `<idPkg:Fonts ${NS} DOMVersion="${DOM}">${[...fontXml.values()].join("")}</idPkg:Fonts>`;
   const tags = `<idPkg:Tags ${NS} DOMVersion="${DOM}"><XMLTag Self="XMLTag/Root" Name="Root"><Properties><TagColor type="enumeration">LightBlue</TagColor></Properties></XMLTag></idPkg:Tags>`;
   const backing = `<idPkg:BackingStory ${NS} DOMVersion="${DOM}"><XmlStory Self="ub" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}"/></ParagraphStyleRange></XmlStory></idPkg:BackingStory>`;
   const designmap = `<?aid style="50" type="document" readerVersion="6.0" featureSet="257" product="${DOM}(0)" ?>
-<Document ${NS} DOMVersion="${DOM}" Self="d" StoryList="${[storyId, ...markStories.map((st) => st.id), "ub"].join(" ")}" ZeroPoint="0 0" ActiveLayer="uL" CMYKProfile="Japan Color 2001 Coated" RGBProfile="sRGB IEC61966-2.1" SolidColorIntent="UseColorSettings" AfterBlendingIntent="UseColorSettings" DefaultImageIntent="UseColorSettings" RGBPolicy="PreserveEmbeddedProfiles" CMYKPolicy="CombinationOfPreserveAndSafeCmyk" AccurateLABSpots="false"><idPkg:Graphic src="Resources/Graphic.xml"/><idPkg:Fonts src="Resources/Fonts.xml"/><idPkg:Styles src="Resources/Styles.xml"/><idPkg:Preferences src="Resources/Preferences.xml"/><idPkg:Tags src="XML/Tags.xml"/><Layer Self="uL" Name="レイヤー 1" Visible="true" Locked="false" IgnoreWrap="false" ShowGuides="true" LockGuides="false" UI="true" Expendable="true" Printable="true"><Properties><LayerColor type="enumeration">LightBlue</LayerColor></Properties></Layer>${masterSpreads.map((m) => `<idPkg:MasterSpread src="MasterSpreads/MasterSpread_${m.self}.xml"/>`).join("")}${spreadFiles.map((f) => `<idPkg:Spread src="${f.name}"/>`).join("")}${sections}${textVariables}<idPkg:BackingStory src="XML/BackingStory.xml"/><idPkg:Story src="Stories/Story_${storyId}.xml"/>${markStories.map((st) => `<idPkg:Story src="Stories/Story_${st.id}.xml"/>`).join("")}</Document>`;
+<Document ${NS} DOMVersion="${DOM}" Self="d" StoryList="${[storyId, ...markStories.map((st) => st.id), "ub"].join(" ")}" ZeroPoint="0 0" ActiveLayer="uL" CMYKProfile="Japan Color 2001 Coated" RGBProfile="sRGB IEC61966-2.1" SolidColorIntent="UseColorSettings" AfterBlendingIntent="UseColorSettings" DefaultImageIntent="UseColorSettings" RGBPolicy="PreserveEmbeddedProfiles" CMYKPolicy="CombinationOfPreserveAndSafeCmyk" AccurateLABSpots="false"><idPkg:Graphic src="Resources/Graphic.xml"/><idPkg:Fonts src="Resources/Fonts.xml"/><idPkg:Styles src="Resources/Styles.xml"/><idPkg:Preferences src="Resources/Preferences.xml"/><idPkg:Tags src="XML/Tags.xml"/><Layer Self="uL" Name="レイヤー 1" Visible="true" Locked="false" IgnoreWrap="false" ShowGuides="true" LockGuides="false" UI="true" Expendable="true" Printable="true"><Properties><LayerColor type="enumeration">LightBlue</LayerColor></Properties></Layer>${masterSpreads.map((m) => `<idPkg:MasterSpread src="MasterSpreads/MasterSpread_${m.self}.xml"/>`).join("")}${spreadFiles.map((f) => `<idPkg:Spread src="${f.name}"/>`).join("")}${sections}${textVariables}${indexXml}<idPkg:BackingStory src="XML/BackingStory.xml"/><idPkg:Story src="Stories/Story_${storyId}.xml"/>${markStories.map((st) => `<idPkg:Story src="Stories/Story_${st.id}.xml"/>`).join("")}</Document>`;
   return {
     files: [
       { name: "mimetype", data: new TextEncoder().encode("application/vnd.adobe.indesign-idml-package") },

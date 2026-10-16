@@ -5,7 +5,7 @@ import { cmykToRgb } from "../engine/ink-color.js";
 import type { DocImage } from "./document.js";
 import { readZip } from "../output/zip.js";
 import { DEFAULT_SETTINGS, FREE_TRIM, normalizeSettings, tintHex, type Settings, type SpotColor } from "./settings.js";
-import { DEFAULT_STYLES, newCharacterStyle, newParagraphStyle, type CharacterStyle, type GlyphForm, type NestedStyle, type ParagraphStyle } from "./styles.js";
+import { DEFAULT_DECORATION, DEFAULT_STYLES, INDEX_ENTRY_STYLE, INDEX_HEADING_STYLE, TOC_ENTRY_STYLES, TOC_TITLE_STYLE, newCharacterStyle, newParagraphStyle, type CharacterStyle, type GlyphForm, type NestedStyle, type ParagraphDecoration, type ParagraphRule, type ParagraphStyle, type RuleKind } from "./styles.js";
 import { childElements, findAll, parseXml, type XmlElement, type XmlNode } from "./xml.js";
 
 // IDML（InDesign の受け渡し用の形式）の読み込み。InDesign で「IDML として書き出し」したファイルから、
@@ -390,6 +390,17 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
   const orientation = mainStory ? childElements(mainStory, "StoryPreference")[0]?.attrs.StoryOrientation : undefined;
   if (orientation) vertical = orientation === "Vertical";
 
+  // 索引の項目（Topic）：Self → 語と読み。本文の PageReference から引く。
+  const topics = new Map<string, { term: string; reading: string }>();
+  for (const t of designmap ? findAll(designmap, "Topic") : []) {
+    const term = (t.attrs.Name ?? "").replace(/[［］]/g, "").trim();
+    if (term) topics.set(t.attrs.Self, { term, reading: (t.attrs.SortOrder ?? "").replace(/[［］（）()]/g, "").trim() || term });
+  }
+  let indexMarks = 0;
+  // InDesign の目次スタイル（目次を作ったストーリーに付く）。
+  let tocTitle: string | undefined;
+  let tocStories = 0;
+
   /** 段落：段落スタイル（Self）と字（記法）。 */
   type Para = { style: string; text: string; breakBefore?: string; raw?: boolean };
   const paras: Para[] = [];
@@ -434,10 +445,21 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       return t;
     };
     /** 段落の中の字（Content・処理命令）を集める。改行（Br・U+2028）で段落を分ける。 */
+    // 索引の印（PageReference）は次の字の前にあるので、その字のあと（Kolophon の［＃索引：］は前の字に付く）に入れる。
+    let pendingIndex = "";
     const walkRange = (el: XmlElement, a: Record<string, string>) => {
       let buf = "";
       const flush = () => {
-        if (buf) begin().text += wrap(buf, a);
+        if (buf) {
+          let t = wrap(buf, a);
+          if (pendingIndex) {
+            const first = [...buf][0];
+            // 書式の記法で包んでいない字なら、1字目のあとに。包んであれば、包んだ字のあとに。
+            t = t.startsWith(first) ? first + pendingIndex + t.slice(first.length) : t + pendingIndex;
+            pendingIndex = "";
+          }
+          begin().text += t;
+        }
         buf = "";
       };
       const visit = (nodes: XmlNode[]) => {
@@ -461,8 +483,19 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
             }
             case "Br":
               flush();
+              if (pendingIndex) begin().text += pendingIndex;
+              pendingIndex = "";
               end();
               break;
+            case "PageReference": {
+              const t = topics.get(node.attrs.ReferencedTopic ?? "");
+              if (t) {
+                flush();
+                pendingIndex += `［＃索引：${t.term}${t.reading !== t.term ? `（${t.reading}）` : ""}］`;
+                indexMarks++;
+              }
+              break;
+            }
             case "Footnote": {
               flush();
               const body = findAll(node, "Content")
@@ -551,12 +584,22 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
         }
       }
     }
+    if (pendingIndex) begin().text += pendingIndex;
     if (cur && (cur as Para).text) end();
   };
+  const tocStyleOf = (self: string) => (stylesXml ? findAll(stylesXml, "TOCStyle").find((t) => t.attrs.Self === self) : undefined);
   for (const s of storyOrder) {
     const story = storyFiles.get(s);
     if (!story) continue;
     if (paras.length > 0) paras.push({ style: "", text: "［＃改ページ］", raw: true });
+    // InDesign で作った目次のストーリー：中身は読まず、［＃目次］にする（Kolophon が見出しから作り直す）。
+    const tocStyle = story.attrs.AppliedTOCStyle;
+    if (tocStyle && tocStyle !== "n") {
+      tocTitle ??= tocStyleOf(tocStyle)?.attrs.Title;
+      tocStories++;
+      paras.push({ style: "", text: "［＃目次］", raw: true });
+      continue;
+    }
     storyText(story);
   }
   // 字が書き出したときのままなら、元の原稿に戻す（注・参照・画像・目次などの記法も元どおり）。
@@ -602,6 +645,31 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
     });
   }
   const characterNames = new Set(characterStyles.map((c) => c.name));
+  /** 段落境界線・段落の囲み罫・段落の背景色 → Kolophon の段落の罫線・網掛け。 */
+  const strokeKind = (t: string | undefined): RuleKind => (/Dotted|Japanese Dots|点/i.test(t ?? "") ? "dotted" : /Dash|破線/i.test(t ?? "") ? "dashed" : /Thin ?Thin|Thick ?Thick|Thin ?Thick|Thick ?Thin|Triple|二重/i.test(t ?? "") ? "double" : "solid");
+  const clampWidth = (v: number | undefined) => Math.min(10, Math.max(0.1, Math.round((v ?? 1) * 100) / 100));
+  const decorationOf = (p: Record<string, string>, pointSize: number): ParagraphDecoration => {
+    const d: ParagraphDecoration = structuredClone(DEFAULT_DECORATION);
+    const width = (w: string | undefined) => (w === "TextWidth" ? "text" : "column");
+    const gap = (v: number) => Math.min(5, Math.max(0, Math.round((v / bodySize) * 20) / 20));
+    const rule = (on: boolean, weight: string | undefined, type: string | undefined, color: string | undefined, g: number): ParagraphRule => ({ on, kind: strokeKind(type), width: clampWidth(num(weight)), color: colorOf(color), gap: gap(g) });
+    if (p.RuleAbove === "true") {
+      d.ruleBefore = rule(true, p.RuleAboveLineWeight, p.RuleAboveType, p.RuleAboveColor, (num(p.RuleAboveOffset) ?? 0) - pointSize * 0.88);
+      d.length = width(p.RuleAboveWidth);
+    }
+    if (p.RuleBelow === "true") {
+      d.ruleAfter = rule(true, p.RuleBelowLineWeight, p.RuleBelowType, p.RuleBelowColor, (num(p.RuleBelowOffset) ?? 0) - pointSize * 0.12);
+      d.length = width(p.RuleBelowWidth);
+    }
+    const pad = num(p.ParagraphBorderTopOffset) ?? num(p.ParagraphShadingTopOffset);
+    if (pad !== undefined) d.pad = Math.min(5, Math.max(0, Math.round((pad / bodySize) * 20) / 20));
+    if (p.ParagraphBorderOn === "true") d.border = rule(true, p.ParagraphBorderTopLineWeight, p.ParagraphBorderType, p.ParagraphBorderColor, 0);
+    if (p.ParagraphShadingOn === "true") {
+      d.shading = colorOf(p.ParagraphShadingColor) ?? (p.ParagraphShadingColor === "Color/Black" ? "#000000" : "#eeeeee");
+      d.length = width(p.ParagraphShadingWidth);
+    }
+    return d;
+  };
   const paragraphStyles: ParagraphStyle[] = [];
   // 本文とみなした段落スタイルは「本文」に。ほかに「本文」という名前のスタイルがあれば、名前を変えて残す。
   const kolophonName = (self: string) => (self === bodySelf ? "本文" : paraName(self) === "本文" ? "本文（InDesign）" : paraName(self));
@@ -647,6 +715,7 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       nested,
       grep,
       lineStyle: line && line.AppliedCharacterStyle ? { style: refName(line.AppliedCharacterStyle), lines: Math.min(20, Math.round(num(line.LineCount) ?? 1)) } : { style: "", lines: 0 },
+      decoration: decorationOf(p, size),
     });
   }
   // 本文・大見出し・中見出しは必ずある（なければ Kolophon の既定のもの）。
@@ -670,10 +739,38 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
     }
   }
 
+  // ---- 目次・索引：Kolophon で組んだ目次・索引の段落（そのスタイルの段落の並び）を、［＃目次］・［＃索引ページ］に戻す ----
+  // Kolophon は見出しと索引の語から作り直すので、字は読まない。前後の改ページは［＃目次］・［＃索引ページ］が入れる。
+  const tocNames = new Set<string>([TOC_TITLE_STYLE, ...TOC_ENTRY_STYLES]);
+  const indexNames = new Set<string>([TOC_TITLE_STYLE, INDEX_HEADING_STYLE, INDEX_ENTRY_STYLE]);
+  if (!restored) {
+    for (let k = 0; k < paras.length; k++) {
+      const p = paras[k];
+      if (p.raw) continue;
+      const name = kolophonName(p.style);
+      const isIndex = (name === TOC_TITLE_STYLE && p.text.trim() === "索引") || name === INDEX_HEADING_STYLE || name === INDEX_ENTRY_STYLE;
+      const kind = isIndex ? "index" : (TOC_ENTRY_STYLES as readonly string[]).includes(name) || name === TOC_TITLE_STYLE ? "toc" : undefined;
+      if (!kind) continue;
+      const names = kind === "index" ? indexNames : tocNames;
+      let end = k;
+      while (end + 1 < paras.length && !paras[end + 1].raw && names.has(kolophonName(paras[end + 1].style)) && !(kind === "toc" && kolophonName(paras[end + 1].style) === TOC_TITLE_STYLE)) end++;
+      const run = paras.slice(k, end + 1);
+      // 題だけ（項目のない「目次の題」の段落）は、目次とみなさない。
+      if (!run.some((x) => kolophonName(x.style) !== TOC_TITLE_STYLE)) continue;
+      if (kind === "toc" && kolophonName(p.style) === TOC_TITLE_STYLE) tocTitle ??= p.text.trim();
+      paras.splice(k, run.length, { style: "", text: kind === "index" ? "［＃索引ページ］" : "［＃目次］", raw: true });
+      // 次の段落の前の改ページは、目次・索引のあとの改ページと重なるので外す。
+      const next = paras[k + 1];
+      if (next?.breakBefore === "［＃改ページ］") next.breakBefore = undefined;
+    }
+  }
+  if (tocStories > 0) notes.add("InDesign で作った目次（［＃目次］にした。Kolophon が見出しから作り直す）");
+  if (indexMarks > 0 && !restored) notes.add(`索引の項目（${indexMarks}か所。［＃索引：語（よみ）］にした。下位の項目と参照先は読まない）`);
+
   // ---- 原稿 ----
   const lines: string[] = [];
   for (const p of paras) {
-    if (p.breakBefore) lines.push(p.breakBefore);
+    if (p.breakBefore && !(p.raw && /^［＃(目次|索引ページ)］$/.test(p.text))) lines.push(p.breakBefore);
     if (p.raw) {
       lines.push(p.text);
       continue;
@@ -716,6 +813,7 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       s.book.gutterMm = Math.round((gutter / MM) * 10) / 10;
     }
   }
+  if (tocTitle !== undefined && !restored) s.toc.title = tocTitle;
   const bleed = num(docPref?.DocumentBleedTopOffset);
   if (bleed !== undefined) s.advanced.bleedMm = Math.round((bleed / MM) * 10) / 10;
   // ページ番号：セクションが2つ（前付けと本文）なら、前付けの書き方と本文の始まりの番号。

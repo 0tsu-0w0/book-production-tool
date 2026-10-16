@@ -15,7 +15,7 @@ import { collectIndex, expandIndex, hasIndexPage, indexBlocks, indexSignature, r
 import { applyStyles, type EngineStyles } from "./styles.js";
 import { hasToc, layoutWithToc, resolvePageRefs } from "./toc.js";
 import { texToMarkup } from "./tex.js";
-import type { Block, DrawPage, ImageInfo, LineText, PageLayout } from "./types.js";
+import type { Block, DrawPage, ImageInfo, LineText, PageLayout, PageRole } from "./types.js";
 import { textBlocks, type TextBlock } from "./blocks.js";
 import { expandXrefs, missingLabels } from "./xref.js";
 
@@ -73,6 +73,8 @@ export interface LazyTypesetResult extends Omit<TypesetResult, "pages"> {
   labelPages(): Map<string, number>;
   /** 原稿の位置（行・行の中の位置）の字があるページ（その位置より前で最後の字のページ）。字がなければ -1。 */
   pageOf(line: number, offset: number): number;
+  /** 組んだ目次と索引の段落（ページ番号を入れたもの）。IDML に字として入れるのに使う。 */
+  generated(): { toc?: Block[]; index?: Block[] };
 }
 
 /** スタイルの書体を、フォントの一覧の番号にする。 */
@@ -270,6 +272,7 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
       }
       return best;
     },
+    generated: () => (gen !== generation || redone ? fresh().generated() : { toc: sectionBlocks(blocks, "toc"), index: sectionBlocks(blocks, "index") }),
     upems: faces.map((f) => f.upem),
     upem: faces[0].upem,
     missingChars: missingChars(blocks, faces, `${fonts.keys.join("|")}\u0000${JSON.stringify(settings.styles)}\u0000${JSON.stringify(settings.compositeFont)}`),
@@ -285,6 +288,18 @@ export function typesetLazy(text: string, settings: Settings, fontsOrFace: FontT
     columns: spec.columns,
     pageLabels: layouts.map((p) => pageLabel(p.index, decor)),
   };
+}
+
+/** その種類のページのまとまり（目次・索引）の段落。 */
+function sectionBlocks(blocks: Block[], role: PageRole): Block[] | undefined {
+  for (const b of blocks) {
+    if (b.kind === "section" && b.role === role) return b.blocks;
+    if (b.kind === "pagegroup" || b.kind === "section") {
+      const found = sectionBlocks(b.blocks, role);
+      if (found) return found;
+    }
+  }
+  return undefined;
 }
 
 /** ラベルごとの、それがある最初のページ（0始まり）。 */
