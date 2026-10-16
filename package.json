@@ -1,6 +1,6 @@
 {
   "name": "kolophon",
-  "version": "0.41.2",
+  "version": "0.41.3",
   "description": "縦書き組版ソフト",
   "private": true,
   "type": "module",

@@ -670,6 +670,8 @@ export class SettingsPanel {
   }
 
   setImageNames(names: string[]) {
+    // 組み直すたびに呼ばれるので、名前が変わったときだけ作り直す。
+    if (names.length === imageNames.length && names.every((n, i) => n === imageNames[i])) return;
     imageNames = names;
     this.refresh();
   }

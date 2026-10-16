@@ -396,7 +396,7 @@ async function typesetOnce() {
   // 紙面で入力しているときは、カーソルのあるページを見せる。
   if (caret && r.caretPage !== undefined && r.caretPage >= 0) preview.jumpTo(r.caretPage);
   preview.setDocument(r.version, r.pageCount, drawFonts(r), settings.nombreStart, r.pages);
-  const chars = [...source.value.replace(/\n/g, "")].length;
+  const chars = countChars(source.value);
   counts.textContent =
     `${chars.toLocaleString()}字　${r.pageCount}ページ（最終ページ ${r.lastPageLines}行）` +
     `　${r.charsPerLine}字×${r.linesPerPage}行${r.columns > 1 ? `×${r.columns}段` : ""}　組版 ${(performance.now() - started).toFixed(0)}ms`;
@@ -407,6 +407,16 @@ async function typesetOnce() {
     const more = r.missingChars.length > 20 ? `ほか、全${r.missingChars.length}種類` : "";
     setStatus(`「${r.font.name}」で表示できない文字があります（空白になります）：${shown}${more}`);
   } else if (status.textContent?.includes("表示できない文字")) setStatus("");
+}
+
+/** 改行を除いた字の数（サロゲートペアは1字）。原稿を字の配列にしないで数える。 */
+function countChars(text: string): number {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c !== 10 && (c < 0xdc00 || c > 0xdfff)) n++;
+  }
+  return n;
 }
 
 function addPaths(paths: Record<string, Record<number, string>>) {
@@ -1043,7 +1053,6 @@ stage.addEventListener("keydown", (e) => {
   if (e.key === forward) preview.next();
   if (e.key === back) preview.prev();
 });
-window.addEventListener("resize", () => preview.show());
 api.onCommand((c) => void runCommand(c));
 // 起動中に、ほかから文書を開くよう頼まれたとき（文書のダブルクリックなど）。
 api.onOpenPath((file) => void (/\.(kolob|kolbook|tgbook)$/i.test(file) ? bookDialog.open(file) : open(file)));

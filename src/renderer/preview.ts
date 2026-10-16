@@ -63,7 +63,20 @@ export class Preview {
     private readonly stage: HTMLElement,
     private readonly label: HTMLElement,
     private readonly fetchPages: PageFetcher,
-  ) {}
+  ) {
+    // 表示欄の大きさは、変わったときだけ受け取って覚えておく。描くたびに測ると、そのつどレイアウトをやり直させてしまう。
+    // 窓や欄の大きさが変わったら、その大きさで描き直す。
+    new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1].borderBoxSize[0];
+      if (!box) return;
+      const changed = this.stageSize !== undefined && (this.stageSize.width !== box.inlineSize || this.stageSize.height !== box.blockSize);
+      this.stageSize = { width: box.inlineSize, height: box.blockSize };
+      if (changed && this.mode !== "grid") this.show();
+    }).observe(stage);
+  }
+
+  /** 表示欄の大きさ（px）。ResizeObserver が最初に知らせるまでは測る。 */
+  private stageSize: { width: number; height: number } | undefined;
 
   /** 組み直しの結果を受け取る。initial は、組み直しと一緒に届いたページ。 */
   setDocument(version: number, pageCount: number, fonts: DrawFont[], firstNumber: number, initial: DrawPage[]) {
@@ -175,7 +188,7 @@ export class Preview {
     const bleed = this.guides ? this.bleedMm * MM_PT : 0;
     const w = (this.pageSize.width + bleed * 2) * pagesAcross;
     const h = this.pageSize.height + bleed * 2;
-    const box = this.stage.getBoundingClientRect();
+    const box = this.stageSize ?? this.stage.getBoundingClientRect();
     return Math.max(0.2, Math.min((box.width - 40) / w, (box.height - 40) / h));
   }
 
