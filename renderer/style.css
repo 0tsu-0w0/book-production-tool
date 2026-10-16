@@ -1,4 +1,6 @@
 :root {
+  /* 動きの曲線：出入りは強めの ease-out（入りは速く、終わりは静かに）。 */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --bg: #efece6;
   --panel: #fbfaf7;
   --ink: #1f1d1a;
@@ -304,3 +306,74 @@ html.frameless body { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 
 .grep-rule:has(.nested-count) { flex-wrap: wrap; }
 .grep-rule .nested-shown { flex-basis: 100%; margin: 0; }
 .grep-rule:has(.nested-count) select { max-width: 11em; }
+
+/*
+ * 開く・閉じる動き（pop-in・pop-out）。ときどき開くダイアログと浮いたパネルだけ。
+ * 検索・置換の欄と紙面の入力欄は、キーボードで何度も開くので動かさない。
+ * 開くときは @starting-style から、閉じるときは display を最後に切り替えて（allow-discrete）、透明と少しの縮みで出入りする。
+ */
+dialog {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 200ms var(--ease-out),
+    transform 200ms var(--ease-out),
+    overlay 200ms var(--ease-out) allow-discrete,
+    display 200ms var(--ease-out) allow-discrete;
+}
+dialog:not([open]) {
+  opacity: 0;
+  transform: scale(0.96);
+  /* 閉じるのは開くより速く。 */
+  transition-duration: 150ms;
+}
+@starting-style {
+  dialog[open] { opacity: 0; transform: scale(0.96); }
+}
+/* 右上に出る浮いたダイアログ（校正の補助など）は、その角から。 */
+dialog.floating { transform-origin: top right; }
+dialog::backdrop {
+  opacity: 1;
+  transition:
+    opacity 200ms var(--ease-out),
+    overlay 200ms var(--ease-out) allow-discrete,
+    display 200ms var(--ease-out) allow-discrete;
+}
+dialog:not([open])::backdrop { opacity: 0; transition-duration: 150ms; }
+@starting-style {
+  dialog[open]::backdrop { opacity: 0; }
+}
+
+/* 浮いたパネル（字形・分版）：置いてある隅から、少し上がりながら出る。 */
+.glyph-panel {
+  opacity: 1;
+  transform: none;
+  transform-origin: bottom left;
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 180ms var(--ease-out),
+    display 180ms var(--ease-out) allow-discrete;
+}
+.separations-panel { transform-origin: bottom right; }
+.glyph-panel[hidden] {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  transition-duration: 130ms;
+}
+@starting-style {
+  .glyph-panel:not([hidden]) { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+
+/* 動きを減らす設定：位置と大きさは動かさず、透明の出入りだけ短く。 */
+@media (prefers-reduced-motion: reduce) {
+  dialog,
+  dialog:not([open]),
+  .glyph-panel,
+  .glyph-panel[hidden] {
+    transform: none;
+    transition-duration: 120ms;
+  }
+  @starting-style {
+    dialog[open], .glyph-panel:not([hidden]) { transform: none; }
+  }
+}
