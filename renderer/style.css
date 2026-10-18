@@ -173,6 +173,15 @@ dialog h3 { margin: 16px 0 6px; font-size: 13px; }
 .image-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .image-body input[type="text"] { flex: 1; min-width: 0; }
 .image-body input[type="number"] { width: 4em; }
+/* 画像のリンク：元のファイルの場所と状態（更新あり・見つからない）。 */
+.image-body .link-row { flex-wrap: wrap; gap: 4px; }
+.image-body .link-path { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-state { font-size: 11px; padding: 0 6px; border-radius: 8px; }
+.link-state.ok { color: var(--muted); }
+.link-state.modified { background: var(--warn-bg); color: var(--warn-ink); }
+.link-state.missing { color: var(--danger); border: 1px solid currentColor; }
+.link-summary { display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 6px; background: var(--warn-bg); color: var(--warn-ink); }
+.link-summary .hint { color: inherit; margin: 0; }
 dialog.floating { position: fixed; inset: 64px 24px auto auto; margin: 0; width: 460px; max-height: 75vh; overflow: auto; box-shadow: 0 8px 28px rgba(0,0,0,0.18); z-index: 10; }
 .floating-head { display: flex; gap: 8px; align-items: center; }
 .floating-head .spacer { flex: 1; }

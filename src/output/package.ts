@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { serializeDocument, type DocImage } from "../document/document.js";
+import { linkBaseName, linkOf } from "../document/image-link.js";
 import { leftBound, toLayoutSpec, type FontChoice, type Settings } from "../document/settings.js";
 import { faceOffsets, readFaceInfo } from "../fonts/sfnt.js";
 
@@ -64,20 +65,32 @@ export async function writePackage(p: PackageInput): Promise<PackageResult> {
   fs.mkdirSync(p.dir, { recursive: true });
   const name = safe(p.name);
 
-  // 1. 文書。
   const docFile = `${name}.kolo`;
-  fs.writeFileSync(path.join(p.dir, docFile), serializeDocument({ text: p.text, settings: p.settings, images: p.images }), "utf8");
-  files.push(docFile);
+  const docPath = path.join(p.dir, docFile);
 
-  // 2. 画像（文書の中の画像を、元の形式のファイルにする）。
+  // 1. 画像（文書の中の画像を、元の形式のファイルにする）。ファイル名は、リンクがあれば元のファイル名。
+  // パッケージの中の文書では、画像のリンクを集めた画像（Links フォルダ）にする（フォルダごと渡しても、リンクが切れない）。
   const imageRows: string[] = [];
+  const packedImages: DocImage[] = [];
+  const usedNames = new Set<string>();
   if (p.images.length > 0) fs.mkdirSync(path.join(p.dir, "Links"), { recursive: true });
   for (const img of p.images) {
-    const file = path.join("Links", `${safe(img.name)}.${EXT[img.mime] ?? "bin"}`);
+    const ext = EXT[img.mime] ?? "bin";
+    const base = safe(linkBaseName(img));
+    let fileName = `${base}.${ext}`;
+    for (let k = 2; usedNames.has(fileName.toLowerCase()); k++) fileName = `${base}_${k}.${ext}`;
+    usedNames.add(fileName.toLowerCase());
+    const file = path.join("Links", fileName);
     fs.writeFileSync(path.join(p.dir, file), Buffer.from(img.data, "base64"));
     files.push(file);
-    imageRows.push(`  ${img.name}　→ ${file}（${img.width}×${img.height} 画素）`);
+    packedImages.push({ ...img, link: linkOf(path.join(p.dir, file), docPath) });
+    const from = img.link ? `（元のファイル：${img.link.path}）` : "";
+    imageRows.push(`  ${img.name}　→ ${file}（${img.width}×${img.height} 画素）${from}`);
   }
+
+  // 2. 文書。
+  fs.writeFileSync(docPath, serializeDocument({ text: p.text, settings: p.settings, images: packedImages }), "utf8");
+  files.unshift(docFile);
 
   // 3. 書体（同じファイルは1つ）。
   const fontRows: string[] = [];

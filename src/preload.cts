@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 // 画面（renderer）から呼べる処理だけを公開する。
 
@@ -87,6 +87,18 @@ contextBridge.exposeInMainWorld("api", {
   exportCover: invoke("cover:export"),
   chooseIccProfile: invoke("icc:choose"),
   beginImages: invoke("images:begin"),
+  linkStatus: invoke("images:link-status"),
+  linkOf: invoke("images:link-of"),
+  readLink: invoke("images:read-link"),
+  chooseImage: invoke("images:choose"),
+  /** 選んだファイル（<input type="file">）の場所。分からなければ空。 */
+  pathForFile: (f: File) => {
+    try {
+      return webUtils.getPathForFile(f);
+    } catch {
+      return "";
+    }
+  },
   writeImage: invoke("images:write"),
   endImages: invoke("images:end"),
   preflight: typesetter("preflight", ["text", "settings", "target", "images"]),

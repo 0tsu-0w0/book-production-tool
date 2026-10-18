@@ -23,6 +23,8 @@ import { texToMarkup } from "./engine/tex.js";
 import { ZipWriter } from "./output/zip.js";
 import { buildIdml } from "./output/idml.js";
 import { importIdml } from "./document/idml-import.js";
+import { linkOf, linkStatus, readLinkedImage, withRelative } from "./document/image-link.js";
+import type { ImageLink } from "./document/document.js";
 import type { PdfWorkerInput, PdfWorkerMessage } from "./pdf-worker.js";
 import type { TypesetConnect } from "./typeset-worker.js";
 import { SAMPLE_TEXT } from "./sample.js";
@@ -411,8 +413,10 @@ ipcMain.handle("doc:save", async (_e, doc: KolophonDocument, filePath: string | 
     target = chosen;
   }
   // 途中で落ちても元のファイルが壊れないよう、一時ファイルに書いてから置き換える。
+  // 画像のリンクには、保存する文書のフォルダからの相対の場所も書く（文書と画像をフォルダごと移しても見つけられるように）。
+  const saved = { ...doc, images: doc.images.map((img) => (img.link ? { ...img, link: withRelative(img.link, target!) } : img)) };
   const tmp = `${target}.tmp`;
-  fs.writeFileSync(tmp, serializeDocument(doc), "utf8");
+  fs.writeFileSync(tmp, serializeDocument(saved), "utf8");
   fs.renameSync(tmp, target);
   return target;
 });
@@ -936,6 +940,30 @@ ipcMain.handle("book:export-epub", (_e, bookPath: string, book: Book) => {
 
 /** 画像の書き出し先：フォルダか ZIP（OUT-05）。書き出しの間だけ持つ。 */
 let imageTarget: { kind: "dir"; dir: string } | { kind: "zip"; zip: ZipWriter } | undefined;
+
+// ---- 画像のリンク（#9）----
+/** 画像のリンクの状態（元のファイルと同じ・変わった・見つからない）。リンクのない画像は null。 */
+ipcMain.handle("images:link-status", (_e, links: (ImageLink | null)[], docPath: string | null) => links.map((l) => (l ? linkStatus(l, docPath) : null)));
+/** 取り込んだファイルのリンク（場所・更新日時・大きさ）。 */
+ipcMain.handle("images:link-of", (_e, file: string, docPath: string | null) => {
+  try {
+    return linkOf(file, docPath);
+  } catch {
+    return undefined;
+  }
+});
+/** リンクのファイルを読み直す（更新）。 */
+ipcMain.handle("images:read-link", (_e, file: string, docPath: string | null) => readLinkedImage(file, docPath));
+/** 差し替える画像のファイルを選んで読む。 */
+ipcMain.handle("images:choose", async (_e, docPath: string | null, current?: string) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
+    defaultPath: current ? path.dirname(current) : docPath ? path.dirname(docPath) : undefined,
+    filters: [{ name: "画像（PNG・JPEG）", extensions: ["png", "jpg", "jpeg"] }],
+    properties: ["openFile"],
+  });
+  if (canceled || !filePaths[0]) return undefined;
+  return readLinkedImage(filePaths[0], docPath);
+});
 
 ipcMain.handle("images:begin", async (_e, baseName: string, zip: boolean) => {
   imageTarget = undefined;

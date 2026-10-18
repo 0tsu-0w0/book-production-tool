@@ -20,6 +20,26 @@ export interface DocImage {
   /** ピクセル数（組版で縦横比を決めるのに使う）。 */
   width: number;
   height: number;
+  /** 取り込んだ元のファイル（リンク）。元のファイルが変わった・なくなったことを知らせるのに使う。なければ文書の中だけの画像。 */
+  link?: ImageLink;
+}
+
+/** 画像のリンク：元のファイルの場所と、取り込んだときの更新日時・大きさ。 */
+export interface ImageLink {
+  /** 元のファイルの場所（絶対パス）。 */
+  path: string;
+  /** 文書のフォルダからの相対の場所（/ 区切り）。文書と画像をフォルダごと移しても見つけられるように。 */
+  relative?: string;
+  /** 取り込んだときの更新日時（ミリ秒）と大きさ（バイト）。 */
+  modified: number;
+  size: number;
+}
+
+/** リンクを読む（形が違えば、リンクなしにする）。 */
+function linkOf(v: unknown): ImageLink | undefined {
+  const l = (v && typeof v === "object" ? v : undefined) as Record<string, unknown> | undefined;
+  if (!l || typeof l.path !== "string" || !l.path || !Number.isFinite(l.modified) || !Number.isFinite(l.size)) return undefined;
+  return { path: l.path, ...(typeof l.relative === "string" && l.relative ? { relative: l.relative } : {}), modified: Number(l.modified), size: Number(l.size) };
 }
 
 export interface KolophonDocument {
@@ -49,6 +69,10 @@ function normalizeImages(v: unknown): DocImage[] {
       i.height > 0;
     if (ok) seen.add(i.name);
     return ok;
+  }).map((i) => {
+    const { link, ...rest } = i;
+    const l = linkOf(link);
+    return l ? { ...rest, link: l } : rest;
   });
 }
 

@@ -9,6 +9,7 @@ import { KENTEN_MARKS, parse } from "../engine/parse.js";
 import { texToMarkup } from "../engine/tex.js";
 import type { Atom, Block, NombrePlace, PageMark, TableBlock } from "../engine/types.js";
 import type { DocImage } from "../document/document.js";
+import { linkBaseName } from "../document/image-link.js";
 import { expandXrefs } from "../engine/xref.js";
 
 // IDML（InDesign Markup Language）の書き出し。InDesign の受け渡し用の形式で、InDesign で開くと文書になる。
@@ -283,7 +284,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       const img = imageByName.get(name)!;
       const ext = img.mime === "image/png" ? "png" : "jpg";
       // ファイル名に使えない字は置き換え、同じ名前は番号で分ける。
-      const base = name.replace(/[\\/:*?"<>|]/g, "_").trim() || "画像";
+      const base = linkBaseName(img).replace(/[\\/:*?"<>|]/g, "_").trim() || "画像";
       let file = `${base}.${ext}`;
       for (let k = 2; usedFileNames.has(file.toLowerCase()); k++) file = `${base}_${k}.${ext}`;
       usedFileNames.add(file.toLowerCase());
@@ -712,7 +713,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     text,
     settings,
     spots: Object.fromEntries(spots.map((sp) => [sp.name, sp.color.toLowerCase()])),
-    links: Object.fromEntries([...linkFiles.values()].map((l) => [l.path.split(/[\/]/).pop()!, l.img.name])),
+    links: Object.fromEntries([...linkFiles.values()].map((l) => [l.path.split(/[\\/]/).pop()!, l.img.name])),
     notes: noteNo > 0,
   };
   const bleed = n(settings.advanced.bleedMm * MM);

@@ -3,7 +3,9 @@ import type { Appearance, WindowGeometry } from "../appearance.js";
 import { Backdrop, BackgroundDialog } from "./background.js";
 import { setupTitlebar } from "./titlebar.js";
 import { applyTemplate } from "../document/template.js";
-import { imageInfos, type DocImage } from "../document/document.js";
+import { imageInfos, type DocImage, type ImageLink } from "../document/document.js";
+import type { LinkedFile } from "./image-manager.js";
+import type { LinkStatus } from "../document/image-link.js";
 import type { ImageInfo } from "../engine/types.js";
 import { ImageManager } from "./image-manager.js";
 import { BookDialog, type BookInfo } from "./book-dialog.js";
@@ -126,6 +128,11 @@ interface Api extends TemplateApi {
   >;
   chooseIccProfile(): Promise<{ path: string; name: string } | { error: string } | undefined>;
   beginImages(baseName: string, zip: boolean): Promise<string | undefined>;
+  linkStatus(links: (ImageLink | null)[], docPath: string | null): Promise<(LinkStatus | null)[]>;
+  linkOf(file: string, docPath: string | null): Promise<ImageLink | undefined>;
+  readLink(file: string, docPath: string | null): Promise<LinkedFile>;
+  chooseImage(docPath: string | null, current?: string): Promise<LinkedFile | undefined>;
+  pathForFile(f: File): string;
   writeImage(name: string, bytes: ArrayBuffer): Promise<void>;
   endImages(ok: boolean): Promise<void>;
   preflight(text: string, settings: Settings, target: "pdf" | "images", images: Record<string, ImageInfo>): Promise<Finding[]>;
@@ -178,7 +185,17 @@ const imageManager = new ImageManager({
     const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     source.value = source.value.replace(new RegExp(`(［＃画像[：:]\\s*)${escaped}(?=[\\s］])`, "gu"), `$1${to}`);
   },
+  linkStatus: (links) => api.linkStatus(links, filePath),
+  linkOf: async (file) => {
+    const p = api.pathForFile(file);
+    return p ? api.linkOf(p, filePath) : undefined;
+  },
+  readLink: (file) => api.readLink(file, filePath),
+  chooseImage: (current) => api.chooseImage(filePath, current),
+  notify: (text) => setStatus(text),
 });
+// 画像を別のソフトで直して Kolophon に戻ってきたとき、元のファイルが変わっていないかを調べる。
+window.addEventListener("focus", () => imageManager.checkLinks());
 panel.custom.set("images", () => imageManager.element());
 
 // 表紙の見本と書き出し。
@@ -722,7 +739,7 @@ async function withBusy(fn: () => Promise<void>): Promise<void> {
  */
 async function checkBeforeExport(target: "pdf" | "images"): Promise<{ go: boolean; notes: string[] }> {
   setStatus("書き出す前の検査をしています…");
-  const findings = await api.preflight(source.value, settings, target, imageInfos(imageManager.images));
+  const findings = [...(await api.preflight(source.value, settings, target, imageInfos(imageManager.images))), ...(await imageManager.linkFindings())];
   const notes = findings.filter((f) => f.level === "info").map((f) => f.message);
   const serious = findings.filter((f) => f.level !== "info");
   if (init.autoExport) {

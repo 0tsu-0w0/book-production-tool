@@ -1,7 +1,13 @@
-import { INVALID_IMAGE_NAME, type DocImage } from "../document/document.js";
+import { INVALID_IMAGE_NAME, type DocImage, type ImageLink } from "../document/document.js";
+import type { LinkStatus } from "../document/image-link.js";
+import type { Finding } from "../output/preflight.js";
 
 // 設定欄の「画像」：文書に画像（PNG・JPEG）を入れる・名前を変える・消す・原稿に［＃画像：名前］を入れる（DTP-12）。
 // 画像は文書ファイルの中に入る。画面の描画用に、読み込んだ画像（ImageBitmap）を名前で持つ。
+// リンク（#9）：取り込んだ元のファイルを覚えておき、変わった・なくなったことを知らせる。更新（読み直し）と差し替えができる。
+
+/** リンクのファイルを読んだ結果。 */
+export type LinkedFile = { mime: DocImage["mime"]; data: string; link: ImageLink } | { error: string };
 
 export interface ImageHandlers {
   /** 画像の一覧が変わった（文書を変更した）。 */
@@ -10,6 +16,16 @@ export interface ImageHandlers {
   insertLine(line: string): void;
   /** 原稿の中の［＃画像：古い名前…］を新しい名前にする。 */
   renameInText(from: string, to: string): void;
+  /** リンクの状態を調べる（リンクのない画像は null）。 */
+  linkStatus(links: (ImageLink | null)[]): Promise<(LinkStatus | null)[]>;
+  /** 選んだファイルのリンク（場所が分からなければ undefined）。 */
+  linkOf(file: File): Promise<ImageLink | undefined>;
+  /** リンクのファイルを読み直す。 */
+  readLink(file: string): Promise<LinkedFile>;
+  /** 差し替える画像を選ぶ。 */
+  chooseImage(current?: string): Promise<LinkedFile | undefined>;
+  /** 状態の欄に知らせる。 */
+  notify(text: string): void;
 }
 
 const MAX_FILE_BYTES = 30 * 1024 * 1024;
@@ -18,7 +34,10 @@ export class ImageManager {
   images: DocImage[] = [];
   /** 描画用（名前で引く）。 */
   readonly bitmaps = new Map<string, ImageBitmap>();
+  /** リンクの状態（画像ごと）。調べるまでは持たない。 */
+  private readonly status = new WeakMap<DocImage, LinkStatus>();
   private root: HTMLElement | null = null;
+  private checking: Promise<void> | null = null;
 
   constructor(private readonly h: ImageHandlers) {}
 
@@ -29,6 +48,111 @@ export class ImageManager {
     this.bitmaps.clear();
     await Promise.all(images.map((i) => this.decode(i)));
     this.render();
+    // 開いたときに、元のファイルが変わっていないかを調べて知らせる。
+    await this.checkLinks(true);
+  }
+
+  /**
+   * リンクの状態を調べ直す（開いたとき・Kolophon に戻ってきたとき・書き出す前）。
+   * 元の場所になく、文書からの相対の場所で見つかったときは、その場所をリンクにする。announce なら、変わったものを状態の欄で知らせる。
+   */
+  checkLinks(announce = false): Promise<void> {
+    if (!this.images.some((i) => i.link)) return Promise.resolve();
+    this.checking ??= (async () => {
+      try {
+        const list = this.images;
+        const result = await this.h.linkStatus(list.map((i) => i.link ?? null));
+        let changed = false;
+        list.forEach((img, k) => {
+          const st = result[k];
+          if (!st || !img.link) return;
+          const before = this.status.get(img);
+          if (before?.state !== st.state || before?.path !== st.path) changed = true;
+          this.status.set(img, st);
+          // 見つけた場所と、文書からの相対の場所を覚え直す（中身は変えないので、文書の変更にはしない）。
+          if (st.path && st.path !== img.link.path) img.link.path = st.path;
+          if (st.relative !== undefined) img.link.relative = st.relative;
+        });
+        if (changed) this.render();
+        if (announce) {
+          const { modified, missing } = this.counts();
+          if (modified + missing > 0) this.h.notify(`リンクの画像：${[modified ? `元のファイルが変わったもの ${modified}個` : "", missing ? `見つからないもの ${missing}個` : ""].filter(Boolean).join("・")}（設定欄の「画像」で更新・差し替えできます）`);
+        }
+      } finally {
+        this.checking = null;
+      }
+    })();
+    return this.checking;
+  }
+
+  private counts() {
+    let modified = 0;
+    let missing = 0;
+    for (const img of this.images) {
+      const st = this.status.get(img)?.state;
+      if (st === "modified") modified++;
+      else if (st === "missing") missing++;
+    }
+    return { modified, missing };
+  }
+
+  /** 書き出す前の検査に足す知らせ：元のファイルが変わった画像（注意）・見つからない画像（参考。文書の中の画像で書き出す）。 */
+  async linkFindings(): Promise<Finding[]> {
+    await this.checkLinks();
+    return this.images.flatMap((img): Finding[] => {
+      const st = this.status.get(img)?.state;
+      if (st === "modified") return [{ level: "warning", message: `画像「${img.name}」の元のファイル（${img.link!.path}）が、取り込んだあとに変わっています。設定欄の「画像」の「更新」で取り込み直せます（このまま書き出すと、取り込んだときの画像になります）。` }];
+      if (st === "missing") return [{ level: "info", message: `画像「${img.name}」の元のファイル（${img.link!.path}）が見つかりません。文書の中の画像で書き出します。` }];
+      return [];
+    });
+  }
+
+  /** リンクのファイルを読み直して、画像の中身を入れ替える（名前と原稿の［＃画像：］はそのまま）。 */
+  private async apply(img: DocImage, r: LinkedFile | undefined, quiet = false): Promise<boolean> {
+    if (!r) return false;
+    if ("error" in r) {
+      if (!quiet) alert(r.error);
+      return false;
+    }
+    let bitmap: ImageBitmap;
+    try {
+      const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
+      bitmap = await createImageBitmap(new Blob([bytes], { type: r.mime }));
+    } catch {
+      if (!quiet) alert(`「${r.link.path}」を画像として読めませんでした。`);
+      return false;
+    }
+    Object.assign(img, { mime: r.mime, data: r.data, width: bitmap.width, height: bitmap.height, link: r.link });
+    this.bitmaps.get(img.name)?.close();
+    this.bitmaps.set(img.name, bitmap);
+    this.status.set(img, { state: "ok", path: r.link.path, relative: r.link.relative });
+    return true;
+  }
+
+  /** 元のファイルが変わった画像を取り込み直す（img を渡さなければ、変わったものすべて）。 */
+  private async update(img?: DocImage) {
+    const targets = img ? [img] : this.images.filter((i) => this.status.get(i)?.state === "modified");
+    let n = 0;
+    for (const t of targets) if (t.link && (await this.apply(t, await this.h.readLink(this.status.get(t)?.path ?? t.link.path), targets.length > 1))) n++;
+    if (n === 0) return;
+    this.render();
+    this.h.changed();
+    this.h.notify(`画像を${n}個、元のファイルから取り込み直しました。`);
+  }
+
+  /** 別のファイルに差し替える（名前と原稿の［＃画像：］はそのまま）。 */
+  private async replace(img: DocImage) {
+    if (!(await this.apply(img, await this.h.chooseImage(img.link?.path)))) return;
+    this.render();
+    this.h.changed();
+  }
+
+  /** リンクを外す（文書の中の画像だけにする）。 */
+  private unlink(img: DocImage) {
+    delete img.link;
+    this.status.delete(img);
+    this.render();
+    this.h.changed();
   }
 
   private async decode(img: DocImage) {
@@ -62,8 +186,21 @@ export class ImageManager {
     const add = this.button("画像を入れる…", () => file.click());
     const hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "PNG・JPEG。画像は文書ファイルの中に保存されます。入稿用の PDF では CMYK（またはグレー）に変換します。";
+    hint.textContent = "PNG・JPEG。画像は文書ファイルの中に保存され、元のファイルの場所も覚えておきます（元のファイルが変わったら知らせます）。入稿用の PDF では CMYK（またはグレー）に変換します。";
     root.append(add, file, hint);
+    const { modified, missing } = this.counts();
+    if (modified + missing > 0) {
+      const box = document.createElement("div");
+      box.className = "link-summary";
+      if (modified > 0) box.append(this.button(`元のファイルが変わった画像をすべて更新（${modified}個）`, () => void this.update()));
+      if (missing > 0) {
+        const p = document.createElement("p");
+        p.className = "hint";
+        p.textContent = `元のファイルが見つからない画像が ${missing}個あります。文書の中の画像はそのまま使えます。「差し替え…」でファイルを選び直せます。`;
+        box.append(p);
+      }
+      root.append(box);
+    }
     for (const img of this.images) root.append(this.row(img));
   }
 
@@ -142,6 +279,25 @@ export class ImageManager {
     const head = document.createElement("div");
     head.className = "row";
     head.append(name, info);
+    const link = document.createElement("div");
+    link.className = "row link-row";
+    const state = this.status.get(img)?.state;
+    const where = document.createElement("span");
+    where.className = "computed link-path";
+    if (img.link) {
+      where.textContent = `リンク：${img.link.path.split(/[\\/]/).pop()}`;
+      where.title = img.link.path;
+      const badge = document.createElement("span");
+      badge.className = `link-state ${state ?? "unknown"}`;
+      badge.textContent = state === "modified" ? "更新あり" : state === "missing" ? "見つからない" : state === "ok" ? "元のファイルと同じ" : "";
+      link.append(where, badge);
+      if (state === "modified") link.append(this.button("更新", () => void this.update(img)));
+    } else {
+      where.textContent = "リンクなし（文書の中だけ）";
+      link.append(where);
+    }
+    link.append(this.button("差し替え…", () => void this.replace(img)));
+    if (img.link) link.append(this.button("リンクを外す", () => this.unlink(img)));
     const actions = document.createElement("div");
     actions.className = "row";
     actions.append(mode, insert, del);
@@ -150,7 +306,7 @@ export class ImageManager {
     const help = document.createElement("p");
     help.className = "hint";
     help.textContent = "原稿の行には、ほかに「切り抜き：上10下10」（元の画像を％で切る）・「大きさ：80%」・「ずらす：右2下3」（mm）を書けます。";
-    body.append(head, actions, lineOpts, extra, help);
+    body.append(head, link, actions, lineOpts, extra, help);
     box.append(thumb, body);
     return box;
   }
@@ -173,13 +329,16 @@ export class ImageManager {
         alert(`「${f.name}」を画像として読めませんでした。`);
         continue;
       }
+      const link = await this.h.linkOf(f);
       const img: DocImage = {
         name: this.uniqueName(f.name.replace(/\.[^.]+$/, "")),
         mime: f.type,
         data: toBase64(bytes),
         width: bitmap.width,
         height: bitmap.height,
+        ...(link ? { link } : {}),
       };
+      if (link) this.status.set(img, { state: "ok", path: link.path, relative: link.relative });
       this.images.push(img);
       this.bitmaps.set(img.name, bitmap);
     }

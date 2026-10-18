@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cmykToRgb } from "../engine/ink-color.js";
 import type { DocImage } from "./document.js";
+import { imageInfo, linkOf } from "./image-link.js";
 import { readZip } from "../output/zip.js";
 import { DEFAULT_SETTINGS, FREE_TRIM, normalizeSettings, tintHex, type Settings, type SpotColor } from "./settings.js";
 import { DEFAULT_DECORATION, DEFAULT_STYLES, INDEX_ENTRY_STYLE, INDEX_HEADING_STYLE, TOC_ENTRY_STYLES, TOC_TITLE_STYLE, newCharacterStyle, newParagraphStyle, type CharacterStyle, type GlyphForm, type NestedStyle, type ParagraphDecoration, type ParagraphRule, type ParagraphStyle, type RuleKind } from "./styles.js";
@@ -77,27 +78,6 @@ function labToRgb(l: number, a: number, b: number): [number, number, number] {
   const lin = [3.2404542 * x - 1.5371385 * y - 0.4985314 * z, -0.969266 * x + 1.8760108 * y + 0.041556 * z, 0.0556434 * x - 0.2040259 * y + 1.0572252 * z];
   const gamma = (v: number) => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055);
   return lin.map((v) => Math.min(255, Math.max(0, gamma(v)))) as [number, number, number];
-}
-
-/** 画像のファイルの中身から、種類とピクセル数を読む（PNG・JPEG だけ）。 */
-function imageInfo(data: Uint8Array): { mime: DocImage["mime"]; width: number; height: number } | undefined {
-  const b = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-  if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return { mime: "image/png", width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
-  if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
-    let p = 2;
-    while (p + 9 < b.length) {
-      if (b[p] !== 0xff) {
-        p++;
-        continue;
-      }
-      const marker = b[p + 1];
-      const len = b.readUInt16BE(p + 2);
-      // SOF（大きさの書いてある所）。DHT（C4）・JPG（C8）・DAC（CC）は除く。
-      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { mime: "image/jpeg", height: b.readUInt16BE(p + 5), width: b.readUInt16BE(p + 7) };
-      p += 2 + len;
-    }
-  }
-  return undefined;
 }
 
 /** リンクの URI（file:C:/… や file:///Users/…）を、ファイルのパスにする。 */
@@ -250,7 +230,8 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
           const base = hint?.links?.[path.basename(file)] ?? path.basename(file).replace(/\.[^.]+$/, "");
           let name = base;
           for (let k = 2; images.some((i) => i.name === name); k++) name = `${base}_${k}`;
-          img = { name, mime: info.mime, data: Buffer.from(data).toString("base64"), width: info.width, height: info.height };
+          // リンク先のファイルを、Kolophon でもリンクとして覚えておく（InDesign と同じファイルを見張れる）。
+          img = { name, mime: info.mime, data: Buffer.from(data).toString("base64"), width: info.width, height: info.height, link: linkOf(file) };
           images.push(img);
         } else notes.add("PNG・JPEG でない画像（PSD・TIFF・PDF など）");
       } else missingImages++;
