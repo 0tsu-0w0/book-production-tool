@@ -235,8 +235,18 @@ export class Preview {
     const page = this.cache.get(this.current);
     if (!page) return;
     const t = performance.now();
-    this.singleCanvas = this.makeCanvas(page, this.fitScale(1), this.singleCanvas);
-    if (this.stage.firstChild !== this.singleCanvas || this.stage.childNodes.length !== 1) this.stage.replaceChildren(this.singleCanvas);
+    const scale = this.fitScale(1);
+    const key = this.drawKey(page, scale);
+    const drawn = this.singleCanvas && this.drawn.get(this.singleCanvas);
+    if (key && drawn && this.singleCanvas!.dataset.drawn === key) {
+      // 中身も描き方も同じ（ほかのページを直したとき）：描き直さず、ページだけ新しいものにする。
+      drawn.page = page;
+    } else {
+      this.singleCanvas = this.makeCanvas(page, scale, this.singleCanvas);
+      if (key) this.singleCanvas.dataset.drawn = key;
+      else delete this.singleCanvas.dataset.drawn;
+    }
+    if (this.stage.firstChild !== this.singleCanvas || this.stage.childNodes.length !== 1) this.stage.replaceChildren(this.singleCanvas!);
     this.lastDrawMs = performance.now() - t;
     this.label.textContent = `${this.current + 1} / ${this.pageCount}`;
     this.onShown?.();
@@ -264,6 +274,21 @@ export class Preview {
     this.label.textContent = `${shown.join("・")} / ${this.pageCount}`;
   }
 
+  /** 画像の中身が変わったときに増やす（描いた絵を使い回さないように）。 */
+  imagesVersion = 0;
+  private readonly inkIds = new WeakMap<object, number>();
+  private inkCount = 0;
+  /** 描いた絵を使い回してよいかの鍵：ページの中身の指紋と、描き方（縮尺・仕上がり線・分版・画像）。指紋がなければ使い回さない。 */
+  private drawKey(page: DrawPage & { sig?: string }, scale: number): string | undefined {
+    if (!page.sig) return undefined;
+    let ink = 0;
+    if (this.ink) {
+      if (!this.inkIds.has(this.ink)) this.inkIds.set(this.ink, ++this.inkCount);
+      ink = this.inkIds.get(this.ink)!;
+    }
+    return `${page.sig}|${scale}|${this.guides ? this.bleedMm : -1}|${ink}|${this.imagesVersion}|${window.devicePixelRatio || 1}`;
+  }
+
   /** 一覧の図（ページの番号で引く）。組み直しても同じページ数なら使い回し、古い縮小図を出したまま描き直す。 */
   private gridFigures: HTMLElement[] = [];
   private gridSeq = 0;
@@ -286,8 +311,16 @@ export class Preview {
           pending.delete(i);
           const page = this.cache.get(i);
           const fig = this.gridFigures[i];
-          if (page && fig) fig.querySelector("canvas")?.replaceWith(this.makeCanvas(page, thumbScale));
-          await new Promise((r) => setTimeout(r, 0));
+          if (page && fig) {
+            // 中身の指紋と描き方が前に描いたときと同じなら、描き直さない（組み直しても変わらないページ）。
+            const key = this.drawKey(page, thumbScale);
+            if (!key || fig.dataset.drawn !== key) {
+              fig.querySelector("canvas")?.replaceWith(this.makeCanvas(page, thumbScale));
+              if (key) fig.dataset.drawn = key;
+              else delete fig.dataset.drawn;
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          }
           if (seq !== this.gridSeq) break;
         }
       }

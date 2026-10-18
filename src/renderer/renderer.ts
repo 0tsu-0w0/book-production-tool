@@ -23,6 +23,7 @@ import { GlyphPanel, type GlyphVariantView } from "./glyph-panel.js";
 import { SeparationsPanel } from "./separations-panel.js";
 import { formatText } from "../engine/format.js";
 import type { DrawPage } from "../engine/types.js";
+import { unpackPage, type PackedPage } from "../engine/packed-page.js";
 import { GlyphPaths, type DrawFont } from "./draw.js";
 import type { ExportMessage, ExportRequest } from "./export-worker.js";
 import { Preview, type ViewMode } from "./preview.js";
@@ -37,8 +38,8 @@ interface TypesetResult {
   upems: number[];
   /** フォントごとのキー（字形の輪郭の控えを分けるため）。upems と同じ並び。 */
   fontKeys: string[];
-  /** 頼んだページだけが入る（全ページは本体が持っている）。 */
-  pages: DrawPage[];
+  /** 頼んだページだけが入る（全ページは本体が持っている）。詰めた形（unpackPage で戻す）。 */
+  pages: PackedPage[];
   /** まだ画面に送っていない字形の輪郭だけが入る。 */
   paths: Record<string, Record<number, string>>;
   lastPageLines: number;
@@ -85,7 +86,7 @@ interface Api extends TemplateApi {
   listFonts(): Promise<{ list: FontOption[]; defaultChoice: FontChoice }>;
   listAllFonts(): Promise<FontOption[]>;
   typeset(text: string, settings: Settings, reset: boolean, wanted: number[], images: Record<string, ImageInfo>, caret?: [number, number]): Promise<TypesetResult>;
-  pages(version: number, indices: number[]): Promise<{ pages: DrawPage[]; paths: Record<string, Record<number, string>> } | null>;
+  pages(version: number, indices: number[]): Promise<{ pages: PackedPage[]; paths: Record<string, Record<number, string>> } | null>;
   openDocument(): Promise<Opened | undefined>;
   openPath(file: string): Promise<Opened>;
   onOpenPath(fn: (file: string) => void): void;
@@ -177,6 +178,7 @@ const panel = new SettingsPanel($("settings"), onSettingsChanged, onPanelAction)
 const imageManager = new ImageManager({
   changed: () => {
     preview.images = imageManager.bitmaps;
+    preview.imagesVersion++;
     markChanged();
   },
   insertLine: (line) => insertLine(line),
@@ -412,7 +414,7 @@ async function typesetOnce() {
   }
   // 紙面で入力しているときは、カーソルのあるページを見せる。
   if (caret && r.caretPage !== undefined && r.caretPage >= 0) preview.jumpTo(r.caretPage);
-  preview.setDocument(r.version, r.pageCount, drawFonts(r), settings.nombreStart, r.pages);
+  preview.setDocument(r.version, r.pageCount, drawFonts(r), settings.nombreStart, r.pages.map(unpackPage));
   const chars = countChars(source.value);
   counts.textContent =
     `${chars.toLocaleString()}字　${r.pageCount}ページ（最終ページ ${r.lastPageLines}行）` +
@@ -455,7 +457,7 @@ async function fetchPages(version: number, indices: number[]): Promise<DrawPage[
   const r = await api.pages(version, indices);
   if (!r || !result) return null;
   addPaths(r.paths);
-  return r.pages;
+  return r.pages.map(unpackPage);
 }
 
 function onSettingsChanged(s: Settings) {
@@ -905,7 +907,7 @@ function exportImages() {
     const { format, dpi, jpegQuality } = settings.image;
     const ext = format === "jpeg" ? "jpg" : "png";
     // 見開きなら2ページを1枚に並べる。名前はページ番号（見開きは 002-003 のように）。
-    const byIndex = new Map(all.pages.map((p) => [p.index, p]));
+    const byIndex = new Map(all.pages.map((p) => [p.index, unpackPage(p)]));
     const get = (i: number | null) => (i === null ? null : (byIndex.get(i) ?? null));
     const pages = spread ? pairs.map((p, k) => combineSpread(get(p.right), get(p.left), k)) : needed.map((i) => byIndex.get(i)!);
     // 名前はページのノンブル（前付けを別の番号にするときは i・ii…）。見開きは読む順につなぐ（002-003）。

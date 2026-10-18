@@ -4,6 +4,7 @@ import { glyphPaths, typesetLazy, type FontTable, type ImageInfo, type LazyTypes
 import { checkLines, findVariants } from "./engine/proof.js";
 import { FontService } from "./fonts/service.js";
 import { preflight } from "./output/preflight.js";
+import { packPage } from "./engine/packed-page.js";
 
 // 画面のための組版を、別のプロセス（Electron の utilityProcess）で行う。
 // 本体（main）は窓の移動・メニュー・保存なども受け持つので、大きな本を組んでいる間にそれらが止まらないようにする。
@@ -43,7 +44,8 @@ let version = 0;
 function pagesPayload(indices: number[]) {
   const { result, fonts: table } = latest!;
   const picked = [...new Set(indices)].filter((i) => i >= 0 && i < result.pageCount).map((i) => result.page(i));
-  return { pages: picked, paths: glyphPaths(picked, table, sentPaths) };
+  // ページは詰めた形で送る（画面への受け渡しを軽くする。#11）。
+  return { pages: picked.map(packPage), paths: glyphPaths(picked, table, sentPaths) };
 }
 
 /** 原稿と設定が画面の最新の組版と同じならそれを、違えば組み直したものを返す。 */
