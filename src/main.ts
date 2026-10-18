@@ -10,6 +10,7 @@ import { glyphPaths, typesetLazy, type ImageInfo } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
 import { glyphVariants } from "./fonts/glyph-variants.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
+import { buildHtml, type HtmlMode } from "./output/html.js";
 import { epubFonts } from "./output/epub-fonts.js";
 import { writePackage } from "./output/package.js";
 import { BOOK_EXTENSION, BookFormatError, LEGACY_BOOK_EXTENSIONS, combineBook, docLabel, newBook, parseBook, serializeBook, type Book, type BookDocument } from "./document/book.js";
@@ -76,6 +77,8 @@ let startupDoc = arg("doc") ?? fileFromArgv(process.argv);
 const autoPdf = snapshotDir ? arg("export-pdf") : undefined;
 const autoImages = snapshotDir ? arg("export-images") : undefined;
 const autoEpub = snapshotDir ? arg("export-epub") : undefined;
+/** 確認用：HTML を書き出す先（.html なら1つのファイル、そうでなければ章ごとのフォルダ）。 */
+const autoHtml = snapshotDir ? arg("export-html") : undefined;
 const autoPackage = snapshotDir ? arg("export-package") : undefined;
 const autoIdml = snapshotDir ? arg("export-idml") : undefined;
 // 確認用：--bench を付けると、原稿の途中を何度か書き換えて組み直しの時間を測り、標準出力に書く。
@@ -202,7 +205,8 @@ ipcMain.handle("init", () => {
     opened: startupDoc && !isBookFile(startupDoc) ? openSafely(startupDoc) : undefined,
     book: startupDoc && isBookFile(startupDoc) ? startupDoc : undefined,
     snapshot: !!snapshotDir,
-    autoExport: !!(autoPdf || autoImages || autoEpub || autoPackage || autoIdml),
+    autoExport: !!(autoPdf || autoImages || autoEpub || autoPackage || autoIdml || autoHtml),
+    autoHtml: autoHtml ? (/\.html?$/i.test(autoHtml) ? "single" : "chapters") : undefined,
     autoPackage: !!autoPackage,
     autoIdml: !!autoIdml,
     bench,
@@ -871,6 +875,53 @@ async function exportEpubFile(text: string, settings: Settings, baseName: string
 ipcMain.handle("epub:export", (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = []) => exportEpubFile(text, settings, baseName, images));
 
 /**
+ * HTML を書き出す（#10）。中身は EPUB と同じ処理で作り、ウェブで開ける形にする。
+ * single：1つの .html（画像・CSS・書体を中に入れる）。chapters：フォルダ（index.html・章ごとの HTML・style.css・images）。
+ */
+async function exportHtmlFile(text: string, settings: Settings, baseName: string, images: DocImage[], mode: HtmlMode) {
+  if (snapshotDir && !autoHtml) return undefined;
+  const { canceled, filePath } = autoHtml
+    ? { canceled: false, filePath: path.resolve(autoHtml) }
+    : await dialog.showSaveDialog(win!, {
+        title: mode === "single" ? "HTML（1つのファイル）を書き出す" : "HTML（章ごとのフォルダ）を書き出す：フォルダの名前",
+        defaultPath: mode === "single" ? `${baseName}.html` : baseName,
+        filters: mode === "single" ? [{ name: "HTML", extensions: ["html"] }] : [],
+      });
+  if (canceled || !filePath) return undefined;
+  try {
+    let epub = buildEpub(text, settings, images);
+    if (settings.output.epubFonts) {
+      const { table, loaded } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
+      const embedded = epubFonts(epub, settings, loaded, table.keys);
+      if (embedded.length > 0) epub = buildEpub(text, settings, images, new Date(), embedded);
+    }
+    if (mode === "single") {
+      const [file] = buildHtml(epub, "single", path.basename(filePath, path.extname(filePath)));
+      fs.writeFileSync(filePath, file.data);
+      return { path: filePath, files: 1 };
+    }
+    // フォルダ：同じ名前のファイルがあれば書かない（上書きしてよいフォルダかどうか分からないので、空か、前に書き出した HTML のフォルダだけ）。
+    const dir = filePath.replace(/\.html?$/i, "");
+    if (fs.existsSync(dir)) {
+      if (!fs.statSync(dir).isDirectory()) return { error: `「${dir}」はファイルです。別の名前にしてください。` };
+      const existing = fs.readdirSync(dir);
+      if (existing.length > 0 && !existing.includes("index.html")) return { error: `「${dir}」は空でないフォルダです。別の名前にしてください。` };
+    }
+    const files = buildHtml(epub, "chapters");
+    for (const f of files) {
+      const target = path.join(dir, ...f.name.split("/"));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, f.data);
+    }
+    return { path: path.join(dir, "index.html"), files: files.length };
+  } catch (e) {
+    return { error: `HTML を書き出せませんでした：${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+ipcMain.handle("html:export", (_e, text: string, settings: Settings, baseName: string, images: DocImage[] = [], mode: HtmlMode = "single") => exportHtmlFile(text, settings, baseName, images, mode));
+
+/**
  * IDML（InDesign の受け渡し用の形式）を書き出す。ページ数とページ番号の参照の番号は、Kolophon で組んだ結果から取る。
  * 書体は、PC の書体の一覧からファミリー名とスタイルを引いて入れる。
  */
@@ -1077,6 +1128,8 @@ function buildMenu() {
         cmd("PDF を書き出す…", "export-pdf", "CmdOrCtrl+E"),
         cmd("画像を書き出す…", "export-images", "CmdOrCtrl+Shift+E"),
         cmd("EPUB（電子書籍）を書き出す…", "export-epub"),
+        cmd("HTML（1つのファイル）を書き出す…", "export-html"),
+        cmd("HTML（章ごとのフォルダ）を書き出す…", "export-html-chapters"),
         cmd("パッケージ（入稿用にまとめる）…", "export-package"),
         cmd("IDML（InDesign）を書き出す…", "export-idml"),
         { type: "separator" },

@@ -80,6 +80,7 @@ interface Api extends TemplateApi {
     autoPackage?: boolean;
     /** 確認用：IDML も書き出す（--export-idml）。 */
     autoIdml?: boolean;
+    autoHtml?: "single" | "chapters";
     bench: boolean;
     startPage: number;
   }>;
@@ -96,6 +97,7 @@ interface Api extends TemplateApi {
   clearRecovery(): Promise<void>;
   exportPdf(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<PdfResult>;
   exportEpub(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<EpubResult>;
+  exportHtml(text: string, settings: Settings, baseName: string, images: DocImage[], mode: "single" | "chapters"): Promise<{ path: string; files: number } | { error: string } | undefined>;
   exportIdml(text: string, settings: Settings, baseName: string, images: DocImage[]): Promise<IdmlResult>;
   exportPackage(
     text: string,
@@ -775,6 +777,21 @@ function exportPdf() {
   });
 }
 
+/** HTML の書き出し（#10）：1つのファイルか、章ごとのフォルダ。中身は EPUB と同じ。 */
+function exportHtml(mode: "single" | "chapters") {
+  return withBusy(async () => {
+    setStatus("HTML を書き出しています…");
+    const r = await api.exportHtml(source.value, settings, baseName(), imageManager.images, mode);
+    if (!r) return setStatus("書き出しを取り消しました。");
+    if ("error" in r) {
+      setStatus(r.error);
+      if (!init.autoExport) alert(r.error);
+      return;
+    }
+    setStatus(mode === "single" ? `HTML を保存しました：${r.path}` : `HTML を書き出しました（${r.files}ファイル）：${r.path}`);
+  });
+}
+
 /** EPUB の書き出しの結果を、状態の欄に出す。 */
 function reportEpub(r: EpubResult) {
   if (!r) return setStatus("書き出しを取り消しました。");
@@ -996,6 +1013,10 @@ async function runCommand(command: string) {
       return exportPdf();
     case "export-epub":
       return exportEpub();
+    case "export-html":
+      return exportHtml("single");
+    case "export-html-chapters":
+      return exportHtml("chapters");
     case "export-idml":
       return exportIdml();
     case "export-package":
@@ -1172,6 +1193,10 @@ if (init.snapshot) {
     await exportImages();
     await exportEpub();
     console.log(`[snapshot] ${status.textContent}`);
+    if (init.autoHtml) {
+      await exportHtml(init.autoHtml);
+      console.log(`[snapshot] ${status.textContent}`);
+    }
     if (init.autoIdml) {
       await exportIdml();
       console.log(`[snapshot] ${status.textContent}`);
