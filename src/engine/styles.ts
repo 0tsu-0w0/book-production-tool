@@ -21,6 +21,8 @@ export interface EngineParagraphStyle {
   spaceAfter: number;
   keepLines: boolean;
   keepWithNext: boolean;
+  /** 段抜き（段組みのとき、すべての段をまたぐ）。 */
+  spanColumns?: boolean;
   color: string | null;
   bold: boolean;
   glyphForm?: string;
@@ -100,6 +102,7 @@ export function applyStyles(blocks: Block[], styles: EngineStyles): void {
       spaceAfter: ps.spaceAfter,
       keepLines: ps.keepLines,
       keepWithNext: ps.keepWithNext,
+      ...(ps.spanColumns ? { spanColumns: true } : {}),
       ...(hasDecoration(ps.decoration) ? { deco: ps.decoration } : {}),
       ...(ps.dropCap && ps.dropCap.lines >= 2 ? { dropCap: { lines: ps.dropCap.lines, chars: ps.dropCap.chars } } : {}),
     };

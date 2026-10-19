@@ -76,6 +76,10 @@ export interface Line {
    * （表の行の最初・最後の行だけ。結合した欄の所は空ける）、二重線、罫線の引き方。
    */
   table?: { edges: number[]; top: [number, number][]; bottom: [number, number][]; double: boolean; rules: "all" | "rows" | "none" };
+  /** 段抜きの行：すべての段をまたいで置く（字数は段の字数と段間を足したもの）。字のない行は、段抜きの前後の空き。 */
+  spanAll?: boolean;
+  /** 段抜きの前の区切りの終わり（字はない・行を取らない）：その区切りの1段の行数（段の長さをそろえた高さ）。 */
+  regionEnd?: number;
 }
 
 /** 行の文字列（ルビは除き、割注は含む）。 */
@@ -408,7 +412,24 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     return k;
   };
   // 1ページに入る行数は、1段の行数 × 段数。
-  const capacity = spec.linesPerPage * spec.columns;
+  // 段抜き（#8）のあとは、ページを区切る：区切りの始まり（ページの頭から何行目か）から先が、新しい区切りの段になる。
+  // used・capacity・bandLines は、今の区切りの中のもの。
+  let capacity = spec.linesPerPage * spec.columns;
+  let regionStart = 0;
+  let bandLines = spec.linesPerPage;
+  /** 今の区切りがページの中で始まる位置（current() の何番目から）と、入れた行（段の残りを空けた分は除く）。 */
+  let regionFrom = 0;
+  let regionItems: PageLine[] = [];
+  /** 今の区切りの段の長さを、段抜きの前でそろえ直せるか（行の中の画像・回り込みがあれば、そろえない）。 */
+  let regionBalanceable = true;
+  const resetRegion = () => {
+    regionStart = 0;
+    bandLines = spec.linesPerPage;
+    capacity = spec.linesPerPage * spec.columns;
+    regionFrom = 0;
+    regionItems = [];
+    regionBalanceable = true;
+  };
   const pages: PageLine[][] = [[]];
   const roles: PageRole[] = ["body"];
   let used = 0; // 今のページで使った行数（行取りを含む）
@@ -469,6 +490,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     anchors.push(pendingAnchors ?? []);
     pendingAnchors = undefined;
     used = 0;
+    resetRegion();
   };
   /** 今のページに何か入っていれば、次のページへ進む。 */
   const breakPage = () => {
@@ -476,9 +498,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
   };
   /** 今の段の残りを空ける（次の行は次の段の頭から）。 */
   const fillBand = () => {
-    const inBand = snap(used % spec.linesPerPage);
+    const inBand = snap(used % bandLines);
     if (inBand === 0) return;
-    const n = snap(Math.min(spec.linesPerPage - inBand, capacity - used));
+    const n = snap(Math.min(bandLines - inBand, capacity - used));
     if (n <= 0) return;
     if (Number.isInteger(n)) for (let k = 0; k < n; k++) current().push("blank");
     else current().push(n);
@@ -489,13 +511,14 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     if (fixed(roles[roles.length - 1])) newPage();
     const span = slots(line);
     // 行取り・行送りで幅の広い行が段の終わりをまたぐなら、次の段（またはページ）の頭へ送る。
-    const inBand = snap(used % spec.linesPerPage);
-    if (inBand > 0 && inBand + span > spec.linesPerPage + EPS) fillBand();
+    const inBand = snap(used % bandLines);
+    if (inBand > 0 && inBand + span > bandLines + EPS) fillBand();
     // この行に注があれば、注の行（と、ページで最初の注なら区切り線）の分も同じページに要る。
     const notes = noteLines(line);
     const need = () => (notes.length === 0 ? 0 : notes.length + (pageNotes.length === 0 ? NOTE_RULE.span! : 0));
     if (used + span + noteReserve + need() > capacity + EPS && used > 0) newPage();
     current().push(line);
+    regionItems.push(line);
     used = snap(used + span);
     if (notes.length > 0) {
       if (pageNotes.length === 0) pageNotes.push(NOTE_RULE);
@@ -520,6 +543,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     atPageTop: boolean,
     heading?: { level: 1 | 2; text: string },
     centerStart = false,
+    length = spec.charsPerLine,
   ): PageLine[] => {
     const f: ParaFormat = block.format ?? {
       indent: block.kind === "heading" ? HEADING_INDENT[block.level] : 0,
@@ -537,7 +561,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const w = wrap;
     const span = f.lineSpan * (f.linePitch ?? 1);
     const inWrap = (i: number) => !!w && w.page === page && first + i * span >= w.from && first + i * span < w.to;
-    const widthAt = (i: number) => (inWrap(i) ? spec.charsPerLine - w!.chars : spec.charsPerLine);
+    const widthAt = (i: number) => (inWrap(i) ? length - w!.chars : length);
     // 扉では、天付きの段落を行の中央に置く。
     const align = centerStart && f.align === "start" ? "center" : f.align;
     // 中央・地付きの行は、両端揃えにしない。
@@ -550,16 +574,16 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     const dropLines = drop ? f.dropCap!.lines : 0;
     const dropEm = drop ? dropCapScale(dropLines, spec.lineGap, span) : 0;
     const dropLength = drop
-      ? Math.min(Math.ceil(drop.cap.reduce((s, a) => s + a.cells.length, 0) * dropEm - EPS), Math.max(0, spec.charsPerLine - indent - 1))
+      ? Math.min(Math.ceil(drop.cap.reduce((s, a) => s + a.cells.length, 0) * dropEm - EPS), Math.max(0, length - indent - 1))
       : 0;
     const lineWidth = (i: number) => widthAt(i) - (i < dropLines ? dropLength : 0);
     // 行スタイルで大きさ・字間を変える段落：最初の何行かの字の長さを変えて分け直す（行の分け方が変わるので、落ち着くまで）。
     const ls = f.lineStyle;
     const resizes = !!ls && ((ls.scale ?? 1) !== 1 || !!ls.tracking);
     // 回り込みのない段落は、行の字数がどの行も同じなので、前の行分けを使い回せる。
-    const key = breaks && !w && !resizes ? `${optsKey(lineOpts)}|${indent}|${hang}|${dropLines},${dropLength}` : undefined;
+    const key = breaks && !w && !resizes ? `${optsKey(lineOpts)}|${indent}|${hang}|${dropLines},${dropLength}|${length}` : undefined;
     let broken = key ? breaks!.get(block, key) : undefined;
-    const breakAll = () => breakLines(drop ? drop.rest : block.atoms, w || drop ? lineWidth : spec.charsPerLine, indent, lineOpts, hang);
+    const breakAll = () => breakLines(drop ? drop.rest : block.atoms, w || drop ? lineWidth : length, indent, lineOpts, hang);
     if (!broken) {
       broken = breakAll();
       if (key) breaks!.set(block, key, broken);
@@ -661,6 +685,10 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       case "heading":
         // 改丁：大見出しは奇数ページから。
         if (block.level === 1 && spec.chapterStartsOdd) startOdd();
+        if (spans(block)) {
+          pushSpanning(block, spec.headingBlankAfter);
+          break;
+        }
         pushParagraph(block, spec.headingBlankAfter);
         for (let i = 0; i < spec.headingBlankAfter; i++) pushLine("blank");
         break;
@@ -707,11 +735,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       images[images.length - 1].push({ block, slot: 0, captionLines });
       return;
     }
-    const n = Math.min(block.lines, spec.linesPerPage);
+    const n = Math.min(block.lines, bandLines);
     if (fixed(roles[roles.length - 1])) newPage();
     // 画像の行は段をまたがない。段の残りが足りなければ、次の段（またはページ）の頭へ。
-    const inBand = snap(used % spec.linesPerPage);
-    if (inBand > 0 && inBand + n > spec.linesPerPage + EPS) fillBand();
+    const inBand = snap(used % bandLines);
+    if (inBand > 0 && inBand + n > bandLines + EPS) fillBand();
     if (used + n > capacity + EPS && used > 0) newPage();
     // キャプションは画像の高さに収め、取った行の最後の1〜2行に置く。
     let captionLines = block.caption && n >= 2 ? captionOf(block, Math.floor(imageGeometry(block, spec, 1).height / spec.fontSizePt)) : undefined;
@@ -719,7 +747,9 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       captionLines = captionOf(block, Math.floor(imageGeometry(block, spec, Math.min(2, n - 1)).height / spec.fontSizePt))?.slice(0, Math.min(2, n - 1));
     }
     const geo = imageGeometry(block, spec, captionLines?.length ?? 0);
-    images[images.length - 1].push({ block, slot: used, captionLines });
+    images[images.length - 1].push({ block, slot: used, captionLines, regionStart, bandLines });
+    // 行の中の画像のある区切りは、段抜きの前で段の長さをそろえない（画像の場所が決まっているため）。
+    regionBalanceable = false;
     if (block.wrap && geo.wrapChars > 0) {
       wrap = { page: pages.length - 1, from: used, to: used + n, chars: geo.wrapChars, top: block.position === "top" };
     } else {
@@ -791,7 +821,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
       const k = Math.max(1, ...cellLines.map((l) => l.length));
       // 表の行は段の途中で分けない（段より長いときは分ける）。
       const roomNow = roomInBand();
-      if (roomNow < k && roomNow < spec.linesPerPage) breakBand();
+      if (roomNow < k && roomNow < bandLines) breakBand();
       const top = openTop(r);
       // 行の下（後）の罫線：次の行で上とつないだ欄の所は引かない。
       const bottom: [number, number][] = r + 1 < t.rows.length ? openTop(r + 1) : [[0, end]];
@@ -839,8 +869,8 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
 
   /** 今の段に残っている行数（次に新しいページや段になるなら、1段まるごと）。 */
   function roomInBand(): number {
-    if (fixed(roles[roles.length - 1]) || used >= capacity - EPS) return spec.linesPerPage;
-    return snap(spec.linesPerPage - (used % spec.linesPerPage));
+    if (fixed(roles[roles.length - 1]) || used >= capacity - EPS) return bandLines;
+    return snap(bandLines - (used % bandLines));
   }
 
   /** 今の段の残りを空けて、次の段（またはページ）から続ける。 */
@@ -855,6 +885,7 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
    * 孤立行を避ける段落は、1行目だけが段の最後に残るなら段落ごと、最後の1行だけが次に行くなら2行を次へ送る。
    */
   function pushParagraph(block: TextBlock, after = 0) {
+    if (spans(block)) return pushSpanning(block, 0);
     const atTop = used === 0 || fixed(roles[roles.length - 1]);
     const all = paragraphLines(block, block.kind === "heading" ? headingOpts : opts, atTop, headingOf(block));
     const f = block.format;
@@ -870,11 +901,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     if (typeof head === "object" && head.dropCap) {
       const need = text.slice(0, head.dropCap.lines).reduce<number>((s, l) => s + slots(l), 0);
       const room = roomInBand();
-      if (room < need - EPS && room < spec.linesPerPage) breakBand();
+      if (room < need - EPS && room < bandLines) breakBand();
     }
     if (f?.keepWithNext) {
       const room = roomInBand();
-      if (room < spec.linesPerPage && room < textSlots + (all.length - tail) + after + 1) breakBand();
+      if (room < bandLines && room < textSlots + (all.length - tail) + after + 1) breakBand();
     }
     if (f?.keepLines && text.length >= 2) {
       // 段の残りに入る行数（行取り・行送りで1行の幅が違っても、段落の中では同じ）。
@@ -894,6 +925,84 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
     }
     text.forEach(pushLine);
     all.slice(tail).forEach(pushLine);
+  }
+
+  /** 段抜きにする段落か（段組みのときだけ）。 */
+  function spans(block: TextBlock): boolean {
+    return spec.columns > 1 && !!block.format?.spanColumns;
+  }
+
+  /**
+   * 段組みの中で、行がその段の長さ h で入るか（段の終わりをまたぐ行は次の段の頭へ。pushLine と同じ送り方）。
+   * 入れば、段の頭へ送るために空けた分を含めた行の並びを返す。
+   */
+  function fitBands(items: PageLine[], h: number): PageLine[] | undefined {
+    const out: PageLine[] = [];
+    let u = 0;
+    for (const item of items) {
+      const span = slots(item);
+      const inBand = snap(u % h);
+      if (inBand > 0 && inBand + span > h + EPS) {
+        out.push(snap(h - inBand));
+        u = snap(u + h - inBand);
+      }
+      out.push(item);
+      u = snap(u + span);
+    }
+    return u <= spec.columns * h + EPS ? out : undefined;
+  }
+
+  /**
+   * 段抜きの段落を置く（#8）。今の区切りに入れた本文は、段の長さをそろえて（いちばん短い長さで）すべての段に割り直す。
+   * 段抜きの行は、すべての段をまたぐ長さで組み、そのあとから新しい区切りの段が始まる。
+   * after は段抜きのあとに空ける行（見出しの後の空行。段抜きの中に含める）。
+   * 段抜きとそのあとの1行が今のページに入らなければ、次のページの頭に置く。
+   */
+  function pushSpanning(block: TextBlock, after: number) {
+    if (fixed(roles[roles.length - 1])) newPage();
+    const spanChars = Math.floor((spec.columns * spec.charsPerLine * spec.fontSizePt + (spec.columns - 1) * spec.columnGapPt) / spec.fontSizePt + EPS);
+    const atTop = used === 0 && regionStart === 0;
+    const lines = paragraphLines(block, block.kind === "heading" ? headingOpts : opts, atTop, headingOf(block), false, spanChars);
+    for (let i = 0; i < after; i++) lines.push("blank");
+    const width = lines.reduce<number>((s, l) => s + slots(l), 0);
+    // 今の区切りの段の長さ：そろえられるなら、いちばん短い長さ。そろえられなければ、今の長さのまま（1段目に収まっているときだけ）。
+    let height = 0;
+    let rebuilt: PageLine[] | undefined;
+    if (used > 0) {
+      if (regionBalanceable && pageNotes.length === 0) {
+        for (let h = Math.max(1, Math.ceil(used / spec.columns - EPS)); h <= bandLines + EPS; h++) {
+          rebuilt = fitBands(regionItems, h);
+          if (rebuilt) {
+            height = h;
+            break;
+          }
+        }
+        if (!rebuilt) height = bandLines;
+      } else height = used <= bandLines + EPS ? used : bandLines;
+    }
+    if (regionStart + height + width + 1 > spec.linesPerPage + EPS && current().length > 0) {
+      newPage();
+      height = 0;
+      rebuilt = undefined;
+    }
+    if (rebuilt) current().splice(regionFrom, current().length - regionFrom, ...rebuilt);
+    if (height > 0) current().push({ atoms: [], indent: 0, span: 0, regionEnd: height });
+    // 段抜きの行：字のない空き（前後の空き・後の空行）も、段抜きの幅として置く。
+    for (const l of lines) {
+      if (typeof l === "object") {
+        l.spanAll = true;
+        current().push(l);
+      } else current().push({ atoms: [], indent: 0, span: slots(l), spanAll: true });
+    }
+    regionStart = snap(regionStart + height + width);
+    bandLines = snap(Math.max(0, spec.linesPerPage - regionStart));
+    capacity = snap(bandLines * spec.columns);
+    used = 0;
+    regionFrom = current().length;
+    regionItems = [];
+    regionBalanceable = true;
+    // 段抜きでページが埋まったら、次のページから続ける。
+    if (bandLines < 1 - EPS) newPage();
   }
 
   flushNotes();
@@ -926,8 +1035,11 @@ export function layoutDocument(blocks: Block[], spec: LayoutSpec, lineOf?: numbe
 
 interface ImagePlacement {
   block: ImageBlock;
-  /** 行の中に置くとき、最初の行の位置（ページの頭からの行数）。 */
+  /** 行の中に置くとき、最初の行の位置（区切りの頭からの行数）。 */
   slot: number;
+  /** 段抜きの区切りの始まり（ページの頭から何行目か）と、その区切りの1段の行数。 */
+  regionStart?: number;
+  bandLines?: number;
   /** キャプションの行。 */
   captionLines?: Line[];
 }
@@ -1019,13 +1131,43 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     const lineShapes: Shape[] = [];
     // 罫線・網掛けのある段落の行（段落ごとにまとめて、罫や網を描く）。
     const decoRows: DecoRow[] = [];
+    // 段抜き（#8）の区切りごとの、1段の行数（区切りの終わりの印に書いてある。最後の区切りはページの残り）。
+    const heights: number[] = [];
+    for (const line of lines) if (typeof line === "object" && line.regionEnd !== undefined) heights.push(line.regionEnd);
+    let regionStart = 0;
+    let region = 0;
+    let bandHeight = heights[0] ?? spec.linesPerPage;
     let slot = 0;
+    const spanChars = Math.floor((spec.columns * columnHeight + (spec.columns - 1) * spec.columnGapPt) / size + EPS);
     for (const line of lines) {
+      if (typeof line === "object" && line.regionEnd !== undefined) {
+        // 区切りの終わり：次の区切りは、この区切りの段の長さのあとから。
+        regionStart = snap(regionStart + line.regionEnd);
+        region++;
+        bandHeight = heights[region] ?? spec.linesPerPage - regionStart;
+        slot = 0;
+        continue;
+      }
       const span = slots(line);
+      if (typeof line === "object" && line.spanAll) {
+        // 段抜きの行：版面の天から、すべての段をまたいで置く。
+        const x = right - size / 2 - (regionStart + (span - 1) / 2) * pitch;
+        if (line.atoms.length > 0) {
+          const extent = placeLine(glyphs, line, x, top, size, rubySize, spanChars, lineShapes, !!spec.horizontal, spec.typography);
+          if (line.para) {
+            let scale = 1;
+            for (const a of line.atoms) for (const c of a.cells) scale = Math.max(scale, c.scale ?? 1);
+            decoRows.push({ para: line.para, x, half: (size * scale) / 2, band: -1 - region, bandTop: top, ...extent, start: !!line.start, end: !!line.end, length: spanChars });
+          }
+        }
+        regionStart = snap(regionStart + span);
+        bandHeight = heights[region] ?? spec.linesPerPage - regionStart;
+        continue;
+      }
       if (typeof line === "object") {
         // 行取りの行は、取った行の中央に置く。
-        const band = Math.floor(slot / spec.linesPerPage);
-        const col = (slot % spec.linesPerPage) + (span - 1) / 2;
+        const band = Math.floor(snap(slot / bandHeight));
+        const col = regionStart + snap(slot % bandHeight) + (span - 1) / 2;
         const x = right - size / 2 - col * pitch;
         const bandTop = top + band * (columnHeight + spec.columnGapPt);
         const extent = placeLine(glyphs, line, x, bandTop, size, rubySize, spec.charsPerLine, lineShapes, !!spec.horizontal, spec.typography);
@@ -1305,6 +1447,8 @@ interface DecoRow {
   to: number;
   start: boolean;
   end: boolean;
+  /** 行の長さ（字数）。段抜きの行は段をまたぐ長さ。省略すると1段の字数。 */
+  length?: number;
 }
 
 /**
@@ -1346,7 +1490,7 @@ function decorationShapes(rows: DecoRow[], size: number, perLine: number): { und
     const span = (rs: DecoRow[]) =>
       text
         ? [first.bandTop + Math.min(...rs.map((r) => r.from)) * size, first.bandTop + Math.max(...rs.map((r) => r.to)) * size]
-        : [first.bandTop, first.bandTop + perLine * size];
+        : [first.bandTop, first.bandTop + (first.length ?? perLine) * size];
     const [y0, y1] = span(group);
     const pad = d.pad * size;
     // 囲む範囲：行の並びの外側に pad の空き。
@@ -1471,8 +1615,9 @@ function imageShape(p: ImagePlacement, spec: LayoutSpec, block: Rect, pageWidth:
     const k = p.captionLines?.length ?? 0;
     const n = Math.max(1, Math.min(p.block.lines, spec.linesPerPage) - k);
     const g = imageGeometry(p.block, spec, k);
-    const band = Math.floor(p.slot / spec.linesPerPage);
-    const col = p.slot % spec.linesPerPage;
+    const bandLines = p.bandLines ?? spec.linesPerPage;
+    const band = Math.floor(snap(p.slot / bandLines));
+    const col = (p.regionStart ?? 0) + snap(p.slot % bandLines);
     // 取った行の右端（最初の行の字の右端）から、n 行分の字の幅。その中央に置く。
     const regionRight = block.left + block.width - col * pitch;
     const regionWidth = (n - 1) * pitch + size;

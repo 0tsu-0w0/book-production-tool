@@ -112,6 +112,8 @@ export interface ParaFormat {
   keepLines?: boolean;
   /** 次の行と離さない（見出しがページの最後の行に取り残されないようにする）。 */
   keepWithNext?: boolean;
+  /** 段抜き（段組みのとき、すべての段をまたいで置く）。 */
+  spanColumns?: boolean;
   /** 段落の罫線・囲み罫・網掛け（使っているときだけ）。 */
   deco?: ParagraphDecoration;
   /** ドロップキャップ（使っているときだけ）。 */

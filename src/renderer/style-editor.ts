@@ -140,6 +140,7 @@ export class StyleEditor {
       this.root.append(this.number("後の空き", p.spaceAfter, 0, 10, 1, "行", (v) => (p.spaceAfter = v)));
       this.root.append(this.check("孤立行を避ける（1行目だけ・最後の1行だけをページの境目で離さない）", p.keepLines, (v) => (p.keepLines = v)));
       this.root.append(this.check("次の行と離さない（ページの最後に取り残さない）", p.keepWithNext, (v) => (p.keepWithNext = v)));
+      this.root.append(this.check("段抜き（段組みのとき、すべての段をまたいで置く。前の本文は段の長さをそろえる）", !!p.spanColumns, (v) => (p.spanColumns = v || undefined)));
     }
 
     // 色：指定しなければ文字の色。

@@ -685,6 +685,7 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       spaceBefore: Math.min(10, Math.round((num(p.SpaceBefore) ?? 0) / bodyLeading)),
       spaceAfter: Math.min(10, Math.round((num(p.SpaceAfter) ?? 0) / bodyLeading)),
       keepWithNext: (num(p.KeepWithNext) ?? 0) > 0,
+      ...(p.SpanColumnType === "SpanColumns" ? { spanColumns: true } : {}),
       keepLines: p.KeepLinesTogether === "true",
       color: colorOf(p.FillColor),
       bold: bold(p),

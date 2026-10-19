@@ -59,6 +59,8 @@ export interface ParagraphStyle {
   keepLines: boolean;
   /** 次の行と離さない（見出しをページの最後に取り残さない）。 */
   keepWithNext: boolean;
+  /** 段抜き：段組みのとき、すべての段をまたいで置く（見出しなど）。前の本文は段の長さをそろえて割り直す。 */
+  spanColumns?: boolean;
   /** null なら文字の色。 */
   color: string | null;
   /** 擬似ボールド（輪郭を太らせる）。 */
@@ -422,6 +424,7 @@ export function normalizeStyles(input: unknown): StyleSheet {
         spaceAfter: Math.round(num(p.spaceAfter, 0, 0, 10)),
         keepLines: p.keepLines === true,
         keepWithNext: p.keepWithNext === true,
+        ...(p.spanColumns === true ? { spanColumns: true } : {}),
         color: color(p.color),
         bold: p.bold === true,
         glyphForm: glyphForm(p.glyphForm),
