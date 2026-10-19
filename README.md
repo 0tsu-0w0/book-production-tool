@@ -1,5 +1,11 @@
 # Kolophon
 
+[![mac](https://github.com/0tsu-0w0/book-production-tool/actions/workflows/mac.yml/badge.svg?branch=main)](https://github.com/0tsu-0w0/book-production-tool/actions/workflows/mac.yml)
+[![windows](https://github.com/0tsu-0w0/book-production-tool/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/0tsu-0w0/book-production-tool/actions/workflows/windows.yml)
+
+ダウンロードは [リリース](https://github.com/0tsu-0w0/book-production-tool/releases) から（Windows のインストーラーと Mac の .dmg。署名なし）。
+main の CI が失敗すると「CI が失敗しています」の issue が立ち、通ると閉じる。
+
 （旧名 tategumi。0.16.0 で改名。名前はギリシャ語 κολοφών「仕上げ」、奥付（colophon）の語源から。）
 
 縦書き（と横書き）の組版ソフト（Windows / Mac）。原稿を入力すると文庫判の縦書きページをその場で組み、

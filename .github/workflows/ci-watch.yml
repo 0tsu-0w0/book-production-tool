@@ -1,0 +1,47 @@
+# CI の失敗に気づけるようにする（#14）。main の mac・windows の CI が終わるたびに：
+#   失敗したら、「CI が失敗しています（名前）」の issue を立てる（開いていれば、そこに書き足す）。
+#   通ったら、その issue に通ったことを書いて閉じる。
+# issue は通知が届くので、CI の結果を見に行かなくても気づける。
+name: ci-watch
+
+on:
+  workflow_run:
+    workflows: [mac, windows]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'push'
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      NAME: ${{ github.event.workflow_run.name }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      URL: ${{ github.event.workflow_run.html_url }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      TITLE: ${{ github.event.workflow_run.head_commit.message }}
+    steps:
+      - name: 失敗なら issue を立てる・通ったら閉じる
+        run: |
+          label="ci-failure"
+          gh label create "$label" --color d73a4a --description "CI が失敗している" 2>/dev/null || true
+          export ISSUE_TITLE="CI が失敗しています（${NAME}）"
+          issue_title="$ISSUE_TITLE"
+          # 題名がぴったり同じ、開いている issue（検索は括弧などで外れることがあるので、一覧から選ぶ）。
+          open=$(gh issue list --state open --label "$label" --limit 100 --json number,title -q '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          subject=$(printf '%s' "$TITLE" | head -n 1)
+          if [ "$CONCLUSION" = "failure" ] || [ "$CONCLUSION" = "timed_out" ]; then
+            body=$(printf '%s の CI が失敗しました（%s）。\n\n- コミット：%s %s\n- 実行：%s\n\n通ったら、この issue は自動で閉じます。' "$NAME" "$CONCLUSION" "${SHA:0:7}" "$subject" "$URL")
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --body "$body"
+            else
+              gh issue create --title "$issue_title" --label "$label" --label bug --body "$body"
+            fi
+          elif [ "$CONCLUSION" = "success" ] && [ -n "$open" ]; then
+            gh issue close "$open" --comment "$(printf '%s の CI が通りました。\n\n- コミット：%s %s\n- 実行：%s' "$NAME" "${SHA:0:7}" "$subject" "$URL")"
+          fi
