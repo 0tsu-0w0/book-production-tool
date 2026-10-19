@@ -12,7 +12,7 @@ import type { LayoutSpec } from "../engine/types.js";
 import { FontService } from "../fonts/service.js";
 import { exportPdf } from "../output/export-pdf.js";
 import { preflight } from "../output/preflight.js";
-import { toDeviceColor } from "../output/pdf-images.js";
+import { embedImages, toDeviceColor } from "../output/pdf-images.js";
 
 const body = new FontService().load(null);
 const face = body.face;
@@ -135,6 +135,18 @@ describe("画像の PDF と検査", () => {
     const img = grayJpeg(40, 30);
     const r = await exportPdf("［＃画像：写真］", settings((s) => (s.pdfKind = "screen")), fonts, "t", undefined, [img]);
     assert.ok(Buffer.from(r.bytes).includes(Buffer.from(img.data, "base64").subarray(0, 64)), "元の JPEG のバイト列がある");
+  });
+
+  it("閲覧用 PDF：バイト列が大きな領域の途中にあっても、その画像を入れる（Mac の CI で落ちていた）", async () => {
+    const img = grayJpeg(40, 30);
+    const raw = Buffer.from(img.data, "base64");
+    // 前にごみのある領域の途中に置く（Node の共有の領域と同じ形）。
+    const pool = new Uint8Array(raw.length + 100).fill(7);
+    pool.set(raw, 100);
+    const doc = await PDFDocument.create();
+    const pages = [{ index: 0, width: 100, height: 100, paper: "#fff", items: [], shapes: [{ kind: "image" as const, name: "写真", x: 0, y: 0, w: 40, h: 30 }] }];
+    const refs = await embedImages(doc, [{ name: "写真", mime: "image/jpeg", bytes: pool.subarray(100) }], pages as never, "rgb");
+    assert.ok(refs.get("写真"));
   });
 
   it("文書にない画像と、解像度の足りない画像を知らせる", () => {

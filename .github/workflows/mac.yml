@@ -1,10 +1,22 @@
 # Mac での確認：テスト、開発版と .dmg のアプリでの起動と書き出し、PDF/X-1a の検査。
 # 結果（PDF・画面・.dmg）は、この実行の Artifacts からダウンロードできる。
+# GitHub でリリースを公開したときは、そのタグで作った .dmg をリリースにも付ける。
 name: mac
 
 on:
   push:
+    branches: ["**"]
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "このタグで作り、そのリリースに .dmg を付ける（空なら付けない）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
 
 jobs:
   mac:
@@ -15,6 +27,8 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -55,6 +69,13 @@ jobs:
 
       - name: PDF/X-1a の検査
         run: node scripts/ci-check-pdf.mjs ci/dev-vertical.pdf ci/dev-horizontal.pdf ci/dev-tex.pdf ci/app-vertical.pdf ci/cli-hiragino.pdf
+
+      - name: リリースに .dmg を付ける
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: gh release upload "$TAG" release/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: 結果を残す
         if: always()

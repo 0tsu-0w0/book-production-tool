@@ -131,7 +131,10 @@ export async function embedImages(
     const placed = sizes.get(src.name);
     if (!placed) continue; // 原稿で使っていない画像は入れない。
     if (mode === "rgb") {
-      const img = src.mime === "image/jpeg" ? await doc.embedJpg(src.bytes) : await doc.embedPng(src.bytes);
+      // pdf-lib は、バイト列の領域（buffer）の頭から読む。Buffer.from(…, "base64") の小さなバイト列は Node の共有の領域の途中にあるので、
+      // そのまま渡すと別の場所を読んでしまう（JPEG の始まりが見つからない）。自分だけの領域に写してから渡す。
+      const bytes = new Uint8Array(src.bytes);
+      const img = src.mime === "image/jpeg" ? await doc.embedJpg(bytes) : await doc.embedPng(bytes);
       refs.set(src.name, img.ref);
       continue;
     }
