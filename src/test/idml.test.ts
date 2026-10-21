@@ -93,7 +93,7 @@ describe("IDML の書き出し", () => {
 
   it("本文：段落スタイル・文字スタイル・ルビ・圏点・傍線・縦中横・割注・字間・カーニング・改ページ・ページ番号", () => {
     const story = files.get("Stories/Story_u1.xml")!;
-    assert.match(story, /RubyFlag="true" RubyString="としょかん" RubyType="GroupRuby" RubyAlignment="RubyJIS" RubyPosition="AboveRight"><Content>図書館<\/Content>/);
+    assert.match(story, /RubyFlag="1" RubyString="としょかん" RubyType="GroupRuby" RubyAlignment="RubyJIS" RubyPosition="AboveRight"><Content>図書館<\/Content>/);
     assert.match(story, /KentenKind="KentenSesameDot"><Content>静<\/Content>/);
     assert.match(story, /Underline="true"><Content>傍線<\/Content>/);
     assert.match(story, /Tatechuyoko="true"><Content>12<\/Content>/);

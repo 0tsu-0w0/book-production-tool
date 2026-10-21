@@ -25,7 +25,7 @@ describe("InDesign で開いたときのずれ（#1）", () => {
     assert.equal(none.attrs.Composer, undefined);
     for (const s of styles.filter((x) => x !== none)) {
       if (s.attrs.Name === "$ID/NormalParagraphStyle") continue;
-      assert.equal(s.attrs.Composer, "$ID/HL Composer J", s.attrs.Name);
+      assert.equal(s.attrs.Composer, "HL Composer J", s.attrs.Name);
     }
   });
 

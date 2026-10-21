@@ -409,7 +409,8 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
     const wrap = (text: string, a: Record<string, string>): string => {
       if (!text) return text;
       let t = text;
-      if (a.RubyFlag === "true" && a.RubyString) {
+      // InDesign は RubyFlag="1" と書く（Kolophon の 0.45.1 までは "true"）。
+      if ((a.RubyFlag === "1" || a.RubyFlag === "true") && a.RubyString) {
         const parts = a.RubyString.trim().split(/\s+/);
         const reading = a.RubyType === "PerCharacterRuby" && parts.length === [...t].length ? parts.join("|") : parts.join("");
         t = `｜${t}《${reading}》`;

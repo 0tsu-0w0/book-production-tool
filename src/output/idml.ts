@@ -74,10 +74,10 @@ const NO_PARA = "ParagraphStyle/$ID/[No paragraph style]";
 const NO_CHAR = "CharacterStyle/$ID/[No character style]";
 /**
  * 段落の組み方：日本語段落コンポーザー。InDesign は日本語のコンポーザーでないと、ルビ・圏点・縦中横・割注や
- * 日本語の約物の詰めを組まない（#1。クラウドの InDesign Server で確かめた）。
+ * 日本語の約物の詰めを組まない（#1。クラウドの InDesign Server で確かめた）。値は InDesign が IDML に書くのと同じ書き方。
  * 段落スタイル「なし」（[No paragraph style]）に付けると、InDesign が文書を開けない（書き出しが失敗する）ので、ほかの段落スタイルにだけ付ける。
  */
-const COMPOSER = "$ID/HL Composer J";
+const COMPOSER = "HL Composer J";
 
 /** 数を短く書く（小数3桁まで）。 */
 const n = (v: number) => String(Math.round(v * 1000) / 1000);
@@ -351,7 +351,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       const tracking = first?.tracking;
       const kern = last?.kern;
       const local =
-        (a.ruby ? ` RubyFlag="true"${attr("RubyString", a.ruby.replace(/[|｜]/g, ""))} RubyType="GroupRuby"${rubyAttrs(a.style && characterNames.has(a.style) ? a.style : lineStyle, paraName)}` : "") +
+        (a.ruby ? ` RubyFlag="1"${attr("RubyString", a.ruby.replace(/[|｜]/g, ""))} RubyType="GroupRuby"${rubyAttrs(a.style && characterNames.has(a.style) ? a.style : lineStyle, paraName)}` : "") +
         (a.kenten ? attr("KentenKind", KENTEN_KINDS[a.kenten] ?? "KentenSesameDot") : "") +
         (a.sideline ? ' Underline="true"' : "") +
         (vertical && first?.tcy && a.pageRef === undefined && !a.note ? ' Tatechuyoko="true"' : "") +
