@@ -72,6 +72,12 @@ const NS = 'xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"';
 const MM = 72 / 25.4;
 const NO_PARA = "ParagraphStyle/$ID/[No paragraph style]";
 const NO_CHAR = "CharacterStyle/$ID/[No character style]";
+/**
+ * 段落の組み方：日本語段落コンポーザー。InDesign は日本語のコンポーザーでないと、ルビ・圏点・縦中横・割注や
+ * 日本語の約物の詰めを組まない（#1。クラウドの InDesign Server で確かめた）。
+ * 段落スタイル「なし」（[No paragraph style]）に付けると、InDesign が文書を開けない（書き出しが失敗する）ので、ほかの段落スタイルにだけ付ける。
+ */
+const COMPOSER = "$ID/HL Composer J";
 
 /** 数を短く書く（小数3桁まで）。 */
 const n = (v: number) => String(Math.round(v * 1000) / 1000);
@@ -253,7 +259,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       listItems("AllLineStyles", lines),
       tabs,
     ].join("");
-    return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.spanColumns ? ' SpanColumnType="SpanColumns" SpanSplitColumnCount="All"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}${decorationAttrs(p, pointSize)}><Properties>${props}</Properties></ParagraphStyle>`;
+    return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false" Composer="${COMPOSER}"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.spanColumns ? ' SpanColumnType="SpanColumns" SpanSplitColumnCount="All"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}${decorationAttrs(p, pointSize)}><Properties>${props}</Properties></ParagraphStyle>`;
   };
   const paragraphStyles = settings.styles.paragraph.map(paraStyleXml);
   // 目次スタイル：InDesign の「目次を更新」で、見出しの段落スタイルから目次を作り直せるように。
@@ -446,7 +452,8 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     const tableXml = `<Table Self="${tid}" HeaderRowCount="${Math.min(t.header, t.rows.length)}" FooterRowCount="0" BodyRowCount="${Math.max(0, t.rows.length - t.header)}" ColumnCount="${count}" AppliedTableStyle="TableStyle/$ID/[Basic Table]" TableDirection="LeftToRightDirection">${rowXml}${colXml}${cells}</Table>`;
     const start = pendingBreak && paras.length > 0 ? attr("StartParagraph", pendingBreak) : "";
     pendingBreak = undefined;
-    paras.push(`<ParagraphStyleRange${attr("AppliedParagraphStyle", paraSelf("本文"))}${start}><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}">${tableXml}\u0001</CharacterStyleRange></ParagraphStyleRange>`);
+    // 表のあとに1行ぶん空ける：InDesign は表のすぐあとの行を表の端に寄せて置き、縦組みでは字が表に重なる（#1）。
+    paras.push(`<ParagraphStyleRange${attr("AppliedParagraphStyle", paraSelf("本文"))}${start}${attr("SpaceAfter", n(pitch))}><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}">${tableXml}\u0001</CharacterStyleRange></ParagraphStyleRange>`);
   };
   const emit = (list: Block[]) => {
     for (const b of list) {
@@ -717,7 +724,8 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     notes: noteNo > 0,
   };
   const bleed = n(settings.advanced.bleedMm * MM);
-  const preferences = `<idPkg:Preferences ${NS} DOMVersion="${DOM}"><DocumentPreference PageHeight="${n(H)}" PageWidth="${n(W)}" PagesPerDocument="${pageCount}" FacingPages="true" DocumentBleedTopOffset="${bleed}" DocumentBleedBottomOffset="${bleed}" DocumentBleedInsideOrLeftOffset="${bleed}" DocumentBleedOutsideOrRightOffset="${bleed}" DocumentBleedUniformSize="true" PageBinding="${vertical ? "RightToLeft" : "LeftToRight"}" ColumnDirection="${vertical ? "Vertical" : "Horizontal"}" AllowPageShuffle="true" Intent="PrintIntent"/>${margin(0)}${orientation}</idPkg:Preferences>`;
+  // ページ数は 1 にする：InDesign は PagesPerDocument の数だけ白いページを先に作り、そのあとに Spreads のページを足す（#1）。
+  const preferences = `<idPkg:Preferences ${NS} DOMVersion="${DOM}"><DocumentPreference PageHeight="${n(H)}" PageWidth="${n(W)}" PagesPerDocument="1" FacingPages="true" DocumentBleedTopOffset="${bleed}" DocumentBleedBottomOffset="${bleed}" DocumentBleedInsideOrLeftOffset="${bleed}" DocumentBleedOutsideOrRightOffset="${bleed}" DocumentBleedUniformSize="true" PageBinding="${vertical ? "RightToLeft" : "LeftToRight"}" ColumnDirection="${vertical ? "Vertical" : "Horizontal"}" AllowPageShuffle="true" Intent="PrintIntent"/>${margin(0)}${orientation}</idPkg:Preferences>`;
   const processInks = [
     ["Process Cyan", 75, 0.61, 1],
     ["Process Magenta", 15, 0.76, 2],
