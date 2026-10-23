@@ -24,6 +24,8 @@ const OPENING = /^[「『（【〈《〔“‘]/;
 const HEADING = /^[＃#]/;
 const PAGEBREAK = /^\s*(＝＝＝|===)\s*$/;
 const LEADING_SPACE = /^[ 　]+/;
+/** 行頭の［＃名前］・［＃名前：…］（閉じる［＃／名前］が同じ行になければ、段落スタイル・画像・表・改ページなどの行の印）。 */
+const LINE_MARK = /^［＃([^］：／]+)(?:：[^］]*)?］/;
 /** 感嘆符・疑問符の直後でも空白を入れない文字。 */
 const NO_SPACE_BEFORE = /^([」』）】〉》〕”’、。，．…―\s　!?！？]|$)/;
 
@@ -36,7 +38,8 @@ export function formatText(src: string, opts: FormatOptions): FormatResult {
     if (kinds[i] === "heading" || kinds[i] === "pagebreak") return line;
     if (kinds[i] === "blank") return line;
     let out = mapUnprotected(line, (seg) => formatSegment(seg, opts));
-    if (opts.indent) {
+    if (opts.indent && kinds[i] === "mark") out = out.replace(LEADING_SPACE, "");
+    else if (opts.indent) {
       const body = out.replace(LEADING_SPACE, "");
       out = kinds[i] === "dialogue" ? body : `　${body}`;
     }
@@ -59,13 +62,16 @@ export function formatText(src: string, opts: FormatOptions): FormatResult {
   };
 }
 
-type LineKind = "heading" | "pagebreak" | "blank" | "dialogue" | "text";
+type LineKind = "heading" | "pagebreak" | "blank" | "dialogue" | "mark" | "text";
 
 function classify(line: string): LineKind {
   if (PAGEBREAK.test(line)) return "pagebreak";
   if (HEADING.test(line)) return "heading";
   const body = line.replace(LEADING_SPACE, "");
   if (body === "") return "blank";
+  // 段落スタイルなどの行の印は、前に字下げを足すと印でなくなるので、字下げしない（字下げは段落スタイルで決める）。
+  const mark = LINE_MARK.exec(body);
+  if (mark && !body.includes(`［＃／${mark[1]}］`)) return "mark";
   return OPENING.test(body) ? "dialogue" : "text";
 }
 

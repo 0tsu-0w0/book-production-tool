@@ -1,6 +1,7 @@
 import type { FontChoice, Settings } from "../document/settings.js";
 import { fontKey } from "../document/styles.js";
 import type { EpubFile, EpubFont } from "./epub.js";
+import { embedRestriction } from "../fonts/sfnt.js";
 import { subsetFont } from "./subset-font.js";
 
 // EPUB に埋め込む書体を作る。本文の書体・スタイルで選んだ書体・合成フォント（かな・欧文）を、
@@ -39,7 +40,8 @@ export function epubFonts(files: EpubFile[], settings: Settings, loaded: { choic
   const subset = (i: number) => {
     if (!subsets.has(i)) {
       const l = loaded[i];
-      const data = l ? subsetFont(l.bytes, text, l.choice.index ?? 0) : null;
+      // 埋め込みを禁じた書体は入れない（その書体の所は読む側の書体になる。#5）。
+      const data = l && !embedRestriction(l.bytes) ? subsetFont(l.bytes, text, l.choice.index ?? 0) : null;
       // CFF（PostScript 系）のフォントは OTTO で始まる。
       const otf = !!data && data[0] === 0x4f && data[1] === 0x54 && data[2] === 0x54 && data[3] === 0x4f;
       subsets.set(i, data ? { data, mime: otf ? "font/otf" : "font/ttf", file: `font${i}.${otf ? "otf" : "ttf"}` } : null);

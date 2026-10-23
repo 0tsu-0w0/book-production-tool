@@ -24,6 +24,8 @@ export interface PreflightInput {
   mathErrors?: string[];
   /** 参照先のラベルがない参照の名前。 */
   missingLabels?: string[];
+  /** 埋め込みを禁じた書体（名前と理由。#5）。 */
+  restrictedFonts?: { name: string; reason: string }[];
 }
 
 const MM = 72 / 25.4;
@@ -44,6 +46,10 @@ export function preflight(input: PreflightInput): Finding[] {
   const first = s.nombreStart;
 
   for (const w of input.fontWarnings) out.push({ level: "warning", message: w });
+  // 埋め込みを禁じた書体：PDF では字をアウトラインにする（EPUB には入れない）。
+  if (target === "pdf")
+    for (const f of input.restrictedFonts ?? [])
+      out.push({ level: "info", message: `書体「${f.name}」は${f.reason}ため、PDF では字をアウトライン（図形）にして書き出します（書体は埋め込みません。文字の検索・コピーはできません）。` });
   if (input.missingChars.length > 0) {
     const chars = input.missingChars.slice(0, 20).join("");
     const more = input.missingChars.length > 20 ? ` ほか${input.missingChars.length - 20}字` : "";

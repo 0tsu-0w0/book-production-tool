@@ -340,8 +340,9 @@ export function buildEpub(text: string, settings: Settings, images: DocImage[], 
   const lang = "ja";
   const title = settings.bookInfo.title || "無題";
   const htmlClass = vertical ? "vrtl" : "hltr";
+  // 題が空の XHTML は EPUB の規則に反するので、見出しのない所は書名（なければ「無題」）にする（#3）。
   const page = (t: string, body: string, cls: string) =>
-    `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${lang}" lang="${lang}" class="${htmlClass}">\n<head>\n<meta charset="UTF-8"/>\n<title>${esc(t)}</title>\n<link rel="stylesheet" type="text/css" href="../style.css"/>\n</head>\n<body${cls ? ` class="${cls}"` : ""}>\n<section>${body}</section>\n</body>\n</html>\n`;
+    `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${lang}" lang="${lang}" class="${htmlClass}">\n<head>\n<meta charset="UTF-8"/>\n<title>${esc(t || title)}</title>\n<link rel="stylesheet" type="text/css" href="../style.css"/>\n</head>\n<body${cls ? ` class="${cls}"` : ""}>\n<section>${body}</section>\n</body>\n</html>\n`;
 
   // 目次（nav）。大見出しの下に中見出しを入れ子にする。
   const navItems = (() => {

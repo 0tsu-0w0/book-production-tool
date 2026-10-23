@@ -50,9 +50,9 @@ function pagesPayload(indices: number[]) {
 
 /** 原稿と設定が画面の最新の組版と同じならそれを、違えば組み直したものを返す。 */
 function resultFor(text: string, settings: Settings, images: Record<string, ImageInfo>) {
-  const { table, warnings } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
+  const { table, warnings, restricted } = fonts.loadTable(settings.font, settings.styles, compositeFonts(settings));
   const same = latest && latest.source.text === text && latest.source.settings === JSON.stringify(settings) && latest.source.images === JSON.stringify(images);
-  return { result: same ? latest!.result : typesetLazy(text, settings, table, images), warnings };
+  return { result: same ? latest!.result : typesetLazy(text, settings, table, images), warnings, restricted };
 }
 
 function handle(req: TypesetRequest): unknown {
@@ -103,7 +103,7 @@ function handle(req: TypesetRequest): unknown {
     case "preflight": {
       // 書き出す前の検査（OUT-09）。
       const images = req.images ?? {};
-      const { result, warnings } = resultFor(req.text, req.settings, images);
+      const { result, warnings, restricted } = resultFor(req.text, req.settings, images);
       return preflight({
         settings: req.settings,
         pageCount: result.pageCount,
@@ -114,6 +114,7 @@ function handle(req: TypesetRequest): unknown {
         images,
         mathErrors: result.mathErrors,
         missingLabels: result.missingLabels,
+        restrictedFonts: restricted,
       });
     }
   }

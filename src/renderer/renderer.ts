@@ -80,6 +80,7 @@ interface Api extends TemplateApi {
     autoPackage?: boolean;
     /** 確認用：IDML も書き出す（--export-idml）。 */
     autoIdml?: boolean;
+    autoPdf?: boolean;
     autoHtml?: "single" | "chapters";
     bench: boolean;
     startPage: number;
@@ -1190,6 +1191,7 @@ if (init.snapshot) {
   }
   if (init.autoExport) {
     await exportPdf();
+    if (init.autoPdf) console.log(`[snapshot] ${status.textContent}`);
     await exportImages();
     await exportEpub();
     console.log(`[snapshot] ${status.textContent}`);

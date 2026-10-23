@@ -35,6 +35,30 @@ const view = (b: Uint8Array) => new DataView(b.buffer, b.byteOffset, b.byteLengt
 const tagAt = (b: Uint8Array, o: number) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
 
 /** ファイル内の各フォントの先頭位置。.ttc なら複数、単体なら [0]。 */
+/**
+ * 書体の埋め込みの許可（OS/2 の fsType）で、字形を PDF・EPUB に埋め込めない理由（#5）。埋め込めれば undefined。
+ * 埋め込み禁止（2）・ビットマップだけ（0x200）のほか、Kolophon は使う字だけに絞って埋め込むので、絞るのを禁じた書体（0x100）も入れない。
+ * プレビューと印刷（4）・編集可（8）は埋め込める。bytes は1つの書体（.ttc から取り出したもの）。
+ */
+export function embedRestriction(bytes: Uint8Array): string | undefined {
+  const read: ReadAt = (offset, length) => {
+    if (offset < 0 || offset + length > bytes.length) throw new RangeError("書体の外を読もうとしました。");
+    return bytes.subarray(offset, offset + length);
+  };
+  let fsType = 0;
+  try {
+    const os2 = readTables(read, 0).find((t) => t.tag === "OS/2");
+    if (!os2 || os2.length < 10) return undefined;
+    fsType = view(read(os2.offset, 10)).getUint16(8);
+  } catch {
+    return undefined;
+  }
+  if ((fsType & 0x000f) === 0x0002) return "埋め込みが禁止されている";
+  if (fsType & 0x0200) return "ビットマップでしか埋め込めない";
+  if (fsType & 0x0100) return "使う字だけに絞って埋め込むことが禁止されている";
+  return undefined;
+}
+
 export function faceOffsets(read: ReadAt): number[] {
   const head = read(0, 12);
   if (tagAt(head, 0) !== "ttcf") return [0];

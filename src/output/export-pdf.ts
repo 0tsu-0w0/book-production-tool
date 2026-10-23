@@ -1,6 +1,7 @@
 import { imageInfos, type DocImage } from "../document/document.js";
 import { leftBound, saddleOutput, spreadOutput, type PdfKind, type Settings } from "../document/settings.js";
 import { Face, typeset } from "../engine/index.js";
+import { embedRestriction } from "../fonts/sfnt.js";
 import { checkPdfX, type CheckItem } from "./check-pdfx.js";
 import { imposeSaddle, imposeSpreads } from "./imposition.js";
 import { PRINT_PDF, SCREEN_PDF, renderPdf, type PdfOptions } from "./pdf.js";
@@ -32,7 +33,9 @@ export async function exportPdf(
 ): Promise<PdfExportResult> {
   const table = { faces: fonts.map((f) => new Face(f.bytes)), keys: fonts.map((f) => f.key) };
   const typeset_ = typeset(text, settings, table, imageInfos(images));
-  const options = { ...pdfOptions(settings, title), icc };
+  // 埋め込みを禁じた書体があれば、閲覧用でも字をアウトライン（図形）にして、書体を埋め込まない（#5）。
+  const restricted = fonts.some((f) => embedRestriction(f.bytes));
+  const options = { ...pdfOptions(settings, title), icc, ...(restricted ? { outline: true } : {}) };
   // 見開き・中綴じ（閲覧用だけ）：2ページを1枚に並べる。
   const pages = spreadOutput(settings, "pdf")
     ? imposeSpreads(typeset_.pages, settings.nombreStart, leftBound(settings)).pages

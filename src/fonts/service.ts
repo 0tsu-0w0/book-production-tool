@@ -6,6 +6,7 @@ import { fontKey, requiredFonts, type StyleSheet } from "../document/styles.js";
 import { Face } from "../engine/face.js";
 import type { FontTable } from "../engine/index.js";
 import { loadFontBytes, scanFonts, type FontEntry, type ScanCache } from "./catalog.js";
+import { embedRestriction } from "./sfnt.js";
 
 /** フォントの控えの形式（調べる中身を変えたら上げる）。 */
 const CACHE_VERSION = 1;
@@ -129,11 +130,17 @@ export class FontService {
    * 文書で使うフォントをまとめて読む。先頭が本文の書体、続いてスタイルで指定した書体。
    * keys には、スタイルが指定したフォントのキーを入れる（見つからず代わりのフォントになっても、指定の側で引けるように）。
    */
-  loadTable(body: FontChoice | null, styles: StyleSheet, extra: (FontChoice | null)[] = []): { table: FontTable; loaded: LoadedFont[]; warnings: string[] } {
+  loadTable(body: FontChoice | null, styles: StyleSheet, extra: (FontChoice | null)[] = []): { table: FontTable; loaded: LoadedFont[]; warnings: string[]; restricted: { name: string; reason: string }[] } {
     const choices = requiredFonts(body, styles, extra);
     const loaded = choices.map((c) => this.load(c));
     const keys = choices.map((c, i) => (i === 0 || !c ? fontKey(loaded[i].choice) : fontKey(c)));
     const warnings = [...new Set(loaded.flatMap((l) => (l.warning ? [l.warning] : [])))];
-    return { table: { faces: loaded.map((l) => l.face), keys }, loaded, warnings };
+    // 埋め込みを禁じた書体（#5）：同じ書体は1度だけ。
+    const restricted = new Map<string, { name: string; reason: string }>();
+    for (const l of loaded) {
+      const reason = embedRestriction(l.bytes);
+      if (reason) restricted.set(`${l.choice.path}#${l.choice.index}`, { name: l.choice.name, reason });
+    }
+    return { table: { faces: loaded.map((l) => l.face), keys }, loaded, warnings, restricted: [...restricted.values()] };
   }
 }

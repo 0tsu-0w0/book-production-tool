@@ -120,3 +120,18 @@ describe("EPUB の書き出し", () => {
     assert.match(opf, /<spine[^>]*>\s*<itemref idref="cover"\/>/);
   });
 });
+
+describe("EPUBCheck で見つかった所（#3）", () => {
+  it("見出しのない XHTML の題は空にしない（書名、なければ「無題」）", () => {
+    for (const [title, want] of [
+      ["見本の本", "見本の本"],
+      ["", "無題"],
+    ]) {
+      const s = { ...structuredClone(DEFAULT_SETTINGS) };
+      s.bookInfo = { ...s.bookInfo, title };
+      const out = buildEpub("見出しのない文。\n＃第一章\n本文。", s, []);
+      const first = out.filter((f) => /text\/p\d+\.xhtml$/.test(f.name)).map((f) => dec.decode(f.data))[0];
+      assert.match(first, new RegExp(`<title>${want}</title>`));
+    }
+  });
+});

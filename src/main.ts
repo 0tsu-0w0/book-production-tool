@@ -210,6 +210,7 @@ ipcMain.handle("init", () => {
     autoHtml: autoHtml ? (/\.html?$/i.test(autoHtml) ? "single" : "chapters") : undefined,
     autoPackage: !!autoPackage,
     autoIdml: !!autoIdml,
+    autoPdf: !!autoPdf,
     bench,
     /** 確認用：--page=N で、スナップショットを N ページ目から撮る。 */
     startPage: Number(arg("page")) || 1,
