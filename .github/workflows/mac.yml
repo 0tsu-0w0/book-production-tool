@@ -26,11 +26,11 @@ jobs:
       # 署名の証明書は使わない（簡易署名だけ。package.json の mac.identity）。
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.release_tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -79,7 +79,7 @@ jobs:
 
       - name: 結果を残す
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mac-results
           path: |
