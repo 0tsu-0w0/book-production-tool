@@ -10,6 +10,7 @@ import { texToMarkup } from "../engine/tex.js";
 import type { Atom, Block, NombrePlace, PageMark, TableBlock } from "../engine/types.js";
 import type { DocImage } from "../document/document.js";
 import { linkBaseName } from "../document/image-link.js";
+import { multiply, renderMath, type Matrix } from "../engine/math.js";
 import { expandXrefs } from "../engine/xref.js";
 
 // IDML（InDesign Markup Language）の書き出し。InDesign の受け渡し用の形式で、InDesign で開くと文書になる。
@@ -19,8 +20,8 @@ import { expandXrefs } from "../engine/xref.js";
 // 本文（ルビ・圏点・傍線・縦中横・割注・字間・カーニング・改ページ・改丁）、注（章末か巻末の段落）、
 // ページ番号の参照・相互参照（Kolophon で組んだページ番号の字）、段落の罫線（前・後）・囲み罫・網掛け、
 // 目次（Kolophon で組んだ目次の字と、InDesign で作り直すための目次スタイル）、
-// 索引（Kolophon で組んだ索引の字と、本文の語の所の索引の項目。InDesign の索引パネルで作り直せる）。
-// 入れないもの（書き出しの結果で知らせる）：数式の形。
+// 索引（Kolophon で組んだ索引の字と、本文の語の所の索引の項目。InDesign の索引パネルで作り直せる）、
+// 数式（Kolophon で組んだ式の SVG をリンクのファイルにし、行の中の画像として置く。元の TeX は枠のラベルに残す。#21）。
 // InDesign は受け取った文章を自分で組み直すので、行の分かれ目とページの区切りは Kolophon と同じにはならない。
 
 export interface IdmlFile {
@@ -30,7 +31,18 @@ export interface IdmlFile {
 
 /** Kolophon で組んだページのうち、IDML に要るもの（画像の置き場所とノンブルの所）。座標はページの左上から pt。 */
 export interface IdmlPage {
-  images: { name: string; x: number; y: number; w: number; h: number; clip?: { x: number; y: number; w: number; h: number } }[];
+  images: {
+    name: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    clip?: { x: number; y: number; w: number; h: number };
+    /** キャプション（行ごとの字と、置いた範囲・字の大きさ）。 */
+    caption?: { lines: string[]; x: number; y: number; w: number; h: number; size: number };
+    /** 画像の行をまるごと空ける（回り込みでない N 行の画像）。 */
+    jump?: boolean;
+  }[];
   nombre?: NombrePlace;
   /** 余白に置いた柱・ノンブル・付記（なければ nombre からノンブルだけ）。 */
   marks?: PageMark[];
@@ -78,6 +90,8 @@ const NO_CHAR = "CharacterStyle/$ID/[No character style]";
  * 段落スタイル「なし」（[No paragraph style]）に付けると、InDesign が文書を開けない（書き出しが失敗する）ので、ほかの段落スタイルにだけ付ける。
  */
 const COMPOSER = "HL Composer J";
+/** 太字：Kolophon は字の輪郭を字の大きさの 0.035 の太さでなぞる。InDesign では文字の線（線の太さと色）にする。 */
+const BOLD_STROKE = 0.035;
 
 /** 数を短く書く（小数3桁まで）。 */
 const n = (v: number) => String(Math.round(v * 1000) / 1000);
@@ -190,11 +204,19 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   const paragraphNames = new Set(settings.styles.paragraph.map((p) => p.name));
   const charSelf = (name: string) => `CharacterStyle/${selfName(name)}`;
   const paraSelf = (name: string) => `ParagraphStyle/${selfName(name)}`;
+  /** 太字の線（色は字の色）。 */
+  const boldAttrs = (pointSize: number, color: string | null | undefined) => attr("StrokeWeight", n(pointSize * BOLD_STROKE)) + attr("StrokeColor", swatchOf(color ?? settings.textColor) ?? "Color/Black");
+  /**
+   * 文字組みアキ量設定（#24）：全角ベタ（grid）は「約物全角」、行末の約物を全角に残す jis は「行末受け約物全角／半角」、
+   * 行末の約物を半角にする jis は InDesign の既定（行末約物半角）なので書かない。
+   */
+  const mojikumi =
+    settings.typography.mode === "grid" ? "LineEndAllOneEmEnum" : settings.typography.lineEndPunct === "half" ? undefined : "LineEndUkeNoFloatEnum";
   const justification = (p: ParagraphStyle) => (p.align === "center" ? "CenterAlign" : p.align === "end" ? "RightAlign" : "LeftJustified");
   const charStyleXml = (c: CharacterStyle) => {
     const font = c.font ? fontProps(c.font) : {};
     const props = [`<BasedOn type="string">$ID/[No character style]</BasedOn>`, font.family ? `<AppliedFont type="string">${escapeXml(font.family)}</AppliedFont>` : ""].join("");
-    return `<CharacterStyle${attr("Self", charSelf(c.name))}${attr("Name", c.name)} Imported="false" KeyboardShortcut="0 0"${c.scale !== 1 ? attr("PointSize", n(size * c.scale)) : ""}${attr("FillColor", swatchOf(c.color))}${attr("FontStyle", font.style)}${c.tracking ? attr("Tracking", c.tracking) : ""}${c.deform === "condensed" ? attr("HorizontalScale", c.deformRatio) : ""}${c.deform === "flat" ? attr("VerticalScale", c.deformRatio) : ""}${c.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[c.glyphForm])}><Properties>${props}</Properties></CharacterStyle>`;
+    return `<CharacterStyle${attr("Self", charSelf(c.name))}${attr("Name", c.name)} Imported="false" KeyboardShortcut="0 0"${c.scale !== 1 ? attr("PointSize", n(size * c.scale)) : ""}${attr("FillColor", swatchOf(c.color))}${attr("FontStyle", font.style)}${c.tracking ? attr("Tracking", c.tracking) : ""}${c.deform === "condensed" ? attr("HorizontalScale", c.deformRatio) : ""}${c.deform === "flat" ? attr("VerticalScale", c.deformRatio) : ""}${c.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[c.glyphForm])}${c.bold ? boldAttrs(size * c.scale, c.color) : ""}><Properties>${props}</Properties></CharacterStyle>`;
   };
   /**
    * 段落の罫線・網掛け（Kolophon → InDesign の段落境界線・段落の囲み罫・段落の背景色）。
@@ -254,12 +276,13 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       `<BasedOn type="string">$ID/[No paragraph style]</BasedOn>`,
       `<Leading type="unit">${n(leading)}</Leading>`,
       font.family ? `<AppliedFont type="string">${escapeXml(font.family)}</AppliedFont>` : "",
+      mojikumi ? `<Mojikumi type="enumeration">${mojikumi}</Mojikumi>` : "",
       listItems("AllNestedStyles", nested),
       listItems("AllGREPStyles", grep),
       listItems("AllLineStyles", lines),
       tabs,
     ].join("");
-    return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false" Composer="${COMPOSER}"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.spanColumns ? ' SpanColumnType="SpanColumns" SpanSplitColumnCount="All"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}${decorationAttrs(p, pointSize)}><Properties>${props}</Properties></ParagraphStyle>`;
+    return `<ParagraphStyle${attr("Self", paraSelf(p.name))}${attr("Name", p.name)} Imported="false" Composer="${COMPOSER}"${attr("NextStyle", paraSelf(p.name))} KeyboardShortcut="0 0"${attr("PointSize", n(pointSize))}${attr("FontStyle", font.style)}${attr("Justification", justification(p))}${p.indent ? attr("LeftIndent", n(p.indent * pointSize)) : ""}${p.spaceBefore ? attr("SpaceBefore", n(p.spaceBefore * pitch)) : ""}${p.spaceAfter ? attr("SpaceAfter", n(p.spaceAfter * pitch)) : ""}${attr("FillColor", swatchOf(p.color ?? settings.textColor))}${p.tracking ? attr("Tracking", p.tracking) : ""}${p.deform === "condensed" ? attr("HorizontalScale", p.deformRatio) : ""}${p.deform === "flat" ? attr("VerticalScale", p.deformRatio) : ""}${p.proportional ? ' OTFProportionalMetrics="true"' : ""}${attr("GlyphForm", GLYPH_FORMS[p.glyphForm])}${p.keepWithNext ? ' KeepWithNext="1"' : ""}${p.spanColumns ? ' SpanColumnType="SpanColumns" SpanSplitColumnCount="All"' : ""}${p.keepLines ? ' KeepLinesTogether="true" KeepFirstLines="2" KeepLastLines="2"' : ""}${p.dropCap.lines >= 2 ? attr("DropCapLines", p.dropCap.lines) + attr("DropCapCharacters", p.dropCap.chars) : ""}${p.lineSpan > 1 ? attr("GridGyoudori", p.lineSpan) : ""}${p.bold ? boldAttrs(pointSize, p.color) : ""}${decorationAttrs(p, pointSize)}><Properties>${props}</Properties></ParagraphStyle>`;
   };
   const paragraphStyles = settings.styles.paragraph.map(paraStyleXml);
   // 目次スタイル：InDesign の「目次を更新」で、見出しの段落スタイルから目次を作り直せるように。
@@ -300,6 +323,63 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return link;
   };
 
+  // ---- 数式（#21）：Kolophon で組んだ式の輪郭を SVG にし、リンクのファイルにして行の中に置く ----
+  // 縦組みでも SVG は横組みの向きのまま（InDesign が縦組みの行の中の画像を時計回りに 90° 回して置き、Kolophon と同じ横倒しになる）。
+  const MATH_OPEN = "\uE000";
+  const MATH_CLOSE = "\uE001";
+  const maths: { tex: string; display: boolean }[] = [];
+  const mathFiles = new Map<string, { path: string; data: Uint8Array }>();
+  /** 数式の印（本文の字の中に置き、Content を書くときに行の中の画像にする）。 */
+  const mathMark = (tex: string, display: boolean) => {
+    maths.push({ tex, display });
+    return `${MATH_OPEN}${maths.length - 1}${MATH_CLOSE}`;
+  };
+  const mathXml = (k: number, pointSize: number): string | undefined => {
+    const { tex, display } = maths[k];
+    const box = renderMath(tex, display);
+    if (box.error || box.paths.length === 0) return undefined;
+    // Kolophon と同じく、別行数式は行の長さに収まるまで縮め、行の中の数式は前後を空ける（SVG の左右の余白にする）。
+    const s = display && box.width > spec.charsPerLine ? (pointSize * spec.charsPerLine) / box.width : pointSize;
+    const pad = display ? 0 : (settings.advanced.mathSpaceEm ?? 0.25) * s;
+    // 左端・ベースラインを原点とする em の座標を、左上を原点とする pt に。
+    const place: Matrix = [s, 0, 0, s, pad, box.height * s];
+    const w = box.width * s + pad * 2;
+    const h = (box.height + box.depth) * s;
+    const key = `${display ? "D" : "I"}\u0000${n(s)}\u0000${n(pad)}\u0000${tex}`;
+    let file = mathFiles.get(key);
+    if (!file) {
+      const paths = box.paths.map((p) => `<path transform="matrix(${multiply(place, p.m).map((v) => String(Number(v.toPrecision(6)))).join(" ")})" d="${p.d}"/>`).join("");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${n(w)}pt" height="${n(h)}pt" viewBox="0 0 ${n(w)} ${n(h)}"><desc>${escapeXml(tex)}</desc><g fill="${settings.textColor || "#000000"}">${paths}</g></svg>`;
+      file = { path: opts.linkPath!(`数式_${mathFiles.size + 1}.svg`), data: new TextEncoder().encode(svg) };
+      mathFiles.set(key, file);
+    }
+    const uri = `file:${encodeURI(file.path.replace(/\\/g, "/"))}`;
+    // 行の中の画像は、枠の下の辺をベースラインに置く。式の深さだけ下げる。
+    const offset = -box.depth * s;
+    const label = `<Label><KeyValuePair Key="kolophon-math" Value="${escapeXml(`${display ? "display" : "inline"}:${tex}`)}"/></Label>`;
+    return `<Rectangle Self="${id("mr")}" ContentType="GraphicType" StrokeWeight="0" StrokeColor="Swatch/None" FillColor="Swatch/None" ItemTransform="1 0 0 1 ${n(w / 2)} ${n(-h / 2)}"><Properties>${label}<PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>${[
+      [-w / 2, -h / 2],
+      [-w / 2, h / 2],
+      [w / 2, h / 2],
+      [w / 2, -h / 2],
+    ]
+      .map(([x, y]) => `<PathPointType Anchor="${n(x)} ${n(y)}" LeftDirection="${n(x)} ${n(y)}" RightDirection="${n(x)} ${n(y)}"/>`)
+      .join("")}</PathPointArray></GeometryPathType></PathGeometry></Properties><AnchoredObjectSetting AnchoredPosition="InlinePosition" AnchorYoffset="${n(offset)}"/><SVG Self="${id("sv")}" ItemTransform="1 0 0 1 ${n(-w / 2)} ${n(-h / 2)}"><Properties><GraphicBounds Left="0" Top="0" Right="${n(w)}" Bottom="${n(h)}"/></Properties><Link Self="${id("lk")}" LinkResourceURI="${escapeXml(uri)}" LinkResourceFormat="$ID/SVG" StoredState="Normal" LinkClassID="35906" LinkClientID="257" LinkResourceModified="false" LinkObjectModified="false" ShowInUI="true" CanEmbed="true" CanUnembed="true" CanPackage="true" ImportPolicy="NoAutoImport" ExportPolicy="NoAutoExport"/></SVG></Rectangle>`;
+  };
+  /** 字の並びの Content。数式の印は、行の中の画像にする（組めない式は字で入れる）。 */
+  const contentXml = (text: string, pointSize: number) =>
+    text
+      .split(new RegExp(`${MATH_OPEN}(\\d+)${MATH_CLOSE}`))
+      .map((part, i) => {
+        if (i % 2 === 0) return part ? `<Content>${escapeXml(part)}</Content>` : "";
+        const k = Number(part);
+        const xml = mathXml(k, pointSize);
+        if (xml) return xml;
+        skipped.add("数式（組めない式は TeX の式を字で入れた）");
+        return `<Content>${escapeXml(`［数式：${maths[k].tex}］`)}</Content>`;
+      })
+      .join("");
+
   // ---- 本文（1つのストーリー） ----
   const paras: string[] = [];
   let pendingBreak: "NextPage" | "NextOddPage" | undefined;
@@ -312,6 +392,8 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     return a.cells
       .map((c) => {
         if (c.math) {
+          // リンクのファイルを書けるときは式の SVG を置く。書けなければ TeX の式を字で。
+          if (opts.linkPath) return mathMark(c.text, c.math.display);
           skipped.add("数式（TeX の式を字で入れた）");
           return `［数式：${c.text}］`;
         }
@@ -370,7 +452,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       if (prev && prev.key === key) prev.text += text;
       else out.push({ key, open, text, pre });
     }
-    return out.map((r) => `${r.open}${r.pre}<Content>${escapeXml(r.text)}</Content>`);
+    return out.map((r) => `${r.open}${r.pre}${contentXml(r.text, size * paraScale)}`);
   };
   // 索引の項目（Topic）：表記と読みが同じ語は1つ。
   const topics = new Map<string, { self: string; term: string; reading: string }>();
@@ -500,7 +582,11 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
         }
         case "image":
           // ページに置ける画像は、本文には何も入れない（Kolophon で置いた所に、リンクの画像として置く）。
-          if (placeable(b.name)) break;
+          // 全面・版面1ページの画像は1ページを取るので、あとの本文はそのページの次から（画像のページには本文の枠がない。#23）。
+          if (placeable(b.name)) {
+            if (b.mode !== "lines") pendingBreak = "NextPage";
+            break;
+          }
           skipped.add("画像（置き場所に［画像：名前］の字を入れた）");
           paragraph("本文", [...`［画像：${b.name}］`].map((ch) => ({ cells: [{ text: ch }] })));
           break;
@@ -573,6 +659,20 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   /** 四角の輪郭（左上・左下・右下・右上）。 */
   const pathOf = (x: number, y: number, w: number, h: number) =>
     `<PathGeometry><GeometryPathType PathOpen="false"><PathPointArray>${pt(x, y)}${pt(x, y + h)}${pt(x + w, y + h)}${pt(x + w, y)}</PathPointArray></GeometryPathType></PathGeometry>`;
+  /** 本文のほかの物語（柱・ノンブル・付記・キャプション）。 */
+  const markStories: { id: string; xml: string }[] = [];
+  /** キャプション：Kolophon で置いた範囲に、小さなテキストの枠を置く（縦組みは縦書き）。 */
+  const captionXml = (c: NonNullable<IdmlPage["images"][number]["caption"]>, tx: number, ty: number, wrap: string) => {
+    const sid = id("cap");
+    // InDesign は字の詰め方が少し違うので、行の長さに1字、幅に少しゆとりを持たせる（あふれないように）。行は Kolophon と同じ所で分ける。
+    const pad = c.size * 0.2;
+    const content = c.lines.map((l, i) => `${i > 0 ? "<Br/>" : ""}<Content>${escapeXml(l)}</Content>`).join("");
+    markStories.push({
+      id: sid,
+      xml: `<idPkg:Story ${NS} DOMVersion="${DOM}"><Story Self="${sid}" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><StoryPreference OpticalMarginAlignment="false" OpticalMarginSize="12" FrameType="TextFrameType" StoryOrientation="${vertical ? "Vertical" : "Horizontal"}" StoryDirection="LeftToRightDirection"/><ParagraphStyleRange AppliedParagraphStyle="${escapeXml(paraSelf("本文"))}" Justification="LeftAlign" FirstLineIndent="0" LeftIndent="0" SpaceBefore="0" SpaceAfter="0"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}" PointSize="${n(c.size)}" Leading="${n(c.size * 1.3)}">${content}</CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`,
+    });
+    return `<TextFrame Self="${id("cf")}" ParentStory="${sid}" PreviousTextFrame="n" NextTextFrame="n" ContentType="TextType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + c.x - pad, ty + c.y, c.w + pad * 2, c.h + c.size)}</Properties><TextFramePreference TextColumnCount="1" InsetSpacing="0 0 0 0" IgnoreWrap="true"/>${wrap}</TextFrame>`;
+  };
   const wrapGap = (settings.advanced.wrapGapChars ?? 1) * size;
   /** ページの画像：リンクの画像を入れた四角。画像の枠は、見せる範囲（clip）か画像の大きさ。本文の中の画像には回り込みを付ける。 */
   const imageXml = (i: number, tx: number, ty: number) =>
@@ -582,12 +682,15 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
         const frame = im.clip ?? im;
         const iw = Math.max(1, link.img.width);
         const ih = Math.max(1, link.img.height);
+        // 回り込み：回り込む画像は四角に沿って、行をまるごと空ける画像（とキャプション）はオブジェクトを挟む（Kolophon で空けた行に本文を入れない）。
+        const gap = im.jump ? 0 : wrapGap;
         const wrap = hasFrame(i)
-          ? `<TextWrapPreference Inverse="false" ApplyToMasterPageOnly="false" TextWrapSide="BothSides" TextWrapMode="BoundingBoxTextWrap"><Properties><TextWrapOffset Top="${n(wrapGap)}" Left="${n(wrapGap)}" Bottom="${n(wrapGap)}" Right="${n(wrapGap)}"/></Properties></TextWrapPreference>`
+          ? `<TextWrapPreference Inverse="false" ApplyToMasterPageOnly="false" TextWrapSide="BothSides" TextWrapMode="${im.jump ? "JumpObjectTextWrap" : "BoundingBoxTextWrap"}"><Properties><TextWrapOffset Top="${n(gap)}" Left="${n(gap)}" Bottom="${n(gap)}" Right="${n(gap)}"/></Properties></TextWrapPreference>`
           : "";
         const uri = `file:${encodeURI(link.path.replace(/\\/g, "/"))}`;
         const format = link.img.mime === "image/png" ? "$ID/Portable Network Graphics (PNG)" : "$ID/JPEG";
-        return `<Rectangle Self="${id("r")}" ContentType="GraphicType" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + frame.x, ty + frame.y, frame.w, frame.h)}</Properties>${wrap}<Image Self="${id("im")}" ItemTransform="${n(im.w / iw)} 0 0 ${n(im.h / ih)} ${n(tx + im.x)} ${n(ty + im.y)}"><Properties><GraphicBounds Left="0" Top="0" Right="${iw}" Bottom="${ih}"/></Properties><Link Self="${id("lk")}" LinkResourceURI="${escapeXml(uri)}" LinkResourceFormat="${format}" StoredState="Normal" LinkClassID="35906" LinkClientID="257" LinkResourceModified="false" LinkObjectModified="false" ShowInUI="true" CanEmbed="true" CanUnembed="true" CanPackage="true" ImportPolicy="NoAutoImport" ExportPolicy="NoAutoExport"/></Image></Rectangle>`;
+        const caption = im.caption ? captionXml(im.caption, tx, ty, im.jump ? wrap : "") : "";
+        return `${caption}<Rectangle Self="${id("r")}" ContentType="GraphicType" StrokeWeight="0" StrokeColor="Swatch/None" FillColor="Swatch/None" ItemLayer="uL" Locked="false" ItemTransform="1 0 0 1 0 0"><Properties>${pathOf(tx + frame.x, ty + frame.y, frame.w, frame.h)}</Properties>${wrap}<Image Self="${id("im")}" ItemTransform="${n(im.w / iw)} 0 0 ${n(im.h / ih)} ${n(tx + im.x)} ${n(ty + im.y)}"><Properties><GraphicBounds Left="0" Top="0" Right="${iw}" Bottom="${ih}"/></Properties><Link Self="${id("lk")}" LinkResourceURI="${escapeXml(uri)}" LinkResourceFormat="${format}" StoredState="Normal" LinkClassID="35906" LinkClientID="257" LinkResourceModified="false" LinkObjectModified="false" ShowInUI="true" CanEmbed="true" CanUnembed="true" CanPackage="true" ImportPolicy="NoAutoImport" ExportPolicy="NoAutoExport"/></Image></Rectangle>`;
       })
       .join("");
   // マスター：Kolophon で柱・ノンブル・付記を置いたページを、本文（A）と章の始まり（C）に分け、置いていないページは B にする。
@@ -620,7 +723,6 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
   // ---- マスターページの柱・ノンブル・付記 ----
   // 左ページ・右ページそれぞれ、そのマスターを当てるページのうち最初に見つかったページの置き方で、小さなテキストフレームを置く。
   // ノンブルは自動のページ番号（<?ACE 18?>）、章・節の柱はその見出しの段落スタイルを拾うテキスト変数、書名と付記は字のまま。
-  const markStories: { id: string; xml: string }[] = [];
   const variables = new Map<string, { name: string; style: string }>();
   const variableOf = (source: "chapter" | "section") => {
     const name = source === "chapter" ? "柱（章）" : "柱（節）";
@@ -740,7 +842,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     .map((sp, k) => `<Ink Self="Ink/${escapeXml(selfName(sp.name))}" Name="${escapeXml(sp.name)}" Angle="45" ConvertToProcess="false" Frequency="70" NeutralDensity="1" PrintInk="true" TrapOrder="${5 + k}" InkType="Normal"/>`)
     .join("");
   const graphic = `<idPkg:Graphic ${NS} DOMVersion="${DOM}"><Color Self="Color/Black" Model="Process" Space="CMYK" ColorValue="0 0 0 100" ColorOverride="Specialblack" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Black" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Paper" Model="Process" Space="CMYK" ColorValue="0 0 0 0" ColorOverride="Specialpaper" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Paper" ColorEditable="true" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><Color Self="Color/Registration" Model="Registration" Space="CMYK" ColorValue="100 100 100 100" ColorOverride="Specialregistration" AlternateSpace="NoAlternateColor" AlternateColorValue="" Name="Registration" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/>${colorXml.join("")}${processInks}${usedSpotInks}<Swatch Self="Swatch/None" Name="None" ColorEditable="false" ColorRemovable="false" Visible="true" SwatchCreatorID="7937"/><StrokeStyle Self="StrokeStyle/$ID/Solid" Name="$ID/Solid"/><StrokeStyle Self="StrokeStyle/$ID/ThinThin" Name="$ID/ThinThin"/><StrokeStyle Self="StrokeStyle/$ID/Dotted" Name="$ID/Dotted"/><StrokeStyle Self="StrokeStyle/$ID/Dashed" Name="$ID/Dashed"/></idPkg:Graphic>`;
-  const styles = `<idPkg:Styles ${NS} DOMVersion="${DOM}"><RootCharacterStyleGroup Self="uc"><CharacterStyle Self="${NO_CHAR}" Imported="false" Name="$ID/[No character style]"/>${characterStyles.join("")}</RootCharacterStyleGroup><RootParagraphStyleGroup Self="up"><ParagraphStyle Self="${NO_PARA}" Name="$ID/[No paragraph style]" Imported="false" NextStyle="${NO_PARA}" KeyboardShortcut="0 0"${attr("PointSize", n(size))}><Properties><Leading type="unit">${n(pitch)}</Leading>${bodyFont.family ? `<AppliedFont type="string">${escapeXml(bodyFont.family)}</AppliedFont>` : ""}</Properties></ParagraphStyle><ParagraphStyle Self="ParagraphStyle/$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle" Imported="false" NextStyle="ParagraphStyle/$ID/NormalParagraphStyle" KeyboardShortcut="0 0"><Properties><BasedOn type="string">$ID/[No paragraph style]</BasedOn></Properties></ParagraphStyle>${paragraphStyles.join("")}</RootParagraphStyleGroup><RootCellStyleGroup Self="ucs"><CellStyle Self="CellStyle/$ID/[None]" Name="$ID/[None]"/></RootCellStyleGroup><RootTableStyleGroup Self="uts"><TableStyle Self="TableStyle/$ID/[Basic Table]" Name="$ID/[Basic Table]"/></RootTableStyleGroup>${tocStyleXml}</idPkg:Styles>`;
+  const styles = `<idPkg:Styles ${NS} DOMVersion="${DOM}"><RootCharacterStyleGroup Self="uc"><CharacterStyle Self="${NO_CHAR}" Imported="false" Name="$ID/[No character style]"/>${characterStyles.join("")}</RootCharacterStyleGroup><RootParagraphStyleGroup Self="up"><ParagraphStyle Self="${NO_PARA}" Name="$ID/[No paragraph style]" Imported="false" NextStyle="${NO_PARA}" KeyboardShortcut="0 0"${attr("PointSize", n(size))}${attr("FontStyle", bodyFont.style)}><Properties><Leading type="unit">${n(pitch)}</Leading>${bodyFont.family ? `<AppliedFont type="string">${escapeXml(bodyFont.family)}</AppliedFont>` : ""}</Properties></ParagraphStyle><ParagraphStyle Self="ParagraphStyle/$ID/NormalParagraphStyle" Name="$ID/NormalParagraphStyle" Imported="false" NextStyle="ParagraphStyle/$ID/NormalParagraphStyle" KeyboardShortcut="0 0"><Properties><BasedOn type="string">$ID/[No paragraph style]</BasedOn></Properties></ParagraphStyle>${paragraphStyles.join("")}</RootParagraphStyleGroup><RootCellStyleGroup Self="ucs"><CellStyle Self="CellStyle/$ID/[None]" Name="$ID/[None]"/></RootCellStyleGroup><RootTableStyleGroup Self="uts"><TableStyle Self="TableStyle/$ID/[Basic Table]" Name="$ID/[Basic Table]"/></RootTableStyleGroup>${tocStyleXml}</idPkg:Styles>`;
   const fonts = `<idPkg:Fonts ${NS} DOMVersion="${DOM}">${[...fontXml.values()].join("")}</idPkg:Fonts>`;
   const tags = `<idPkg:Tags ${NS} DOMVersion="${DOM}"><XMLTag Self="XMLTag/Root" Name="Root"><Properties><TagColor type="enumeration">LightBlue</TagColor></Properties></XMLTag></idPkg:Tags>`;
   const backing = `<idPkg:BackingStory ${NS} DOMVersion="${DOM}"><XmlStory Self="ub" AppliedTOCStyle="n" TrackChanges="false" StoryTitle="$ID/" AppliedNamedGrid="n"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/$ID/NormalParagraphStyle"><CharacterStyleRange AppliedCharacterStyle="${NO_CHAR}"/></ParagraphStyleRange></XmlStory></idPkg:BackingStory>`;
@@ -766,7 +868,7 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       { name: `Stories/Story_${storyId}.xml`, data: xmlFile(story) },
       ...markStories.map((st) => ({ name: `Stories/Story_${st.id}.xml`, data: xmlFile(st.xml) })),
     ],
-    links: [...linkFiles.values()].map((l) => ({ path: l.path, data: l.data })),
+    links: [...linkFiles.values(), ...mathFiles.values()].map((l) => ({ path: l.path, data: l.data })),
     skipped: [...skipped],
   };
 }

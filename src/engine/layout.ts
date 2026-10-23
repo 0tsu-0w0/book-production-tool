@@ -1190,7 +1190,21 @@ function placePage(lines: PageLine[], index: number, spec: LayoutSpec, role: Pag
     for (const p of pageImages) {
       const shape = imageShape(p, spec, { left, top, width: blockWidth, height: blockHeight }, width, height);
       imageShapes.push(shape.shape);
-      if (p.captionLines) placeCaption(glyphs, lineShapes, p.captionLines, shape.visible, spec);
+      if (shape.shape.kind === "image" && p.block.mode === "lines" && !p.block.wrap) shape.shape.jump = true;
+      if (p.captionLines) {
+        placeCaption(glyphs, lineShapes, p.captionLines, shape.visible, spec);
+        // キャプションの行を置いた範囲（1行目の右から最後の行の左まで、画像の上端から画像の高さ）。
+        const s = shape.shape;
+        if (s.kind === "image") {
+          const n = p.captionLines.length;
+          const first = shape.visible.x - size * CAPTION_GAP - size / 2;
+          const last = first - (n - 1) * size * CAPTION_PITCH;
+          const lines = p.captionLines.map(lineText);
+          // 画像が低いと、行は画像の高さを越えて続く（1行は4字より短く折らない）。
+          const h = Math.max(shape.visible.h, Math.max(...lines.map((l) => [...l].length)) * size);
+          s.caption = { lines, x: last - size / 2, y: shape.visible.y, w: first - last + size, h, size };
+        }
+      }
     }
     // 網掛けは字と画像の下に、罫線は画像の上に描く。
     const deco = decorationShapes(decoRows, size, spec.charsPerLine);
@@ -1261,7 +1275,7 @@ function horizontalShape(s: Shape, W: number): Shape {
     case "line":
       return { ...s, x1: s.y1, y1: W - s.x1, x2: s.y2, y2: W - s.x2 };
     case "image":
-      return { ...s, ...rect(s), ...(s.clip ? { clip: rect(s.clip) } : {}) };
+      return { ...s, ...rect(s), ...(s.clip ? { clip: rect(s.clip) } : {}), ...(s.caption ? { caption: { ...s.caption, ...rect(s.caption) } } : {}) };
     case "rect":
     case "link":
       return { ...s, ...rect(s) };

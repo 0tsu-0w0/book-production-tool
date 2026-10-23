@@ -15,6 +15,8 @@ export interface FaceInfo {
   /** 日本語名があれば日本語名、なければ英語名。 */
   familyName: string;
   subfamilyName: string;
+  /** スタイルの英語名（InDesign の書体のスタイルは、ファミリーが日本語名でも英語名。#25）。 */
+  styleNameEn?: string;
   fullName: string;
   postscriptName: string;
   /** OS/2 の埋め込み許可。印刷・閲覧用の埋め込みができれば true。 */
@@ -76,6 +78,7 @@ export function readFaceInfo(read: ReadAt, faceOffset: number, index: number): F
     index,
     familyName: names.family,
     subfamilyName: names.subfamily,
+    styleNameEn: names.subfamilyEn,
     fullName: names.full,
     postscriptName: names.postscript,
     embeddable,
@@ -103,7 +106,7 @@ function featureTags(gsub: Uint8Array): string[] {
 const LANG_JA = 0x0411;
 const LANG_EN = 0x0409;
 
-function parseNames(name: Uint8Array | undefined): { family: string; subfamily: string; full: string; postscript: string } {
+function parseNames(name: Uint8Array | undefined): { family: string; subfamily: string; subfamilyEn: string; full: string; postscript: string } {
   const found = new Map<string, string>();
   if (name) {
     const dv = view(name);
@@ -138,6 +141,7 @@ function parseNames(name: Uint8Array | undefined): { family: string; subfamily: 
   return {
     family: pick(16, 1),
     subfamily: pick(17, 2),
+    subfamilyEn: found.get("17:en") ?? found.get("2:en") ?? found.get("17:other") ?? found.get("2:other") ?? pick(17, 2),
     full: pick(4),
     postscript: found.get("6:en") ?? found.get("6:other") ?? found.get("6:ja") ?? "",
   };

@@ -399,18 +399,23 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       }
       return cur;
     };
+    /** 別行にした数式・画像の段落の残り（その段落の改行で終わる空の段落）は入れない。 */
+    let dropEmpty = false;
     const end = () => {
       const p = begin();
+      const drop = dropEmpty && !p.text;
+      dropEmpty = false;
+      cur = undefined;
+      if (drop) return;
       paras.push(p);
       usage.set(p.style, (usage.get(p.style) ?? 0) + [...p.text].length);
-      cur = undefined;
     };
     /** CharacterStyleRange の書式で、字を記法に包む。 */
     const wrap = (text: string, a: Record<string, string>): string => {
       if (!text) return text;
       let t = text;
-      // InDesign は RubyFlag="1" と書く（Kolophon の 0.45.1 までは "true"）。
-      if ((a.RubyFlag === "1" || a.RubyFlag === "true") && a.RubyString) {
+      // InDesign は RubyFlag="1" と書く（Kolophon の 0.45.1 までは "true"）。ルビの字が範囲をまたぐと、続きの範囲は "2"（#24）。
+      if ((a.RubyFlag === "1" || a.RubyFlag === "2" || a.RubyFlag === "true") && a.RubyString) {
         const parts = a.RubyString.trim().split(/\s+/);
         const reading = a.RubyType === "PerCharacterRuby" && parts.length === [...t].length ? parts.join("|") : parts.join("");
         t = `｜${t}《${reading}》`;
@@ -434,6 +439,15 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       const flush = () => {
         if (buf) {
           let t = wrap(buf, a);
+          // ルビの続きの範囲（RubyFlag="2"）：前の範囲のルビと1つにする（｜図《としょかん》＋｜書館《としょかん》→｜図書館《としょかん》）。
+          // 前の範囲のルビのあとに索引の印があれば、印は1つにしたルビのあとへ。
+          const ruby = /《[^《》]*》$/.exec(t);
+          const marks = cur ? (/(?:［＃索引：[^］]*］)*$/.exec(cur.text)?.[0] ?? "") : "";
+          const before = cur ? cur.text.slice(0, cur.text.length - marks.length) : "";
+          if (a.RubyFlag === "2" && t.startsWith("｜") && cur && ruby && before.endsWith(ruby[0])) {
+            cur.text = before.slice(0, -ruby[0].length);
+            t = t.slice(1) + marks;
+          }
           if (pendingIndex) {
             const first = [...buf][0];
             // 書式の記法で包んでいない字なら、1字目のあとに。包んであれば、包んだ字のあとに。
@@ -499,12 +513,26 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
             case "Oval":
             case "Polygon":
             case "Group": {
+              // Kolophon が書き出した数式（枠のラベルに TeX の式）：数式の記法に戻す（#21）。
+              const math = findAll(node, "KeyValuePair").find((kv) => kv.attrs.Key === "kolophon-math")?.attrs.Value;
+              const m = math ? /^(inline|display):([\s\S]*)$/.exec(math) : null;
+              if (m) {
+                flush();
+                if (m[1] === "inline") begin().text += `［＃数式］${m[2]}［＃／数式］`;
+                else {
+                  if (cur && cur.text) end();
+                  paras.push({ style: "", text: `［＃別行数式］${m[2]}［＃／別行数式］`, raw: true });
+                  dropEmpty = true;
+                }
+                break;
+              }
               // 本文の中に置いた画像：その所で段落を分け、［＃画像：名前］の行にする。
               const img = linkedImage(node);
               if (img) {
                 flush();
                 if (cur && cur.text) end();
                 paras.push({ style: "", text: `［＃画像：${img.name}］`, raw: true });
+                dropEmpty = true;
                 inlineImages++;
               }
               break;
@@ -600,7 +628,8 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
   // ---- スタイルを Kolophon のスタイルにする ----
   const fonts: IdmlImport["fonts"] = { paragraph: {}, character: {} };
   if (bodyRaw.AppliedFont) fonts.body = bodyRaw.AppliedFont;
-  const bold = (p: Record<string, string>) => /bold|ボールド|heavy|black|W[6-9]|B$/i.test(p.FontStyle ?? "");
+  // 太字：太いスタイルの書体か、文字の線（Kolophon の太字は字の輪郭をなぞる線で書き出す）。
+  const bold = (p: Record<string, string>) => /bold|ボールド|heavy|black|W[6-9]|B$/i.test(p.FontStyle ?? "") || ((num(p.StrokeWeight) ?? 0) > 0 && !!p.StrokeColor && !/None$/.test(p.StrokeColor));
   const deformOf = (p: Record<string, string>) => {
     const hs = num(p.HorizontalScale);
     const vs = num(p.VerticalScale);
@@ -681,6 +710,8 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       ...newParagraphStyle(name),
       scale: Math.round((size / bodySize) * 100) / 100,
       linePitch: Math.min(3, Math.max(0.5, Math.round((leading / size / (bodyLeading / bodySize)) * 20) / 20)),
+      // 行取り（InDesign の「行取り」）。
+      ...((num(p.GridGyoudori) ?? 0) > 1 ? { lineSpan: Math.min(10, Math.round(num(p.GridGyoudori)!)) } : {}),
       align: /^Center/.test(just) ? "center" : /^Right/.test(just) ? "end" : "start",
       indent: Math.min(40, Math.max(0, Math.round(((num(p.LeftIndent) ?? 0) / size) * 2) / 2)),
       spaceBefore: Math.min(10, Math.round((num(p.SpaceBefore) ?? 0) / bodyLeading)),
@@ -833,7 +864,12 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
     for (const p of paragraphStyles) if (p.color === textColor) p.color = null;
   }
   s.styles = { paragraph: paragraphStyles, character: characterStyles };
-  s.typography = { ...s.typography, mode: "jis" };
+  // 組み方：本文の段落スタイルの文字組みアキ量設定から。約物全角は全角ベタ（grid）、行末受け約物全角／半角は jis で行末の約物を全角に、
+  // ほか（InDesign の既定の行末約物半角など）は jis で行末の約物を半角に（#24）。
+  const mojikumi = bodyRaw.Mojikumi ?? "";
+  s.typography = /^LineEndAllOneEm/.test(mojikumi)
+    ? { ...s.typography, mode: "grid" }
+    : { ...s.typography, mode: "jis", lineEndPunct: /NoFloat|OneEm/.test(mojikumi) ? "full" : "half" };
   // InDesign と同じに：縦組みの半角の英数字は横倒し、縦中横は IDML で指定した所だけ（自動の縦中横はしない）。
   s.format.halfWidth = "rotate";
   s.format.tcyDigits = false;

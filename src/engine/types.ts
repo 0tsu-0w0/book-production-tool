@@ -328,6 +328,10 @@ export type Shape =
       clip?: { x: number; y: number; w: number; h: number };
       /** 透明な部分の下の色（#rrggbb。なければ白の紙）。入稿用 PDF で透明をなくすときに重ねる。 */
       matte?: string;
+      /** キャプション（字は紙面に別に描く。IDML でテキストの枠にするため）：行ごとの字と、行を置いた範囲・字の大きさ。 */
+      caption?: { lines: string[]; x: number; y: number; w: number; h: number; size: number };
+      /** 本文の中の N 行の画像で、回り込みでないもの（画像の行はまるごと空ける。IDML で「オブジェクトを挟む」回り込みにするため）。 */
+      jump?: boolean;
     };
 
 export interface LineText {

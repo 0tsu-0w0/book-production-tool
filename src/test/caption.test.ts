@@ -58,6 +58,24 @@ describe("画像の切り抜き・大きさ・位置・キャプション", () =
     assert.ok(Math.abs(Math.min(...g.map((x) => x.y)) - s.y) < spec.fontSizePt);
   });
 
+  it("画像の形に、キャプションの字と置いた範囲を残す（IDML のテキストの枠）。回り込みでない N 行の画像には、行を空ける印", () => {
+    const spec = { ...DEFAULT_SPEC, images: { 猫: { width: 400, height: 100 } } };
+    const [page] = layoutDocument(parse("本文。\n［＃画像：猫　５行　キャプション：切り抜いた帯］\n本文。"), spec);
+    const s = imgShape(page.shapes);
+    assert.equal(s.jump, true);
+    assert.ok(s.caption);
+    assert.equal(s.caption.lines.join(""), "切り抜いた帯");
+    // 字はすべて範囲の中に入る（画像が低くても、いちばん長い行が収まる高さ）。
+    const g = page.glyphs.filter((x) => "切り抜いた帯".includes(x.text) && x.x < s.x);
+    assert.equal(g.length, 6);
+    for (const x of g) {
+      assert.ok(x.x >= s.caption.x - 1e-6 && x.x <= s.caption.x + s.caption.w + 1e-6);
+      assert.ok(x.y >= s.caption.y - 1e-6 && x.y + s.caption.size <= s.caption.y + s.caption.h + 1e-6);
+    }
+    const [wrapped] = layoutDocument(parse("本文。\n［＃画像：猫　４行　回り込み］\n本文。"), spec);
+    assert.equal(imgShape(wrapped.shapes).jump, undefined);
+  });
+
   it("行の中の画像のキャプションは、取った行の最後の行に入り、画像はその分小さくなる", () => {
     const spec = { ...DEFAULT_SPEC, images: { 猫: { width: 100, height: 100 } } };
     const [a] = layoutDocument(parse("［＃画像：猫　4行］"), spec);

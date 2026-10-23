@@ -8,6 +8,7 @@ import { compositeFonts, type FontChoice, type Settings } from "./document/setti
 import { BUILTIN_TEMPLATES, LEGACY_TEMPLATE_EXTENSIONS, TEMPLATE_EXTENSION, parseTemplate, serializeTemplate, templateFileName } from "./document/template.js";
 import { glyphPaths, typesetLazy, type ImageInfo } from "./engine/index.js";
 import { FontService } from "./fonts/service.js";
+import { indesignFontName } from "./fonts/catalog.js";
 import { glyphVariants } from "./fonts/glyph-variants.js";
 import { buildEpub, writeEpub } from "./output/epub.js";
 import { buildHtml, type HtmlMode } from "./output/html.js";
@@ -962,7 +963,10 @@ ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseN
       },
       fontName: (f) => {
         const e = entryOf(f);
-        return e ? { family: e.family, style: e.style, postscriptName: e.postscriptName, cff: e.cff } : undefined;
+        if (!e) return undefined;
+        // InDesign の名前（ファミリーは日本語名、スタイルは英語名）。ファイルが読めなければ一覧の名前。
+        const id = indesignFontName(e);
+        return { family: id?.family ?? e.family, style: id?.style ?? (e.style || "Regular"), postscriptName: e.postscriptName, cff: e.cff };
       },
     });
     zip = new ZipWriter(filePath);

@@ -360,6 +360,36 @@ describe("IDML：Kolophon の控え・画像・ノンブル", () => {
     assert.ok(back.text.includes(`［＃画像：${img.name}　全面］`));
   });
 
+  it("画像（#23）：全面の画像のあとの本文は次のページから。行をまるごと空ける画像はオブジェクトを挟み、キャプションはテキストの枠", () => {
+    const s = sampleSettings();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kolophon-links-"));
+    const W = (s.book.widthMm * 72) / 25.4;
+    const H = (s.book.heightMm * 72) / 25.4;
+    const caption = { lines: ["切り抜いた", "帯"], x: 20, y: 60, w: 24, h: 45, size: 9 };
+    const r = buildIdml(`本文。\n［＃画像：${img.name}　全面］\n続き。\n［＃画像：${img.name}　５行　キャプション：切り抜いた帯］\n終わり。`, s, {
+      pageCount: 3,
+      images: [img],
+      linkPath: (f) => path.join(dir, f),
+      pages: [
+        { images: [] },
+        { images: [{ name: img.name, x: -8, y: -8, w: W + 16, h: H + 16 }] },
+        { images: [{ name: img.name, x: 50, y: 60, w: 40, h: 30, jump: true, caption }] },
+      ],
+    });
+    const story = dec.decode(r.files.find((f) => f.name === "Stories/Story_u1.xml")!.data);
+    const next = story.split("<ParagraphStyleRange").find((p) => p.includes("続き"))!;
+    assert.match(next, /StartParagraph="NextPage"/);
+    const spread = r.files.filter((f) => f.name.startsWith("Spreads/")).map((f) => parseXml(dec.decode(f.data)));
+    const rect = spread.flatMap((sp) => findAll(sp, "Rectangle")).at(-1)!;
+    assert.equal(findAll(rect, "TextWrapPreference")[0].attrs.TextWrapMode, "JumpObjectTextWrap");
+    const cf = spread.flatMap((sp) => findAll(sp, "TextFrame")).find((f) => String(f.attrs.Self).startsWith("cf"))!;
+    assert.equal(findAll(cf, "TextFramePreference")[0].attrs.IgnoreWrap, "true");
+    assert.equal(findAll(cf, "TextWrapPreference")[0].attrs.TextWrapMode, "JumpObjectTextWrap");
+    const capStory = dec.decode(r.files.find((f) => f.name === `Stories/Story_${cf.attrs.ParentStory}.xml`)!.data);
+    assert.match(capStory, /StoryOrientation="Vertical"/);
+    assert.match(capStory, /<Content>切り抜いた<\/Content><Br\/><Content>帯<\/Content>/);
+  });
+
   it("ノンブル：Kolophon でノンブルを出したページにマスター A（自動のページ番号）、ほかはマスター B。前付けを別に数えるときはセクションを分ける", () => {
     const s = sampleSettings();
     s.nombreStyle = { ...s.nombreStyle, front: "roman", numerals: "kanji" };

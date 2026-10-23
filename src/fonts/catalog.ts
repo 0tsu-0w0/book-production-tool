@@ -116,6 +116,16 @@ export function scanFonts(dirs = fontDirectories(), cache?: ScanCache, kind: "ve
 }
 
 /**
+ * InDesign での書体の名前（#25）：ファミリーは日本語名（なければ英語名）、スタイルは英語名（Regular・Bold・W3 など）。
+ * Kolophon の一覧のスタイル（日本語名、Regular は空）とは違うので、ファイルの名前の表から読み直す。読めなければ undefined。
+ */
+export function indesignFontName(choice: Pick<FontChoice, "path" | "index" | "postscriptName">): { family: string; style: string } | undefined {
+  const face = inspectFontFile(choice.path).find((f) => f.postscriptName === choice.postscriptName) ?? inspectFontFile(choice.path).find((f) => f.index === choice.index);
+  if (!face || !face.familyName) return undefined;
+  return { family: face.familyName, style: face.styleNameEn || face.subfamilyName || "Regular" };
+}
+
+/**
  * 選んだフォントのバイト列を読む。.ttc なら中の1つを取り出し、
  * PDF に埋め込めるよう字形データの境界をそろえる（normalizeGlyf）。
  */

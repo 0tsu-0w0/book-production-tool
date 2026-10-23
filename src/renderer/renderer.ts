@@ -836,7 +836,7 @@ function exportIdml() {
       return;
     }
     const skipped = r.skipped.length > 0 ? `。入れなかったもの：${r.skipped.join("・")}` : "";
-    const links = r.links ? `。画像${r.links}枚を「${r.linkDir}」に書き出し、リンクしました` : "";
+    const links = r.links ? `。画像・数式${r.links}個を「${r.linkDir}」に書き出し、リンクしました` : "";
     setStatus(`IDML を書き出しました（${r.pages}ページ）：${r.path}${links}${skipped}`);
   });
 }
