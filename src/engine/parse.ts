@@ -59,13 +59,15 @@ const PAGE_REF = /^［＃ページ[：:]([^［］]+)］/u;
 /** 相互参照：［＃見出し：名前］・［＃章：名前］・［＃参照：名前］（［＃参照：名前｜書式］で書式を決める）。 */
 const XREF = /^［＃(見出し|章|参照)[：:]([^［］]+)］/u;
 /** 行の中の記法（行頭にあっても、段落スタイルの名前と読まない）。 */
-const INLINE_COMMAND = /^(?:ページ|見出し|章|参照|字形|字間|カーニング|索引|注|ラベル)[：:]/u;
+const INLINE_COMMAND = /^(?:ページ|見出し|章|参照|字形|字間|カーニング|索引|索引参照|注|ラベル)[：:]/u;
 const LABEL_LINE = /^\s*［＃ラベル[：:]([^［］]+)］\s*$/u;
 
 /** 索引：［＃索引］語［＃／索引］（その語を）・［＃索引：語（よみ）］（印だけ。前の字に付ける）。 */
 const INDEX_OPEN = /^［＃索引］/u;
 const INDEX_CLOSE = /^［＃／索引］/u;
 const INDEX_MARK = /^［＃索引[：:]([^［］]+)］/u;
+/** 索引の参照：［＃索引参照：語（よみ）→行き先］（「語 →行き先を見よ」の項目にする。#17）。 */
+const INDEX_SEE = /^［＃索引参照[：:]([^［］→]+)→([^［］]+)］/u;
 
 /** 「語（よみ）」「語｜よみ」を、表記と読みに分ける。読みがなければ表記を読みにする。 */
 export function splitIndexTerm(s: string): { term: string; reading: string } {
@@ -265,6 +267,14 @@ export function parseInline(s: string, opts: ParseOptions = DEFAULT_PARSE_OPTION
     }
     if ((m = TRACK_CLOSE.exec(rest))) {
       tracks.pop();
+      i += m[0].length;
+      continue;
+    }
+    if ((m = INDEX_SEE.exec(rest))) {
+      // 参照の項目も、前の字に付ける（ページ番号は出さないので、場所はどこでもよい）。
+      const e = { ...splitIndexTerm(m[1]), see: m[2].trim() };
+      if (atoms.length > 0) (atoms[atoms.length - 1].index ??= []).push(e);
+      else pendingIndex.push(e);
       i += m[0].length;
       continue;
     }

@@ -9,11 +9,18 @@ import type { Atom, Block } from "./types.js";
 // 同じ語が同じページに何度出ても、番号は1つにまとめる（1度組んで、ページを調べてから作り直す）。
 
 export interface IndexEntry {
+  /** 表記。「／」で区切ると下位の項目（親／子。#17）。 */
   term: string;
+  /** 読み。表記と同じく「／」で区切る（足りない所は表記を読みにする）。 */
   reading: string;
   /** 語のある場所のラベル（出てくる順）。 */
   ids: string[];
+  /** 「→を見よ」の行き先（［＃索引参照：］）。 */
+  see?: string[];
 }
+
+/** 下位の項目の区切り（全角の「／」だけ。欧文の「/」は語の中に使えるように）。 */
+const LEVEL = "／";
 
 /** 語のある場所に付けるラベルの頭。 */
 const ID_PREFIX = "kolophon-idx-";
@@ -32,10 +39,15 @@ export function collectIndex(blocks: Block[]): IndexEntry[] {
   for (const block of textBlocks(blocks)) {
     for (const atom of block.atoms) {
       for (const e of atom.index ?? []) {
-        e.id = `${ID_PREFIX}${k++}`;
         const key = `${e.term}\u0000${e.reading}`;
         let entry = entries.get(key);
         if (!entry) entries.set(key, (entry = { term: e.term, reading: e.reading, ids: [] }));
+        // 参照の項目はページ番号を出さないので、場所のラベルも付けない。
+        if (e.see) {
+          if (!entry.see?.includes(e.see)) (entry.see ??= []).push(e.see);
+          continue;
+        }
+        e.id = `${ID_PREFIX}${k++}`;
         entry.ids.push(e.id);
       }
     }
@@ -120,24 +132,81 @@ export function indexSignature(entries: IndexEntry[], pageOf?: (id: string) => n
   return entries.map((e) => keptIds(e, pageOf).join(",")).join(";");
 }
 
+/** 索引の木：下位の項目を親の下にまとめる。親だけで語のない項目（下位の項目にだけ語がある）も作る。 */
+interface IndexNode {
+  term: string;
+  reading: string;
+  entry?: IndexEntry;
+  children: IndexNode[];
+}
+
+export function indexTree(entries: IndexEntry[]): IndexNode[] {
+  const top: IndexNode[] = [];
+  for (const e of entries) {
+    const terms = e.term.split(LEVEL).map((t) => t.trim());
+    const readings = e.reading.split(LEVEL).map((t) => t.trim());
+    let level = top;
+    let node: IndexNode | undefined;
+    terms.forEach((term, i) => {
+      // 読みが足りなければ表記を読みにする（親の読みは、同じ親の前の項目に合わせる）。
+      const reading = readings[i] || term;
+      node = level.find((n) => n.term === term) ?? level[level.push({ term, reading, children: [] }) - 1];
+      level = node.children;
+    });
+    node!.entry = node!.entry ? { ...node!.entry, ids: [...node!.entry.ids, ...e.ids], see: [...(node!.entry.see ?? []), ...(e.see ?? [])] } : e;
+  }
+  return top;
+}
+
+/** 下位の項目を、読みの順に並べる。 */
+function sortNodes(nodes: IndexNode[]): IndexNode[] {
+  return [...nodes]
+    .sort(
+      (a, b) =>
+        primaryKey(a.reading).localeCompare(primaryKey(b.reading), "ja") ||
+        normalizeReading(a.reading).localeCompare(normalizeReading(b.reading), "ja") ||
+        a.term.localeCompare(b.term, "ja"),
+    )
+    .map((n) => ({ ...n, children: sortNodes(n.children) }));
+}
+
 /**
  * 索引のページの段落：題「索引」、行の見出し（あ・か…）、項目（語・リーダー・ページ番号）。
+ * 下位の項目は親の下に、1字ずつ下げて並べる。参照の項目は「→行き先を見よ」（番号もあれば「→行き先も見よ」）。
  * pageOf を渡すと、同じページの番号は最初の1つだけにする（組んだあとで作り直すとき）。
  */
 export function indexBlocks(entries: IndexEntry[], opts: ParseOptions, pageOf?: (id: string) => number | undefined): Block[] {
   const out: Block[] = [{ kind: "para", style: TOC_TITLE_STYLE, atoms: [..."索引"].map((ch) => ({ cells: [{ text: ch }] })) }];
-  for (const { group, entries: list } of sortIndex(entries)) {
-    out.push({ kind: "para", style: INDEX_HEADING_STYLE, atoms: parseInline(group, opts) });
-    for (const e of list) {
-      const ids = keptIds(e, pageOf);
-      // 番号は、語のある場所のラベルへのページ参照。組むまでは仮に「000」（縦中横の3桁）にしておく。
-      const numbers: Atom[] = ids.flatMap((id, i) => [...(i > 0 ? [{ cells: [{ text: "、" }] }] : []), { cells: [{ text: "000", tcy: true }], pageRef: id }]);
-      out.push({
-        kind: "para",
-        style: INDEX_ENTRY_STYLE,
-        atoms: [...parseInline(e.term, opts), { cells: [{ text: "…" }], leader: true }, ...numbers],
-      });
-    }
+  const line = (node: IndexNode, depth: number) => {
+    const ids = node.entry ? keptIds(node.entry, pageOf) : [];
+    // 番号は、語のある場所のラベルへのページ参照。組むまでは仮に「000」（縦中横の3桁）にしておく。
+    const numbers: Atom[] = ids.flatMap((id, i) => [...(i > 0 ? [{ cells: [{ text: "、" }] }] : []), { cells: [{ text: "000", tcy: true }], pageRef: id }]);
+    // 参照の行き先：下位の項目は「親（子）」と書く。
+    const see = (node.entry?.see ?? []).map((s) => {
+      const [head, ...rest] = s.split(LEVEL).map((t) => t.trim());
+      return rest.length > 0 ? `${head}（${rest.join("・")}）` : head;
+    });
+    const indent = (n: number): Atom[] => (n > 0 ? [{ cells: [..."　".repeat(n)].map((ch) => ({ text: ch })) }] : []);
+    const seeText = see.length > 0 ? `→${see.join("・")}${ids.length > 0 ? "も" : "を"}見よ` : "";
+    // 番号のある項目の「→も見よ」は、番号の行のあとに1字下げた行で（番号はリーダーで行末にそろえるため）。
+    out.push({
+      kind: "para",
+      style: INDEX_ENTRY_STYLE,
+      atoms: [
+        ...indent(depth),
+        ...parseInline(node.term, opts),
+        ...(ids.length > 0 ? [{ cells: [{ text: "…" }], leader: true }, ...numbers] : seeText ? parseInline(`　${seeText}`, opts) : []),
+      ],
+    });
+    if (ids.length > 0 && seeText) out.push({ kind: "para", style: INDEX_ENTRY_STYLE, atoms: [...indent(depth + 1), ...parseInline(seeText, opts)] });
+    for (const c of node.children) line(c, depth + 1);
+  };
+  const tree = sortNodes(indexTree(entries));
+  for (const g of GROUP_ORDER) {
+    const nodes = tree.filter((n) => indexGroup(n.reading) === g);
+    if (nodes.length === 0) continue;
+    out.push({ kind: "para", style: INDEX_HEADING_STYLE, atoms: parseInline(g, opts) });
+    for (const n of nodes) line(n, 0);
   }
   return out;
 }

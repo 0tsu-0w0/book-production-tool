@@ -810,13 +810,20 @@ ipcMain.handle("book:info", (_e, bookPath: string, book: Book) => {
   return { pages: result.pageCount, ranges, errors, renamed: combined.renamed };
 });
 
-/** ブック全体を1つの PDF に書き出す。 */
-ipcMain.handle("book:export-pdf", (_e, bookPath: string, book: Book) => {
+/** 書き出すために、ブックの文書をつなぐ。読めない文書・含める文書がなければ、その知らせ。 */
+function combinedForExport(bookPath: string, book: Book): ReturnType<typeof combineBook> | { error: string } {
   const { docs, errors } = loadBookDocs(bookPath, book);
   const missing = errors.flatMap((e, i) => (e && book.documents[i].include ? [`${book.documents[i].path}：${e}`] : []));
   if (missing.length > 0) return { error: `読めない文書があります。\n${missing.join("\n")}` };
   const combined = combineBook(book, docs);
   if (combined.included.length === 0) return { error: "書き出す文書がありません。" };
+  return combined;
+}
+
+/** ブック全体を1つの PDF に書き出す。 */
+ipcMain.handle("book:export-pdf", (_e, bookPath: string, book: Book) => {
+  const combined = combinedForExport(bookPath, book);
+  if ("error" in combined) return combined;
   return exportPdfFile(combined.text, combined.settings, bookName(bookPath), combined.images);
 });
 
@@ -986,12 +993,31 @@ ipcMain.handle("idml:export", async (_e, text: string, settings: Settings, baseN
 
 /** ブック全体を1つの EPUB に書き出す。 */
 ipcMain.handle("book:export-epub", (_e, bookPath: string, book: Book) => {
-  const { docs, errors } = loadBookDocs(bookPath, book);
-  const missing = errors.flatMap((e, i) => (e && book.documents[i].include ? [`${book.documents[i].path}：${e}`] : []));
-  if (missing.length > 0) return { error: `読めない文書があります。\n${missing.join("\n")}` };
-  const combined = combineBook(book, docs);
-  if (combined.included.length === 0) return { error: "書き出す文書がありません。" };
+  const combined = combinedForExport(bookPath, book);
+  if ("error" in combined) return combined;
   return exportEpubFile(combined.text, combined.settings, bookName(bookPath), combined.images);
+});
+
+/** ブック全体を HTML に書き出す（#16）。1つのファイルか章ごとのフォルダかを聞く（中身はブックの EPUB と同じ）。 */
+ipcMain.handle("book:export-html", async (_e, bookPath: string, book: Book) => {
+  const combined = combinedForExport(bookPath, book);
+  if ("error" in combined) return combined;
+  let mode: HtmlMode;
+  if (autoHtml) mode = /\.html?$/i.test(autoHtml) ? "single" : "chapters";
+  else {
+    const { response } = await dialog.showMessageBox(win!, {
+      type: "question",
+      title: "HTML を書き出す",
+      message: "ブックを HTML に書き出します。どちらにしますか？",
+      detail: "1つのファイル：画像・書体も中に入れた1つの .html。\n章ごとのフォルダ：index.html と章ごとの HTML・style.css・images（ウェブに置くとき）。",
+      buttons: ["1つのファイル", "章ごとのフォルダ", "やめる"],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (response === 2) return undefined;
+    mode = response === 0 ? "single" : "chapters";
+  }
+  return exportHtmlFile(combined.text, combined.settings, bookName(bookPath), combined.images, mode);
 });
 
 /** 画像の書き出し先：フォルダか ZIP（OUT-05）。書き出しの間だけ持つ。 */

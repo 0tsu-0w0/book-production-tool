@@ -108,6 +108,7 @@ interface Api extends TemplateApi {
     findings: { level: "error" | "warning" | "info"; message: string }[],
   ): Promise<{ path: string; files: number; skippedFonts: { name: string; reason: string }[]; pdf?: { pages?: number; error?: string } } | { error: string } | undefined>;
   bookExportEpub(path: string, book: Book): Promise<EpubResult>;
+  bookExportHtml(path: string, book: Book): Promise<{ path: string; files: number } | { error: string } | undefined>;
   bookNew(): Promise<{ path: string; book: Book } | undefined>;
   bookOpen(file?: string): Promise<{ path: string; book: Book } | { error: string } | undefined>;
   bookSave(path: string, book: Book): Promise<void>;
@@ -782,15 +783,19 @@ function exportPdf() {
 function exportHtml(mode: "single" | "chapters") {
   return withBusy(async () => {
     setStatus("HTML を書き出しています…");
-    const r = await api.exportHtml(source.value, settings, baseName(), imageManager.images, mode);
-    if (!r) return setStatus("書き出しを取り消しました。");
-    if ("error" in r) {
-      setStatus(r.error);
-      if (!init.autoExport) alert(r.error);
-      return;
-    }
-    setStatus(mode === "single" ? `HTML を保存しました：${r.path}` : `HTML を書き出しました（${r.files}ファイル）：${r.path}`);
+    reportHtml(await api.exportHtml(source.value, settings, baseName(), imageManager.images, mode));
   });
+}
+
+/** HTML の書き出しの結果を、状態の欄に出す（1つのファイルなら files は 1）。 */
+function reportHtml(r: { path: string; files: number } | { error: string } | undefined) {
+  if (!r) return setStatus("書き出しを取り消しました。");
+  if ("error" in r) {
+    setStatus(r.error);
+    if (!init.autoExport) alert(r.error);
+    return;
+  }
+  setStatus(r.files === 1 ? `HTML を保存しました：${r.path}` : `HTML を書き出しました（${r.files}ファイル）：${r.path}`);
 }
 
 /** EPUB の書き出しの結果を、状態の欄に出す。 */
@@ -881,6 +886,11 @@ const bookDialog = new BookDialog({
     withBusy(async () => {
       setStatus("ブックを EPUB に書き出しています…");
       reportEpub(await api.bookExportEpub(path, book));
+    }),
+  exportHtml: (path, book) =>
+    withBusy(async () => {
+      setStatus("ブックを HTML に書き出しています…");
+      reportHtml(await api.bookExportHtml(path, book));
     }),
   openCombined: async (path, book) => {
     if (!confirmDiscard()) return;
@@ -1189,7 +1199,20 @@ if (init.snapshot) {
     console.log(`[bench] 中央値 本体での組版 ${med(engine)}ms／結果が届くまで ${med(ipc)}ms／描画 ${med(draw)}ms`);
     console.log(`[bench] ${result?.pageCount}ページ 組み直し〜描画: 中央値 ${times[5].toFixed(0)}ms 最大 ${times[9].toFixed(0)}ms`);
   }
-  if (init.autoExport) {
+  if (init.autoExport && init.book) {
+    // 確認用：--doc にブックを渡したら、ブック全体を書き出す（PDF・EPUB・HTML）。
+    const opened = await api.bookOpen(init.book);
+    if (opened && !("error" in opened)) {
+      if (init.autoPdf) reportPdf(await api.bookExportPdf(opened.path, opened.book));
+      if (init.autoPdf) console.log(`[snapshot] ${status.textContent}`);
+      reportEpub(await api.bookExportEpub(opened.path, opened.book));
+      console.log(`[snapshot] ${status.textContent}`);
+      if (init.autoHtml) {
+        reportHtml(await api.bookExportHtml(opened.path, opened.book));
+        console.log(`[snapshot] ${status.textContent}`);
+      }
+    } else console.log(`[snapshot] ブックを開けませんでした：${opened && "error" in opened ? opened.error : ""}`);
+  } else if (init.autoExport) {
     await exportPdf();
     if (init.autoPdf) console.log(`[snapshot] ${status.textContent}`);
     await exportImages();

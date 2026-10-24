@@ -93,7 +93,8 @@ export interface Atom {
    */
   link?: string;
   /** 索引の語（［＃索引］…［＃／索引］・［＃索引：語（よみ）］）。id は組むたびに付ける、この場所のラベル。 */
-  index?: { term: string; reading: string; id?: string }[];
+  /** 索引の語。term・reading の「／」は下位の項目の区切り（親／子）。see は「→を見よ」の行き先（そのときはページ番号を出さない）。 */
+  index?: { term: string; reading: string; id?: string; see?: string }[];
 }
 
 export type SideLine = "single" | "double" | "wave" | "dotted" | "dashed";

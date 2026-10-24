@@ -1,6 +1,20 @@
 import { INVALID_IMAGE_NAME, type DocImage, type ImageLink } from "../document/document.js";
 import type { LinkStatus } from "../document/image-link.js";
+import { linkFindings } from "../document/link-findings.js";
 import type { Finding } from "../output/preflight.js";
+
+/** 画面に描く画像の長い辺の画素の上限。画像の書き出しと PDF は元の画像から作るので、画面用だけ縮めて持つ（#18）。 */
+const SCREEN_MAX_PX = 2400;
+
+/** 画面用の画像：大きければ縮めて、元の画像は閉じる（元の大きさは呼ぶ側で先に読んでおく）。 */
+async function forScreen(bitmap: ImageBitmap): Promise<ImageBitmap> {
+  const long = Math.max(bitmap.width, bitmap.height);
+  if (long <= SCREEN_MAX_PX) return bitmap;
+  const f = SCREEN_MAX_PX / long;
+  const small = await createImageBitmap(bitmap, { resizeWidth: Math.round(bitmap.width * f), resizeHeight: Math.round(bitmap.height * f), resizeQuality: "high" });
+  bitmap.close();
+  return small;
+}
 
 // 設定欄の「画像」：文書に画像（PNG・JPEG）を入れる・名前を変える・消す・原稿に［＃画像：名前］を入れる（DTP-12）。
 // 画像は文書ファイルの中に入る。画面の描画用に、読み込んだ画像（ImageBitmap）を名前で持つ。
@@ -46,7 +60,12 @@ export class ImageManager {
     this.images = images;
     for (const b of this.bitmaps.values()) b.close();
     this.bitmaps.clear();
-    await Promise.all(images.map((i) => this.decode(i)));
+    // 一度に読むのは4枚まで（写真の多い本で、全部を同時に読むとメモリが一時に膨らむため。#18）。
+    let next = 0;
+    const worker = async () => {
+      while (next < images.length) await this.decode(images[next++]);
+    };
+    await Promise.all(Array.from({ length: Math.min(4, images.length) }, worker));
     this.render();
     // 開いたときに、元のファイルが変わっていないかを調べて知らせる。
     await this.checkLinks(true);
@@ -99,12 +118,7 @@ export class ImageManager {
   /** 書き出す前の検査に足す知らせ：元のファイルが変わった画像（注意）・見つからない画像（参考。文書の中の画像で書き出す）。 */
   async linkFindings(): Promise<Finding[]> {
     await this.checkLinks();
-    return this.images.flatMap((img): Finding[] => {
-      const st = this.status.get(img)?.state;
-      if (st === "modified") return [{ level: "warning", message: `画像「${img.name}」の元のファイル（${img.link!.path}）が、取り込んだあとに変わっています。設定欄の「画像」の「更新」で取り込み直せます（このまま書き出すと、取り込んだときの画像になります）。` }];
-      if (st === "missing") return [{ level: "info", message: `画像「${img.name}」の元のファイル（${img.link!.path}）が見つかりません。文書の中の画像で書き出します。` }];
-      return [];
-    });
+    return linkFindings(this.images, (img) => this.status.get(img)?.state);
   }
 
   /** リンクのファイルを読み直して、画像の中身を入れ替える（名前と原稿の［＃画像：］はそのまま）。 */
@@ -124,7 +138,7 @@ export class ImageManager {
     }
     Object.assign(img, { mime: r.mime, data: r.data, width: bitmap.width, height: bitmap.height, link: r.link });
     this.bitmaps.get(img.name)?.close();
-    this.bitmaps.set(img.name, bitmap);
+    this.bitmaps.set(img.name, await forScreen(bitmap));
     this.status.set(img, { state: "ok", path: r.link.path, relative: r.link.relative });
     return true;
   }
@@ -158,7 +172,11 @@ export class ImageManager {
   private async decode(img: DocImage) {
     try {
       const bytes = Uint8Array.from(atob(img.data), (c) => c.charCodeAt(0));
-      this.bitmaps.set(img.name, await createImageBitmap(new Blob([bytes], { type: img.mime })));
+      // 文書の画像は大きさが分かっているので、はじめから画面用の大きさで読む（元の大きさで読んでから縮めるより、メモリが少ない）。
+      const f = Math.min(1, SCREEN_MAX_PX / Math.max(img.width, img.height, 1));
+      const blob = new Blob([bytes], { type: img.mime });
+      const bitmap = f < 1 ? await createImageBitmap(blob, { resizeWidth: Math.round(img.width * f), resizeHeight: Math.round(img.height * f), resizeQuality: "high" }) : await createImageBitmap(blob);
+      this.bitmaps.set(img.name, await forScreen(bitmap));
     } catch {
       // 壊れた画像は描かない（枠と×印になる）。
     }
@@ -340,7 +358,7 @@ export class ImageManager {
       };
       if (link) this.status.set(img, { state: "ok", path: link.path, relative: link.relative });
       this.images.push(img);
-      this.bitmaps.set(img.name, bitmap);
+      this.bitmaps.set(img.name, await forScreen(bitmap));
     }
     this.render();
     this.h.changed();

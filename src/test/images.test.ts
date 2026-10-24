@@ -167,3 +167,37 @@ describe("画像の PDF と検査", () => {
     assert.deepEqual(parseDocument(JSON.stringify(json)).images.map((i) => i.name), ["絵"]);
   });
 });
+
+describe("壊れた画像（#16 の確かめで見つけた所）", () => {
+  it("PDF の書き出しで読めない画像は、その画像の名前を知らせる", async () => {
+    const { decodeImage } = await import("../output/pdf-images.js");
+    const broken = { name: "壊れた絵", mime: "image/png" as const, bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]) };
+    assert.throws(() => decodeImage(broken), /画像「壊れた絵」を読めません/);
+  });
+});
+
+describe("写真の多い本の入稿用 PDF（#18）", () => {
+  it("2枚以上の画像は別のスレッドで並べて処理し、元の順に CMYK の画像として入れる", async () => {
+    const { inflateSync } = await import("node:zlib");
+    const a = { ...redPng(60, 45), name: "絵1" };
+    const b = { ...redPng(30, 20), name: "絵2" };
+    const r = await exportPdf("［＃画像：絵1］\n［＃画像：絵2］", settings(), fonts, "t", undefined, [a, b]);
+    assert.deepEqual(r.check!.filter((c) => !c.ok), []);
+    const doc = await PDFDocument.load(r.bytes);
+    const images = doc.context
+      .enumerateIndirectObjects()
+      .map(([, o]) => o)
+      .filter((o): o is PDFRawStream => o instanceof PDFRawStream && o.dict.get(PDFName.of("Subtype")) === PDFName.of("Image"));
+    assert.equal(images.length, 2);
+    for (const img of images) {
+      assert.equal(img.dict.get(PDFName.of("ColorSpace")), PDFName.of("DeviceCMYK"));
+      const px = inflateSync(img.contents);
+      // 赤は C0 M100 Y100 K0。
+      assert.deepEqual([...px.subarray(0, 4)], [0, 255, 255, 0]);
+    }
+    assert.deepEqual(
+      images.map((img) => (img.dict.get(PDFName.of("Width")) as unknown as { asNumber(): number }).asNumber()).sort((x, y) => x - y),
+      [30, 60],
+    );
+  });
+});

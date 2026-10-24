@@ -111,3 +111,36 @@ describe("索引", () => {
     assert.equal(r.lines(r.pageCount - 1)[0].text, "索引");
   });
 });
+
+describe("索引の下位の項目と参照（#17）", () => {
+  const text = [
+    "＃第一章　雨",
+    "　梅雨［＃索引：雨／梅雨（あめ／つゆ）］と夕立［＃索引：雨／夕立（あめ／ゆうだち）］。雨［＃索引：雨（あめ）］と傘［＃索引参照：傘（かさ）→雨具］。",
+    "　雨具［＃索引：雨具（あまぐ）］と長靴［＃索引：雨具／長靴（あまぐ／ながぐつ）］。霧雨［＃索引：霧雨（きりさめ）］［＃索引参照：霧雨（きりさめ）→雨／梅雨］。",
+    "［＃索引ページ］",
+  ].join("\n");
+
+  it("［＃索引参照：語（よみ）→行き先］を読む。行頭でも段落スタイルと読まない", () => {
+    const atoms = parseInline("傘［＃索引参照：傘（かさ）→雨具］");
+    assert.deepEqual(atoms.flatMap((a) => a.index ?? []), [{ term: "傘", reading: "かさ", see: "雨具" }]);
+    const [b] = parse("［＃索引参照：傘→雨具］本文。");
+    assert.equal(b.kind, "para");
+    assert.equal((b as { style?: string }).style, undefined);
+  });
+
+  it("下位の項目は親の下に1字下げて並べ、参照は「→行き先を見よ」（番号もあれば次の行に「→行き先も見よ」）", { skip: !bytes && "フォントがない" }, () => {
+    const r = typesetLazy(text, { ...structuredClone(DEFAULT_SETTINGS), layoutMode: "book" }, new Face(bytes!));
+    const lines = r.lines(r.pageCount - 1).map((l) => l.text).filter(Boolean);
+    assert.deepEqual(lines, ["索引", "あ", "雨具…１", "　長靴…１", "雨…１", "　梅雨…１", "　夕立…１", "か", "傘　→雨具を見よ", "霧雨…１", "　→雨（梅雨）も見よ"]);
+  });
+});
+
+describe("TeX の索引の下位の項目と参照（#17）", () => {
+  it("\index の「!」は「親／子」、「|see{}」「|seealso{}」は［＃索引参照：］。ほかの書式は読まない", () => {
+    const tex = texToMarkup(String.raw`雨\index{あめ@雨!つゆ@梅雨}と傘\index{かさ@傘|see{雨具}}と\index{きりさめ@霧雨|seealso{雨!梅雨}}と\index{ねこ@猫|textbf}`).text;
+    assert.match(tex, /［＃索引：雨／梅雨（あめ／つゆ）］/);
+    assert.match(tex, /［＃索引参照：傘（かさ）→雨具］/);
+    assert.match(tex, /［＃索引参照：霧雨（きりさめ）→雨／梅雨］/);
+    assert.match(tex, /［＃索引：猫（ねこ）］/);
+  });
+});

@@ -18,6 +18,7 @@ export interface BookHost {
   info(path: string, book: Book): Promise<BookInfo>;
   exportPdf(path: string, book: Book): Promise<void>;
   exportEpub(path: string, book: Book): Promise<void>;
+  exportHtml(path: string, book: Book): Promise<void>;
   openCombined(path: string, book: Book): Promise<void>;
   sync(path: string, book: Book): Promise<{ count: number } | { error: string }>;
   openDocument(path: string, rel: string): Promise<void>;
@@ -267,6 +268,10 @@ export class BookDialog {
         this.dialog.close();
         await this.host.exportEpub(this.path!, this.book!);
       }, { disabled: !any, title: "1冊の電子書籍（EPUB 3）にする" }),
+      this.button("HTML を書き出す…", async () => {
+        this.dialog.close();
+        await this.host.exportHtml(this.path!, this.book!);
+      }, { disabled: !any, title: "1冊をウェブで読める HTML にする（1つのファイルか、章ごとのフォルダ）" }),
       this.button("PDF を書き出す…", async () => {
         this.dialog.close();
         await this.host.exportPdf(this.path!, this.book!);

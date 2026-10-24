@@ -445,7 +445,18 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
       const open = `<CharacterStyleRange${attr("AppliedCharacterStyle", style ? charSelf(style) : NO_CHAR)}${local}>`;
       const text = a.note ? `注${noteNo}` : atomText(a);
       // 索引の語：その字の前に、索引の項目（ページの参照）を置く。
-      const pre = (a.index ?? []).map((e) => `<PageReference Self="${id("pr")}" PageReferenceType="CurrentPage" ReferencedTopic="${topicOf(e.term, e.reading)}"/>`).join("");
+      // 参照の項目（→を見よ）はページの参照を置かず、項目の中の参照（CrossReference）にする。
+      const pre = (a.index ?? [])
+        .map((e) => {
+          const t = topicOf(e.term, e.reading);
+          if (e.see) {
+            if (!t.see.includes(e.see)) t.see.push(e.see);
+            return "";
+          }
+          t.pages++;
+          return `<PageReference Self="${id("pr")}" PageReferenceType="CurrentPage" ReferencedTopic="${t.self}"/>`;
+        })
+        .join("");
       // ルビ・割注・カーニング・索引のある字は、それだけで1つの並びにする（隣と混ざらないように）。
       const key = a.ruby || a.warichu !== undefined || kern || pre ? `${open}\u0000${out.length}` : open;
       const prev = out[out.length - 1];
@@ -454,13 +465,20 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     }
     return out.map((r) => `${r.open}${r.pre}${contentXml(r.text, size * paraScale)}`);
   };
-  // 索引の項目（Topic）：表記と読みが同じ語は1つ。
-  const topics = new Map<string, { self: string; term: string; reading: string }>();
-  const topicOf = (term: string, reading: string) => {
-    const key = `${term}\u0000${reading}`;
-    let t = topics.get(key);
-    if (!t) topics.set(key, (t = { self: `diTopic${topics.size + 1}`, term, reading }));
-    return t.self;
+  // 索引の項目（Topic）：表記と読みが同じ語は1つ。下位の項目（「親／子」）は親の Topic の中に入れる（#17）。
+  type Topic = { self: string; term: string; reading: string; children: Topic[]; see: string[]; pages: number };
+  const topics: Topic[] = [];
+  let topicCount = 0;
+  const topicOf = (term: string, reading: string): Topic => {
+    const terms = term.split("／").map((t) => t.trim());
+    const readings = reading.split("／").map((t) => t.trim());
+    let level = topics;
+    let t: Topic | undefined;
+    terms.forEach((name, i) => {
+      t = level.find((x) => x.term === name) ?? level[level.push({ self: `diTopic${++topicCount}`, term: name, reading: readings[i] || name, children: [], see: [], pages: 0 }) - 1];
+      level = t.children;
+    });
+    return t!;
   };
   const paragraph = (styleName: string, atoms: Atom[], lineStyle?: string) => {
     const parts = runs(atoms, lineStyle, paraScale.get(styleName) ?? 1, styleName);
@@ -799,8 +817,18 @@ export function buildIdml(text: string, settings: Settings, opts: IdmlOptions): 
     .join("");
 
   // 索引：本文の語の所に置いた項目の一覧（InDesign の索引パネルで「索引を生成」すると作り直せる）。
-  const indexXml =
-    topics.size > 0 ? `<Index Self="di">${[...topics.values()].map((t) => `<Topic Self="${t.self}" SortOrder="${escapeXml(t.reading)}" Name="${escapeXml(t.term)}"/>`).join("")}</Index>` : "";
+  // 参照の行き先は、書いた語の Topic（なければ作る）。番号のある項目からの参照は「も見よ」（SeeAlso）、ない項目からは「を見よ」（See）。
+  const refTargets = (list: Topic[]): void =>
+    list.forEach((t) => {
+      for (const s of t.see) topicOf(s, s);
+      refTargets(t.children);
+    });
+  refTargets([...topics]);
+  const topicXml = (t: Topic): string =>
+    `<Topic Self="${t.self}" SortOrder="${escapeXml(t.reading)}" Name="${escapeXml(t.term)}">${t.children.map(topicXml).join("")}${t.see
+      .map((s) => `<CrossReference Self="${id("xr")}" ReferencedTopic="${topicOf(s, s).self}" CrossReferenceType="${t.pages > 0 ? "SeeAlso" : "See"}" CustomTypeString=""/>`)
+      .join("")}</Topic>`;
+  const indexXml = topics.length > 0 ? `<Index Self="di">${topics.map(topicXml).join("")}</Index>` : "";
 
   // ---- セクション（ページ番号の付け方）----
   const numerals = settings.nombreStyle.numerals === "kanji" ? "Kanji" : settings.nombreStyle.numerals === "fullwidth" ? "FullWidthArabic" : "Arabic";

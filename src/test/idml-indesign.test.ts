@@ -162,3 +162,33 @@ describe("IDML の数式（#21）", () => {
     assert.ok(r.skipped.some((s) => s.includes("数式")));
   });
 });
+
+describe("IDML の索引の下位の項目と参照（#17）", () => {
+  const text = "梅雨［＃索引：雨／梅雨（あめ／つゆ）］と傘［＃索引参照：傘（かさ）→雨具］。雨具［＃索引：雨具（あまぐ）］。霧雨［＃索引：霧雨（きりさめ）］［＃索引参照：霧雨（きりさめ）→雨／梅雨］。";
+
+  it("下位の項目は入れ子の Topic、参照は CrossReference（番号のない項目は See、ある項目は SeeAlso）。控えなしでも記法に戻す", () => {
+    const r = buildIdml(text, settings(), { pageCount: 1 });
+    const index = findAll(parseXml(file(r, "designmap.xml")), "Index")[0];
+    const top = index.children.filter((c): c is ReturnType<typeof parseXml> => typeof c !== "string" && !("pi" in c) && c.name === "Topic");
+    const ame = top.find((t) => t.attrs.Name === "雨")!;
+    assert.deepEqual(
+      findAll(ame, "Topic").filter((t) => t !== ame).map((t) => [t.attrs.Name, t.attrs.SortOrder]),
+      [["梅雨", "つゆ"]],
+    );
+    const tsuyu = findAll(ame, "Topic").find((t) => t.attrs.Name === "梅雨")!;
+    const kasa = top.find((t) => t.attrs.Name === "傘")!;
+    const amagu = top.find((t) => t.attrs.Name === "雨具")!;
+    const kiri = top.find((t) => t.attrs.Name === "霧雨")!;
+    assert.deepEqual(findAll(kasa, "CrossReference").map((x) => [x.attrs.CrossReferenceType, x.attrs.ReferencedTopic]), [["See", amagu.attrs.Self]]);
+    assert.deepEqual(findAll(kiri, "CrossReference").map((x) => [x.attrs.CrossReferenceType, x.attrs.ReferencedTopic]), [["SeeAlso", tsuyu.attrs.Self]]);
+    // 本文のページの参照は、下位の項目の Topic を指す。参照の項目には置かない。
+    const refs = findAll(parseXml(file(r, "Stories/Story_u1.xml")), "PageReference").map((p) => p.attrs.ReferencedTopic);
+    assert.ok(refs.includes(tsuyu.attrs.Self));
+    assert.ok(!refs.includes(kasa.attrs.Self));
+    const back = importIdml(resaved(r));
+    assert.equal(back.restored, false);
+    assert.match(back.text, /［＃索引：雨／梅雨（あめ／つゆ）］/);
+    assert.match(back.text, /［＃索引参照：傘（かさ）→雨具］/);
+    assert.match(back.text, /［＃索引参照：霧雨（きりさめ）→雨／梅雨］/);
+  });
+});

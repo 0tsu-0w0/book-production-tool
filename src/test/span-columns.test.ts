@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { importIdml } from "../document/idml-import.js";
-import { DEFAULT_SETTINGS, normalizeSettings, type Settings } from "../document/settings.js";
+import { DEFAULT_SETTINGS, fitBookToWritingMode, normalizeSettings, type Settings } from "../document/settings.js";
 import { DEFAULT_STYLES } from "../document/styles.js";
 import { Face, typesetLazy } from "../engine/index.js";
 import type { DrawItem } from "../engine/types.js";
@@ -106,4 +106,48 @@ describe("段抜きの見出し（#8）", () => {
     const back = importIdml(new Uint8Array(fs.readFileSync(file)));
     assert.equal(back.settings.styles.paragraph.find((p) => p.name === "大見出し")!.spanColumns, true);
   });
+});
+
+describe("横組みの段組みの段抜き（#19）", () => {
+  /** 横組み：行（y の同じ字）ごとに、x の範囲と字。上の行から。 */
+  function hrows(items: DrawItem[]) {
+    const map = new Map<number, { y: number; left: number; right: number; text: string }>();
+    for (const it of items) {
+      if (!it.src) continue;
+      const k = Math.round(it.y);
+      const r = map.get(k) ?? { y: it.y, left: Infinity, right: -Infinity, text: "" };
+      r.left = Math.min(r.left, it.x);
+      r.right = Math.max(r.right, it.x);
+      r.text += it.text;
+      map.set(k, r);
+    }
+    return [...map.values()].sort((a, b) => a.y - b.y);
+  }
+
+  for (const columns of [2, 3]) {
+    it(`${columns}段：見出しは左右の段をまたぎ、前の本文は段の長さをそろえて割り直す。罫線・網掛けも段をまたぐ`, { skip: noFont }, () => {
+      const s = settings(columns, true, (x) => {
+        x.book.writingMode = "horizontal";
+        fitBookToWritingMode(x.book);
+        const h = x.styles.paragraph.find((p) => p.name === "大見出し")!;
+        h.decoration.shading = "#e8eef8";
+      });
+      const before = columns * 3;
+      const text = [...body("あ", before), "＃第二章　晴れ", ...body("い", 10)].join("\n");
+      const r = typesetLazy(text, s, new Face(bytes!));
+      const page = r.page(0);
+      const rs = hrows(page.items);
+      const head = rs.findIndex((x) => x.text.startsWith("第二章"));
+      // 前の本文は、段ごとに同じ行数（どの行も、最後の段まで字がある）。
+      const columnLength = r.charsPerLine * page.items[0].size;
+      assert.ok(head > 0);
+      for (const row of rs.slice(0, head)) assert.ok(row.right - row.left > columnLength * (columns - 1), row.text.slice(0, 5));
+      // 見出しは1行で、あとの本文はその下から。
+      assert.equal(rs[head].text, "第二章　晴れ");
+      assert.ok(rs.slice(head + 1).every((x) => x.y > rs[head].y));
+      // 網掛けは段をまたぐ幅（1段の長さより広い）。
+      const shade = page.shapes.find((x) => x.kind === "rect" && x.fill === "#e8eef8") as { w: number } | undefined;
+      assert.ok(shade && shade.w > columnLength * (columns - 0.5), JSON.stringify(shade));
+    });
+  }
 });

@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld("api", {
   exportIdml: invoke("idml:export"),
   exportPackage: invoke("package:export"),
   bookExportEpub: invoke("book:export-epub"),
+  bookExportHtml: invoke("book:export-html"),
   listIccProfiles: invoke("icc:list"),
   bookNew: invoke("book:new"),
   bookOpen: invoke("book:open"),

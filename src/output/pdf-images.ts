@@ -1,6 +1,9 @@
+import os from "node:os";
+import { Worker } from "node:worker_threads";
+import { deflateSync } from "node:zlib";
 import jpeg from "jpeg-js";
 import { PNG } from "pngjs";
-import { PDFDocument, type PDFRef } from "pdf-lib";
+import { PDFDocument, PDFName, type PDFRef } from "pdf-lib";
 import type { DrawPage } from "../engine/types.js";
 import type { ColorMode } from "./color.js";
 
@@ -26,16 +29,21 @@ interface Raster {
 }
 
 export function decodeImage(src: PdfImageSource): Raster {
-  if (src.mime === "image/jpeg") {
-    const img = jpeg.decode(src.bytes, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 1024 });
-    return { width: img.width, height: img.height, data: img.data };
+  try {
+    if (src.mime === "image/jpeg") {
+      const img = jpeg.decode(src.bytes, { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 1024 });
+      return { width: img.width, height: img.height, data: img.data };
+    }
+    const png = PNG.sync.read(Buffer.from(src.bytes));
+    return { width: png.width, height: png.height, data: png.data };
+  } catch (e) {
+    // 壊れた画像：どの画像かを知らせる（読み込みの道具の知らせだけでは分からないため）。
+    throw new Error(`画像「${src.name}」を読めません（ファイルが壊れているかもしれません）：${e instanceof Error ? e.message : String(e)}`);
   }
-  const png = PNG.sync.read(Buffer.from(src.bytes));
-  return { width: png.width, height: png.height, data: png.data };
 }
 
 /** 面積の平均で縮める（細い線がちらつかないよう、最近傍ではなく平均を取る）。 */
-function downsample(r: Raster, width: number, height: number): Raster {
+export function downsample(r: Raster, width: number, height: number): Raster {
   const out = new Uint8Array(width * height * 4);
   const sx = r.width / width;
   const sy = r.height / height;
@@ -45,16 +53,26 @@ function downsample(r: Raster, width: number, height: number): Raster {
     for (let x = 0; x < width; x++) {
       const x0 = Math.floor(x * sx);
       const x1 = Math.max(x0 + 1, Math.floor((x + 1) * sx));
-      const sum = [0, 0, 0, 0];
+      // 画素ごとに配列を作らず、4つの和を変数で持つ（#18。大きな写真で3倍ほど速い）。
+      let s0 = 0;
+      let s1 = 0;
+      let s2 = 0;
+      let s3 = 0;
       for (let yy = y0; yy < y1; yy++) {
-        for (let xx = x0; xx < x1; xx++) {
-          const i = (yy * r.width + xx) * 4;
-          for (let c = 0; c < 4; c++) sum[c] += r.data[i + c];
+        let i = (yy * r.width + x0) * 4;
+        for (let xx = x0; xx < x1; xx++, i += 4) {
+          s0 += r.data[i];
+          s1 += r.data[i + 1];
+          s2 += r.data[i + 2];
+          s3 += r.data[i + 3];
         }
       }
       const n = (y1 - y0) * (x1 - x0);
       const o = (y * width + x) * 4;
-      for (let c = 0; c < 4; c++) out[o + c] = Math.round(sum[c] / n);
+      out[o] = Math.round(s0 / n);
+      out[o + 1] = Math.round(s1 / n);
+      out[o + 2] = Math.round(s2 / n);
+      out[o + 3] = Math.round(s3 / n);
     }
   }
   return { width, height, data: out };
@@ -117,6 +135,84 @@ export function imageKey(name: string, matte?: string): string {
   return matte ? `${name}|${matte}` : name;
 }
 
+/** 1枚の画像の処理（読む・縮める・下の色ごとに CMYK かグレーにして圧縮する）。別のスレッドでも使う。 */
+export interface ImageJob {
+  src: PdfImageSource;
+  /** 紙の上でいちばん大きく置かれる幅と高さ（pt）。 */
+  placed: { w: number; h: number };
+  targetPpi: number;
+  mode: "cmyk" | "gray";
+  mattes: (string | undefined)[];
+}
+
+export interface ImageResult {
+  width: number;
+  height: number;
+  /** mattes の順の、圧縮した（FlateDecode）画素の並び。 */
+  streams: Uint8Array[];
+}
+
+export function processImage(job: ImageJob): ImageResult {
+  let raster = decodeImage(job.src);
+  const ppi = Math.min(raster.width / (job.placed.w / 72), raster.height / (job.placed.h / 72));
+  if (ppi > job.targetPpi * 1.125) {
+    const f = job.targetPpi / ppi;
+    raster = downsample(raster, Math.max(1, Math.round(raster.width * f)), Math.max(1, Math.round(raster.height * f)));
+  }
+  return { width: raster.width, height: raster.height, streams: job.mattes.map((m) => new Uint8Array(deflateSync(toDeviceColor(raster, job.mode, m)))) };
+}
+
+/**
+ * 画像をまとめて処理する。2枚以上なら、CPU の数（最大4）のスレッドで並べて処理する（#18。写真の多い本で JPEG を読むのに時間がかかるため。
+ * 4000×3000 の写真40枚の本で、処理が1本の約55秒から4本で約24秒に。メモリは約 0.4GB 増える）。
+ * スレッドを作れなければ、このスレッドで1枚ずつ。
+ */
+async function processImages(jobs: ImageJob[]): Promise<ImageResult[]> {
+  const threads = Math.min(4, Math.max(1, os.availableParallelism() - 1), jobs.length);
+  if (threads < 2) return jobs.map(processImage);
+  const results: ImageResult[] = new Array(jobs.length);
+  let next = 0;
+  const run = () =>
+    new Promise<void>((resolve, reject) => {
+      let worker: Worker;
+      try {
+        worker = new Worker(new URL("./image-worker.js", import.meta.url));
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      let current = -1;
+      const give = () => {
+        if (next >= jobs.length) {
+          void worker.terminate();
+          resolve();
+          return;
+        }
+        current = next++;
+        worker.postMessage(jobs[current]);
+      };
+      worker.on("message", (r: ImageResult | { error: string }) => {
+        if ("error" in r) {
+          void worker.terminate();
+          reject(new Error(r.error));
+          return;
+        }
+        results[current] = r;
+        give();
+      });
+      worker.on("error", reject);
+      give();
+    });
+  try {
+    await Promise.all(Array.from({ length: threads }, run));
+  } catch (e) {
+    // スレッドで処理できなければ（スレッドのファイルが読めないなど）、このスレッドで1枚ずつ。壊れた画像の知らせはそのまま。
+    if (e instanceof Error && e.message.startsWith("画像「")) throw e;
+    return jobs.map(processImage);
+  }
+  return results;
+}
+
 /** 使う画像を PDF に入れ、名前（と下の色。imageKey）から PDF の参照を引けるようにする。 */
 export async function embedImages(
   doc: PDFDocument,
@@ -127,6 +223,7 @@ export async function embedImages(
 ): Promise<Map<string, PDFRef>> {
   const sizes = placedSizes(pages);
   const refs = new Map<string, PDFRef>();
+  const jobs: ImageJob[] = [];
   for (const src of sources) {
     const placed = sizes.get(src.name);
     if (!placed) continue; // 原稿で使っていない画像は入れない。
@@ -138,23 +235,24 @@ export async function embedImages(
       refs.set(src.name, img.ref);
       continue;
     }
-    let raster = decodeImage(src);
-    const ppi = Math.min(raster.width / (placed.w / 72), raster.height / (placed.h / 72));
-    if (ppi > targetPpi * 1.125) {
-      const f = targetPpi / ppi;
-      raster = downsample(raster, Math.max(1, Math.round(raster.width * f)), Math.max(1, Math.round(raster.height * f)));
-    }
-    for (const matte of mattesOf(pages, src.name)) {
-      const stream = doc.context.flateStream(toDeviceColor(raster, mode, matte), {
+    jobs.push({ src: { name: src.name, mime: src.mime, bytes: src.bytes }, placed, targetPpi, mode, mattes: mattesOf(pages, src.name) });
+  }
+  // 処理は並べて、PDF には元の順に入れる（書き出すたびに同じ PDF になるように）。
+  const results = await processImages(jobs);
+  jobs.forEach((job, i) => {
+    const r = results[i];
+    job.mattes.forEach((matte, k) => {
+      const stream = doc.context.stream(r.streams[k], {
         Type: "XObject",
         Subtype: "Image",
-        Width: raster.width,
-        Height: raster.height,
+        Width: r.width,
+        Height: r.height,
         ColorSpace: mode === "cmyk" ? "DeviceCMYK" : "DeviceGray",
         BitsPerComponent: 8,
+        Filter: PDFName.of("FlateDecode"),
       });
-      refs.set(imageKey(src.name, matte), doc.context.register(stream));
-    }
-  }
+      refs.set(imageKey(job.src.name, matte), doc.context.register(stream));
+    });
+  });
   return refs;
 }

@@ -372,11 +372,23 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
   if (orientation) vertical = orientation === "Vertical";
 
   // 索引の項目（Topic）：Self → 語と読み。本文の PageReference から引く。
+  // 下位の項目（Topic の中の Topic）は「親／子」、参照（CrossReference）は［＃索引参照：語→行き先］にする（#17）。
   const topics = new Map<string, { term: string; reading: string }>();
-  for (const t of designmap ? findAll(designmap, "Topic") : []) {
-    const term = (t.attrs.Name ?? "").replace(/[［］]/g, "").trim();
-    if (term) topics.set(t.attrs.Self, { term, reading: (t.attrs.SortOrder ?? "").replace(/[［］（）()]/g, "").trim() || term });
-  }
+  const crossRefs: { from: string; to: string }[] = [];
+  const readTopics = (parent: XmlElement, path?: { term: string; reading: string }) => {
+    for (const t of childElements(parent, "Topic")) {
+      const name = (t.attrs.Name ?? "").replace(/[［］／]/g, "").trim();
+      if (!name) continue;
+      const reading = (t.attrs.SortOrder ?? "").replace(/[［］（）()／]/g, "").trim() || name;
+      const me = path ? { term: `${path.term}／${name}`, reading: `${path.reading}／${reading}` } : { term: name, reading };
+      topics.set(t.attrs.Self, me);
+      for (const x of childElements(t, "CrossReference")) if (x.attrs.ReferencedTopic) crossRefs.push({ from: t.attrs.Self, to: x.attrs.ReferencedTopic });
+      readTopics(t, me);
+    }
+  };
+  for (const ix of designmap ? findAll(designmap, "Index") : []) readTopics(ix);
+  /** 項目の最初のページの参照を置いた段落（参照の記法をその段落に置くため）。 */
+  const topicPara = new Map<string, Para>();
   let indexMarks = 0;
   // InDesign の目次スタイル（目次を作ったストーリーに付く）。
   let tocTitle: string | undefined;
@@ -487,6 +499,7 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
               const t = topics.get(node.attrs.ReferencedTopic ?? "");
               if (t) {
                 flush();
+                if (!topicPara.has(node.attrs.ReferencedTopic)) topicPara.set(node.attrs.ReferencedTopic, begin());
                 pendingIndex += `［＃索引：${t.term}${t.reading !== t.term ? `（${t.reading}）` : ""}］`;
                 indexMarks++;
               }
@@ -611,6 +624,16 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
       continue;
     }
     storyText(story);
+  }
+  // 索引の参照：参照する項目（なければ行き先）のページの参照のある段落の終わりに、［＃索引参照：］を置く。どちらもなければ最後の段落。
+  for (const x of crossRefs) {
+    const from = topics.get(x.from);
+    const to = topics.get(x.to);
+    if (!from || !to) continue;
+    const mark = `［＃索引参照：${from.term}${from.reading !== from.term ? `（${from.reading}）` : ""}→${to.term}］`;
+    const para = topicPara.get(x.from) ?? topicPara.get(x.to) ?? [...paras].reverse().find((p) => !p.raw);
+    if (para) para.text += mark;
+    indexMarks++;
   }
   // 字が書き出したときのままなら、元の原稿に戻す（注・参照・画像・目次などの記法も元どおり）。
   const restored = !!(hint && mainStory && storyFingerprint(mainStory) === hint.fingerprint);
@@ -779,7 +802,7 @@ export function importIdml(bytes: Uint8Array): IdmlImport {
     }
   }
   if (tocStories > 0) notes.add("InDesign で作った目次（［＃目次］にした。Kolophon が見出しから作り直す）");
-  if (indexMarks > 0 && !restored) notes.add(`索引の項目（${indexMarks}か所。［＃索引：語（よみ）］にした。下位の項目と参照先は読まない）`);
+  if (indexMarks > 0 && !restored) notes.add(`索引の項目（${indexMarks}か所。［＃索引：語（よみ）］・［＃索引参照：語→行き先］にした。下位の項目は「親／子」）`);
 
   // ---- 原稿 ----
   const lines: string[] = [];

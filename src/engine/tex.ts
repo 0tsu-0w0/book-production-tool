@@ -266,12 +266,18 @@ export function convertInline(src: string): string {
       continue;
     }
     if (base === "index") {
-      // \index{よみ@語} は makeindex の書き方（@ の前が並べる読み、後が表記）。
-      const arg = (r.group() ?? "").replace(/[［］]/g, "").split("!")[0];
-      const at = arg.indexOf("@");
-      const term = at >= 0 ? arg.slice(at + 1) : arg;
-      const reading = at >= 0 ? arg.slice(0, at) : arg;
-      if (term.trim()) out += `［＃索引：${term.trim()}（${reading.trim()}）］`;
+      // \index{よみ@語} は makeindex の書き方（@ の前が並べる読み、後が表記）。「!」は下位の項目（「親／子」に）、
+      // 「|see{行き先}」「|seealso{行き先}」は参照（［＃索引参照：］に。#17）。そのほかの「|」の書式は読まない。
+      const [entry, format = ""] = (r.group() ?? "").replace(/[［］]/g, "").split("|");
+      const levels = entry.split("!").map((part) => {
+        const at = part.indexOf("@");
+        return { term: (at >= 0 ? part.slice(at + 1) : part).trim(), reading: (at >= 0 ? part.slice(0, at) : part).trim() };
+      });
+      if (levels.some((l) => !l.term)) continue;
+      const term = levels.map((l) => l.term).join("／");
+      const reading = levels.map((l) => l.reading).join("／");
+      const see = /^see(?:also)?\{(.+)\}$/.exec(format.trim())?.[1].replace(/!/g, "／").trim();
+      out += see ? `［＃索引参照：${term}（${reading}）→${see}］` : `［＃索引：${term}（${reading}）］`;
       continue;
     }
     if (base === "pageref") {

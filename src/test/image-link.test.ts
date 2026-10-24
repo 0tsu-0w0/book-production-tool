@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { parseDocument, serializeDocument, type DocImage } from "../document/document.js";
 import { importIdml } from "../document/idml-import.js";
 import { linkBaseName, linkOf, linkStatus, readLinkedImage, withRelative } from "../document/image-link.js";
+import { linkFindings } from "../document/link-findings.js";
 import { DEFAULT_SETTINGS } from "../document/settings.js";
 import { buildIdml } from "../output/idml.js";
 import { writePackage } from "../output/package.js";
@@ -125,5 +126,32 @@ describe("リンクとパッケージ・IDML", () => {
     assert.equal(back.images[0].name, "絵");
     assert.equal(back.images[0].link?.path, path.join(linkDir, "元の絵 01.png"));
     assert.equal(linkStatus(back.images[0].link!).state, "ok");
+  });
+});
+
+describe("書き出す前の検査の、画像のリンクの知らせ（#20）", () => {
+  it("元のファイルが変わった画像は注意、見つからない画像は参考、同じなら知らせない。リンクのない画像も知らせない", () => {
+    const dir = tmp();
+    const a = path.join(dir, "変わる絵.png");
+    const b = path.join(dir, "消える絵.png");
+    const c = path.join(dir, "同じ絵.png");
+    for (const f of [a, b, c]) fs.writeFileSync(f, PNG_A);
+    const data = PNG_A.toString("base64");
+    const images: DocImage[] = [
+      { name: "変わる絵", mime: "image/png", data, width: 1, height: 1, link: linkOf(a) },
+      { name: "消える絵", mime: "image/png", data, width: 1, height: 1, link: linkOf(b) },
+      { name: "同じ絵", mime: "image/png", data, width: 1, height: 1, link: linkOf(c) },
+      { name: "リンクなし", mime: "image/png", data, width: 1, height: 1 },
+    ];
+    fs.writeFileSync(a, Buffer.concat([PNG_B, Buffer.from([0])]));
+    fs.utimesSync(a, new Date(), new Date(Date.now() + 5000));
+    fs.rmSync(b);
+    const findings = linkFindings(images, (img) => (img.link ? linkStatus(img.link).state : undefined));
+    assert.deepEqual(
+      findings.map((f) => f.level),
+      ["warning", "info"],
+    );
+    assert.match(findings[0].message, /画像「変わる絵」の元のファイル.*変わっています/);
+    assert.match(findings[1].message, /画像「消える絵」の元のファイル.*見つかりません/);
   });
 });
